@@ -81,6 +81,19 @@ def make_battery_spec() -> BatterySpec:
         max_charge_c_rate=sourced(1.5),
         max_discharge_c_rate=sourced(3.0),
         thermal_node=make_thermal_node("battery_pack"),
+        capacity_nominal_ah=sourced(180.0),
+        reference_temp_k=sourced(298.15),
+        ocv_curve_v=[(sourced(0.0), sourced(300.0)), (sourced(1.0), sourced(395.0))],
+        docv_dt_v_per_k=sourced(0.0),
+        r0_curve_ohm=[(sourced(0.0), sourced(0.09)), (sourced(1.0), sourced(0.10))],
+        r0_arrhenius_activation_temp_k=sourced(3000.0),
+        r1_ohm=sourced(0.015),
+        c1_farad=sourced(3000.0),
+        min_terminal_voltage_v=sourced(290.0),
+        max_terminal_voltage_v=sourced(410.0),
+        min_operating_temp_k=sourced(253.15),
+        cold_derate_threshold_temp_k=sourced(283.15),
+        cold_derate_activation_temp_k=sourced(1000.0),
     )
 
 

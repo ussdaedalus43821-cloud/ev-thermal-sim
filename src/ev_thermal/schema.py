@@ -154,6 +154,81 @@ class BatterySpec(BaseModel):
         ..., description="Maximum discharge rate, in C (capacity multiples/hour)."
     )
     thermal_node: ThermalNode = Field(..., description="Lumped thermal model of the pack.")
+    capacity_nominal_ah: Sourced[float] = Field(
+        ..., description="Pack capacity in amp-hours, for coulomb counting."
+    )
+    reference_temp_k: Sourced[float] = Field(
+        ...,
+        description=(
+            "Reference temperature ocv_curve_v, r0_curve_ohm, and the cold-derate "
+            "curve were all characterized at, in kelvin."
+        ),
+    )
+    ocv_curve_v: list[tuple[Sourced[float], Sourced[float]]] = Field(
+        ...,
+        description=(
+            "TODO(spec-sourcing): placeholder Li-ion-shaped curve, not a measured "
+            "chemistry curve. (soc_fraction, open_circuit_voltage_v) points at "
+            "reference_temp_k, interpolated linearly. Must be monotonically "
+            "increasing in soc_fraction."
+        ),
+    )
+    docv_dt_v_per_k: Sourced[float] = Field(
+        ...,
+        description=(
+            "TODO(spec-sourcing): placeholder entropic coefficient d(OCV)/dT, in "
+            "V/K. Also used to shift ocv_curve_v away from reference_temp_k. 0.0 is "
+            "a valid placeholder meaning the entropic-heat term is currently inert "
+            "(battery.step_battery warns when this is the case) — until a real "
+            "curve is sourced, fast-charge scenarios will under-predict thermal "
+            "load, since entropic heat is largest exactly there."
+        ),
+    )
+    r0_curve_ohm: list[tuple[Sourced[float], Sourced[float]]] = Field(
+        ...,
+        description=(
+            "TODO(spec-sourcing): placeholder, not a measured curve. "
+            "(soc_fraction, series_resistance_ohm) points at reference_temp_k, "
+            "interpolated linearly, before the Arrhenius temperature correction."
+        ),
+    )
+    r0_arrhenius_activation_temp_k: Sourced[float] = Field(
+        ...,
+        description=(
+            "TODO(spec-sourcing): placeholder pseudo-activation temperature (Ea/R) "
+            "for scaling r0_curve_ohm away from reference_temp_k: "
+            "R0(T) = R0(reference_temp_k) * exp(activation_temp_k * (1/T - 1/reference_temp_k)). "
+            "Higher values make R0 rise more steeply as the cell gets colder."
+        ),
+    )
+    r1_ohm: Sourced[float] = Field(
+        ..., description="TODO(spec-sourcing): placeholder single-RC-pair resistance, in ohms."
+    )
+    c1_farad: Sourced[float] = Field(
+        ..., description="TODO(spec-sourcing): placeholder single-RC-pair capacitance, in farads."
+    )
+    min_terminal_voltage_v: Sourced[float] = Field(
+        ..., description="Minimum allowed pack terminal voltage before discharge current is clamped, in volts."
+    )
+    max_terminal_voltage_v: Sourced[float] = Field(
+        ..., description="Maximum allowed pack terminal voltage before charge current is clamped, in volts."
+    )
+    min_operating_temp_k: Sourced[float] = Field(
+        ..., description="Cell temperature at/below which all current is cut off, in kelvin."
+    )
+    cold_derate_threshold_temp_k: Sourced[float] = Field(
+        ..., description="Cell temperature below which the cold-temperature power derate begins, in kelvin."
+    )
+    cold_derate_activation_temp_k: Sourced[float] = Field(
+        ...,
+        description=(
+            "TODO(spec-sourcing): placeholder Arrhenius-ish pseudo-activation "
+            "temperature governing how sharply available power falls off below "
+            "cold_derate_threshold_temp_k: scale(T) = exp(activation_temp_k * "
+            "(1/cold_derate_threshold_temp_k - 1/T)) for T below the threshold, "
+            "1.0 at/above it."
+        ),
+    )
 
 
 class MotorSpec(BaseModel):
@@ -534,6 +609,28 @@ class InverterStepResult(BaseModel):
     junction_temp_k: float = Field(..., description="Updated junction temperature after this step, in kelvin.")
     applied_current_a: float = Field(
         ..., description="Current actually allowed through after derating, in amps (may be less than requested)."
+    )
+    causal_events: list[CausalEvent] = Field(default_factory=list)
+
+
+class BatteryStepResult(BaseModel):
+    """Output of one `battery.step_battery` call: electrical state, losses, and updated SOC/temp."""
+
+    terminal_voltage_v: float = Field(..., description="V = OCV - I*R0 - V_RC, in volts.")
+    ocv_v: float = Field(..., description="Open-circuit voltage at this step's SOC and cell_temp_k, in volts.")
+    applied_current_a: float = Field(
+        ...,
+        description=(
+            "Current actually applied after all limits, in amps. Positive is "
+            "discharge, negative is charge; may be smaller in magnitude than requested."
+        ),
+    )
+    soc: float = Field(..., description="Updated state of charge after this step, 0-1.")
+    v_rc_v: float = Field(..., description="Updated single-RC-pair state voltage, in volts.")
+    cell_temp_k: float = Field(..., description="Updated pack temperature after this step, in kelvin.")
+    irreversible_heat_w: float = Field(..., description="I^2*R0 + I^2*R1 resistive heat, in watts.")
+    entropic_heat_w: float = Field(
+        ..., description="I*T*dOCV/dT reversible heat, in watts. Sign flips between charge and discharge."
     )
     causal_events: list[CausalEvent] = Field(default_factory=list)
 

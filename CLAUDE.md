@@ -62,17 +62,40 @@ not just *what* happened.
 
 ## Known deferred work
 
-- **Derating decision belongs in controller.py, eventually.** `motor.py` and
-  `inverter.py` currently each decide for themselves whether to derate,
-  from their own temperature alone. Once `controller.py` is implemented, it
+- **Derating decision belongs in controller.py, eventually.** `motor.py`,
+  `inverter.py`, and `battery.py` currently each decide for themselves
+  whether to derate, from their own temperature (and, for battery.py,
+  C-rate/voltage) limits alone. Once `controller.py` is implemented, it
   should own that decision — arbitrating across motor, inverter, battery,
   SOC, and voltage limits together — while the component modules keep
   supplying their own limit curves for it to consult. Don't refactor this
   until `controller.py` is actually built.
-- **`ambient_temp_k` is inert in motor/inverter steps.** `motor.step_motor`
-  and `inverter.step_inverter` both accept `ambient_temp_k` for interface
-  consistency with `thermal.step_thermal_network`, but it currently has no
-  effect: neither `MotorSpec` nor `InverterSpec` gives its `ThermalNode` an
+- **`ambient_temp_k` is inert in motor/inverter/battery steps.**
+  `motor.step_motor`, `inverter.step_inverter`, and `battery.step_battery`
+  all accept `ambient_temp_k` for interface consistency with
+  `thermal.step_thermal_network`, but it currently has no effect: none of
+  `MotorSpec`, `InverterSpec`, or `BatterySpec` gives its `ThermalNode` an
   ambient conductance, so only the coolant path is modeled. Add ambient
   coupling for these nodes when they're wired into the full vehicle thermal
   network.
+- **Entropic heat is inert until a real dOCV/dT is sourced.** Every
+  `BatterySpec` test fixture so far sets `docv_dt_v_per_k=0.0`, which is a
+  valid placeholder, not a modeling choice — it's standing in for chemistry
+  data we don't have yet. `battery.step_battery` emits an
+  `InertEntropicHeatWarning` (once per call site, via Python's default
+  warning filter, not tracked state) whenever this is the case. Because
+  real entropic heat is largest during fast charging, any run using a
+  zero-dOCV/dT spec will under-predict thermal load specifically in that
+  scenario. Source real dOCV/dT curves in the spec-sourcing milestone.
+- **Cold-power derate deliberately applies to charge only, not discharge.**
+  Two distinct cold-temperature effects exist in `battery.py`: R0's
+  Arrhenius rise (raises resistance for both directions, shrinking the
+  voltage-limited current) and an explicit `cold_derate_threshold_temp_k`
+  multiplier modeling BMS-imposed cold-charge restriction (a real,
+  charge-specific lithium-plating protection). The explicit multiplier is
+  applied to charge only; applying it to discharge too would double-count
+  the same underlying cold effect and produce an unrealistically severe
+  combined derate (checked numerically: at -10°C in a voltage-limited
+  scenario, stacking both would cut the allowed current to ~20% of the
+  25°C value, vs. ~26% from R0 alone). Don't restore it to discharge
+  without re-deriving the combined magnitude against real data.
