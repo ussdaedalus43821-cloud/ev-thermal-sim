@@ -94,6 +94,12 @@ def make_motor_spec() -> MotorSpec:
         mass_kg=sourced(70.0),
         max_winding_temp_k=sourced(453.15),
         thermal_node=make_thermal_node("motor"),
+        winding_resistance_ref_ohm=sourced(0.05),
+        winding_resistance_ref_temp_k=sourced(298.15),
+        torque_constant_nm_per_a=sourced(1.0),
+        iron_loss_coefficient_w_per_rad_per_s=sourced(2.0),
+        mechanical_loss_coefficient_w_per_rad3_per_s3=sourced(0.0002),
+        regen_extra_loss_fraction=sourced(0.15),
     )
 
 
@@ -106,6 +112,10 @@ def make_inverter_spec() -> InverterSpec:
         max_junction_temp_k=sourced(423.15),
         mass_kg=sourced(15.0),
         thermal_node=make_thermal_node("inverter"),
+        r_ds_on_ref_ohm=sourced(0.002),
+        r_ds_on_ref_temp_k=sourced(298.15),
+        r_ds_on_temp_coefficient_per_k=sourced(0.005),
+        switching_energy_coefficient_j_per_v=sourced(0.00003),
     )
 
 

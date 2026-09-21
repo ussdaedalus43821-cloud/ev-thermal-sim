@@ -171,6 +171,44 @@ class MotorSpec(BaseModel):
         ..., description="Maximum stator winding temperature, in kelvin."
     )
     thermal_node: ThermalNode = Field(..., description="Lumped thermal model of the motor.")
+    winding_resistance_ref_ohm: Sourced[float] = Field(
+        ...,
+        description=(
+            "TODO(spec-sourcing): placeholder until real datasheet/teardown data is "
+            "available. Lumped winding resistance at winding_resistance_ref_temp_k, in ohms."
+        ),
+    )
+    winding_resistance_ref_temp_k: Sourced[float] = Field(
+        ..., description="Reference temperature winding_resistance_ref_ohm was measured at, in kelvin."
+    )
+    torque_constant_nm_per_a: Sourced[float] = Field(
+        ...,
+        description=(
+            "TODO(spec-sourcing): placeholder. Motor torque constant Kt relating "
+            "torque to current, in N*m/A."
+        ),
+    )
+    iron_loss_coefficient_w_per_rad_per_s: Sourced[float] = Field(
+        ...,
+        description=(
+            "TODO(spec-sourcing): placeholder analytical loss model coefficient. "
+            "Core/iron loss = coefficient * |angular_velocity_rad_per_s|, in W per (rad/s)."
+        ),
+    )
+    mechanical_loss_coefficient_w_per_rad3_per_s3: Sourced[float] = Field(
+        ...,
+        description=(
+            "TODO(spec-sourcing): placeholder analytical loss model coefficient. "
+            "Windage/friction loss = coefficient * |angular_velocity_rad_per_s|^3, in W per (rad/s)^3."
+        ),
+    )
+    regen_extra_loss_fraction: Sourced[float] = Field(
+        ...,
+        description=(
+            "TODO(spec-sourcing): placeholder. Fractional extra copper loss applied "
+            "during regen braking vs. motoring at the same current, dimensionless."
+        ),
+    )
 
 
 class InverterSpec(BaseModel):
@@ -185,6 +223,30 @@ class InverterSpec(BaseModel):
     )
     mass_kg: Sourced[float] = Field(..., description="Inverter mass, in kilograms.")
     thermal_node: ThermalNode = Field(..., description="Lumped thermal model of the inverter.")
+    r_ds_on_ref_ohm: Sourced[float] = Field(
+        ...,
+        description=(
+            "TODO(spec-sourcing): placeholder until real datasheet data is available. "
+            "Switch on-resistance at r_ds_on_ref_temp_k, in ohms."
+        ),
+    )
+    r_ds_on_ref_temp_k: Sourced[float] = Field(
+        ..., description="Reference junction temperature r_ds_on_ref_ohm was measured at, in kelvin."
+    )
+    r_ds_on_temp_coefficient_per_k: Sourced[float] = Field(
+        ...,
+        description=(
+            "TODO(spec-sourcing): placeholder. Fractional change in r_ds_on per kelvin "
+            "above r_ds_on_ref_temp_k, per kelvin."
+        ),
+    )
+    switching_energy_coefficient_j_per_v: Sourced[float] = Field(
+        ...,
+        description=(
+            "TODO(spec-sourcing): placeholder analytical loss model coefficient. "
+            "Switching loss = switching_frequency_hz * coefficient * dc_bus_voltage_v, in J/V."
+        ),
+    )
 
 
 class ThermalArchitecture(BaseModel):
@@ -433,6 +495,47 @@ class MistakeCase(BaseModel):
     evidence: list[str] = Field(..., description="Citations supporting the failure_mode claim.")
     lesson: str = Field(..., description="The educational takeaway.")
     severity: str = Field(..., description="e.g. 'info', 'warning', 'critical'.")
+
+
+class MotorStepResult(BaseModel):
+    """Output of one `motor.step_motor` call: losses, power flow, and updated winding temp."""
+
+    electrical_power_w: float = Field(
+        ...,
+        description=(
+            "Electrical power at the motor terminals, in watts. Positive draws from "
+            "the bus (motoring), negative returns power to it (regen)."
+        ),
+    )
+    mechanical_power_w: float = Field(
+        ...,
+        description=(
+            "Mechanical power at the motor shaft, in watts. Positive delivers to "
+            "the load, negative absorbs from it."
+        ),
+    )
+    copper_loss_w: float = Field(..., description="Resistive winding loss, in watts.")
+    iron_loss_w: float = Field(..., description="Core/iron loss, in watts.")
+    mechanical_loss_w: float = Field(..., description="Windage/friction loss, in watts.")
+    winding_temp_k: float = Field(..., description="Updated winding temperature after this step, in kelvin.")
+    applied_torque_nm: float = Field(
+        ...,
+        description="Torque actually applied after derating, in N*m (may be less in magnitude than requested).",
+    )
+    causal_events: list[CausalEvent] = Field(default_factory=list)
+
+
+class InverterStepResult(BaseModel):
+    """Output of one `inverter.step_inverter` call: losses and updated junction temp."""
+
+    conduction_loss_w: float = Field(..., description="I^2 * R_ds_on(T_j) conduction loss, in watts.")
+    switching_loss_w: float = Field(..., description="Switching loss, in watts.")
+    total_loss_w: float = Field(..., description="Sum of conduction and switching loss, in watts.")
+    junction_temp_k: float = Field(..., description="Updated junction temperature after this step, in kelvin.")
+    applied_current_a: float = Field(
+        ..., description="Current actually allowed through after derating, in amps (may be less than requested)."
+    )
+    causal_events: list[CausalEvent] = Field(default_factory=list)
 
 
 class MCConfig(BaseModel):

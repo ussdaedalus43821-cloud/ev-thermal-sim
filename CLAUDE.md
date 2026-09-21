@@ -59,3 +59,20 @@ not just *what* happened.
   subtle invariant, a source citation for a magic number).
 - No speculative abstractions: build what the current task needs, not what
   a future task might need.
+
+## Known deferred work
+
+- **Derating decision belongs in controller.py, eventually.** `motor.py` and
+  `inverter.py` currently each decide for themselves whether to derate,
+  from their own temperature alone. Once `controller.py` is implemented, it
+  should own that decision — arbitrating across motor, inverter, battery,
+  SOC, and voltage limits together — while the component modules keep
+  supplying their own limit curves for it to consult. Don't refactor this
+  until `controller.py` is actually built.
+- **`ambient_temp_k` is inert in motor/inverter steps.** `motor.step_motor`
+  and `inverter.step_inverter` both accept `ambient_temp_k` for interface
+  consistency with `thermal.step_thermal_network`, but it currently has no
+  effect: neither `MotorSpec` nor `InverterSpec` gives its `ThermalNode` an
+  ambient conductance, so only the coolant path is modeled. Add ambient
+  coupling for these nodes when they're wired into the full vehicle thermal
+  network.
