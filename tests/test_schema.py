@@ -63,6 +63,9 @@ def make_vehicle_dynamics() -> VehicleDynamics:
         drag_coefficient=sourced(0.28),
         frontal_area_m2=sourced(2.3),
         rolling_resistance_coefficient=sourced(0.01),
+        wheel_radius_m=sourced(0.33),
+        gear_ratio=sourced(9.0),
+        driveline_efficiency=sourced(0.95),
     )
 
 

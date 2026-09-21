@@ -126,6 +126,13 @@ class VehicleDynamics(BaseModel):
     rolling_resistance_coefficient: Sourced[float] = Field(
         ..., description="Rolling resistance coefficient, dimensionless."
     )
+    wheel_radius_m: Sourced[float] = Field(..., description="Wheel rolling radius, in meters.")
+    gear_ratio: Sourced[float] = Field(
+        ..., description="Fixed gear reduction ratio between motor shaft and wheels, dimensionless."
+    )
+    driveline_efficiency: Sourced[float] = Field(
+        ..., description="Driveline (gearbox + differential) mechanical efficiency, as a fraction 0-1."
+    )
 
 
 class BatterySpec(BaseModel):
