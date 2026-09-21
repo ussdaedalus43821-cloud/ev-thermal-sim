@@ -144,6 +144,12 @@ def make_cooling_loop() -> CoolingLoop:
         chiller_present=True,
         chiller_capacity_w=sourced(3000.0),
         serves=["battery"],
+        coolant_specific_heat_j_per_kg_k=sourced(3600.0),
+        coolant_density_kg_per_m3=sourced(1050.0),
+        thermostat_temp_k=sourced(308.15),
+        thermostat_full_open_temp_k=sourced(313.15),
+        radiator_frontal_area_m2=sourced(0.25),
+        fan_max_air_velocity_mps=sourced(6.0),
     )
 
 

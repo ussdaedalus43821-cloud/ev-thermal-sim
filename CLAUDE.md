@@ -99,3 +99,20 @@ not just *what* happened.
   scenario, stacking both would cut the allowed current to ~20% of the
   25°C value, vs. ~26% from R0 alone). Don't restore it to discharge
   without re-deriving the combined magnitude against real data.
+- **Chiller path is not implemented in cooling.py.** `CoolingLoop` already
+  has `chiller_present`/`chiller_capacity_w` fields, but `cooling.py` only
+  models the passive radiator/thermostat/pump/fan path — a loop with
+  `chiller_present=True` currently gets no extra heat rejection from it.
+  Add active chiller heat removal (presumably gated by some control signal,
+  once controller.py exists) as its own increment, not folded into the
+  radiator's epsilon-NTU calculation.
+- **The coolant loop isn't closed yet.** `cooling.py`'s
+  `coolant_outlet_temp_k` output isn't threaded anywhere: `motor.py`,
+  `inverter.py`, and `battery.py` each still take an externally-supplied
+  `coolant_temp_k` as a fixed boundary condition for their own
+  `thermal.step_thermal_network` call, not the actual evolving temperature
+  a shared coolant loop would have after picking up their heat and passing
+  through the radiator. Closing this loop — feeding `cooling.py`'s output
+  back in as next-step's `coolant_temp_k` input to the components it
+  serves — is sim.py's job once it exists, not something to hack into the
+  component modules now.

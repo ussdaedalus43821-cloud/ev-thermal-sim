@@ -115,6 +115,34 @@ class CoolingLoop(BaseModel):
     serves: list[str] = Field(
         ..., description="Names of components this loop cools, e.g. ['battery'] or ['motor', 'inverter']."
     )
+    coolant_specific_heat_j_per_kg_k: Sourced[float] = Field(
+        ..., description="Coolant specific heat, in J/(kg*K)."
+    )
+    coolant_density_kg_per_m3: Sourced[float] = Field(..., description="Coolant density, in kg/m^3.")
+    thermostat_temp_k: Sourced[float] = Field(
+        ..., description="Coolant temperature at/below which the thermostat is fully closed (radiator bypassed)."
+    )
+    thermostat_full_open_temp_k: Sourced[float] = Field(
+        ...,
+        description=(
+            "Coolant temperature at/above which the thermostat is fully open. Opens "
+            "linearly between thermostat_temp_k and this value."
+        ),
+    )
+    radiator_frontal_area_m2: Sourced[float] = Field(
+        ...,
+        description=(
+            "TODO(spec-sourcing): placeholder. Radiator core frontal area, in m^2, "
+            "for computing ram-air mass flow from vehicle speed."
+        ),
+    )
+    fan_max_air_velocity_mps: Sourced[float] = Field(
+        ...,
+        description=(
+            "TODO(spec-sourcing): placeholder. Air velocity through the radiator "
+            "core the fan alone drives at fan_duty=1 (vehicle stationary), in m/s."
+        ),
+    )
 
 
 class VehicleDynamics(BaseModel):
@@ -633,6 +661,21 @@ class BatteryStepResult(BaseModel):
         ..., description="I*T*dOCV/dT reversible heat, in watts. Sign flips between charge and discharge."
     )
     causal_events: list[CausalEvent] = Field(default_factory=list)
+
+
+class CoolingStepResult(BaseModel):
+    """Output of one `cooling.step_cooling` call: radiator heat exchange and parasitic loads."""
+
+    coolant_outlet_temp_k: float = Field(
+        ..., description="Coolant temperature leaving the radiator/bypass mix, in kelvin."
+    )
+    heat_rejected_w: float = Field(..., description="Heat rejected to ambient air at the radiator, in watts.")
+    coolant_mass_flow_kg_per_s: float = Field(..., description="Total loop coolant mass flow, in kg/s.")
+    pump_power_w: float = Field(..., description="Pump parasitic electrical power draw, in watts.")
+    fan_power_w: float = Field(..., description="Fan parasitic electrical power draw, in watts.")
+    thermostat_open_fraction: float = Field(
+        ..., description="Fraction of coolant flow routed through the radiator vs. bypassed, 0-1."
+    )
 
 
 class MCConfig(BaseModel):
