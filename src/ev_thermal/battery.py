@@ -31,6 +31,19 @@ fixture so far). A run using a zero-dOCV/dT spec will under-predict thermal
 load during fast charging, where entropic heat is largest. `step_battery`
 emits a one-time (per Python warning-filter default) `InertEntropicHeatWarning`
 in that case so this isn't silently wrong.
+
+`available_discharge_current_a`/`available_charge_current_a` are the single
+source of truth for the battery's current ceiling — combining C-rate,
+voltage, thermal, and (discharge-only) SOC-floor limits — used both by
+`step_battery` (clamping a request to it: `min(requested, ceiling)`, not
+multiplying the request by a scale factor, which would incorrectly shrink
+even small requests already under the ceiling) and by `controller.py`
+(converted to torque, compared against other components' limits).
+
+`soc_floor`/`soc_floor_full_available_soc` model a BMS reserve-capacity
+policy (protecting cycle life), applied to discharge only — distinct from
+the voltage-limit physics, not a re-derivation of it, the same reasoning as
+the charge-only cold derate above.
 """
 
 from __future__ import annotations
@@ -95,6 +108,63 @@ def _cold_derate_scale(temp_k: float, threshold_temp_k: float, activation_temp_k
     return math.exp(activation_temp_k * (1.0 / threshold_temp_k - 1.0 / temp_k))
 
 
+def _soc_floor_scale(soc: float, floor: float, full_available_soc: float) -> float:
+    """0.0 at/below floor, ramping linearly to 1.0 at/above full_available_soc.
+
+    Discharge-only: a BMS reserve-capacity policy protecting cycle life, not a
+    re-derivation of the voltage-limit physics (see module docstring).
+    """
+    if soc <= floor:
+        return 0.0
+    if soc >= full_available_soc:
+        return 1.0
+    return (soc - floor) / (full_available_soc - floor)
+
+
+def _ocv_and_r0_ohm(spec: BatterySpec, soc: float, cell_temp_k: float) -> tuple[float, float]:
+    ocv_v = _interpolate(spec.ocv_curve_v, soc) + spec.docv_dt_v_per_k.value * (
+        cell_temp_k - spec.reference_temp_k.value
+    )
+    r0_ohm = _interpolate(spec.r0_curve_ohm, soc) * math.exp(
+        spec.r0_arrhenius_activation_temp_k.value * (1.0 / cell_temp_k - 1.0 / spec.reference_temp_k.value)
+    )
+    return ocv_v, r0_ohm
+
+
+def available_discharge_current_a(spec: BatterySpec, soc: float, cell_temp_k: float, v_rc_v: float) -> float:
+    """The battery's discharge current ceiling: single source of truth for
+    `step_battery` (clamping a request to it) and `controller.py` (converted
+    to torque, compared against other components' limits).
+    """
+    ocv_v, r0_ohm = _ocv_and_r0_ohm(spec, soc, cell_temp_k)
+    c_rate_limit_a = spec.max_discharge_c_rate.value * spec.capacity_nominal_ah.value
+    voltage_limit_a = max((ocv_v - v_rc_v - spec.min_terminal_voltage_v.value) / r0_ohm, 0.0)
+    derate_temp_k = spec.thermal_node.derate_temp_k.value
+    max_temp_k = spec.thermal_node.max_temp_k.value
+    hot_scale = _hot_derate_scale(cell_temp_k, derate_temp_k, max_temp_k)
+    thermal_scale = 0.0 if cell_temp_k <= spec.min_operating_temp_k.value else hot_scale
+    soc_scale = _soc_floor_scale(soc, spec.soc_floor.value, spec.soc_floor_full_available_soc.value)
+    return min(c_rate_limit_a, voltage_limit_a) * thermal_scale * soc_scale
+
+
+def available_charge_current_a(spec: BatterySpec, soc: float, cell_temp_k: float, v_rc_v: float) -> float:
+    """The battery's charge current ceiling (magnitude): single source of
+    truth for `step_battery` and `controller.py`, mirroring
+    `available_discharge_current_a`.
+    """
+    ocv_v, r0_ohm = _ocv_and_r0_ohm(spec, soc, cell_temp_k)
+    c_rate_limit_a = spec.max_charge_c_rate.value * spec.capacity_nominal_ah.value
+    voltage_limit_a = max((spec.max_terminal_voltage_v.value - ocv_v + v_rc_v) / r0_ohm, 0.0)
+    derate_temp_k = spec.thermal_node.derate_temp_k.value
+    max_temp_k = spec.thermal_node.max_temp_k.value
+    hot_scale = _hot_derate_scale(cell_temp_k, derate_temp_k, max_temp_k)
+    cold_scale = _cold_derate_scale(
+        cell_temp_k, spec.cold_derate_threshold_temp_k.value, spec.cold_derate_activation_temp_k.value
+    )
+    thermal_scale = 0.0 if cell_temp_k <= spec.min_operating_temp_k.value else hot_scale * cold_scale
+    return min(c_rate_limit_a, voltage_limit_a) * thermal_scale
+
+
 def step_battery(
     spec: BatterySpec,
     current_request_a: float,
@@ -116,40 +186,41 @@ def step_battery(
     """
     causal_events: list[CausalEvent] = []
 
-    ocv_v = _interpolate(spec.ocv_curve_v, soc) + spec.docv_dt_v_per_k.value * (
-        cell_temp_k - spec.reference_temp_k.value
-    )
-    r0_ohm = _interpolate(spec.r0_curve_ohm, soc) * math.exp(
-        spec.r0_arrhenius_activation_temp_k.value * (1.0 / cell_temp_k - 1.0 / spec.reference_temp_k.value)
-    )
+    ocv_v, r0_ohm = _ocv_and_r0_ohm(spec, soc, cell_temp_k)
 
     capacity_ah = spec.capacity_nominal_ah.value
     is_discharge = current_request_a >= 0.0
     requested_mag_a = abs(current_request_a)
+    direction = "discharge" if is_discharge else "charge"
 
     if is_discharge:
         c_rate_limit_a = spec.max_discharge_c_rate.value * capacity_ah
         voltage_limit_a = max((ocv_v - v_rc_v - spec.min_terminal_voltage_v.value) / r0_ohm, 0.0)
+        available_a = available_discharge_current_a(spec, soc, cell_temp_k, v_rc_v)
     else:
         c_rate_limit_a = spec.max_charge_c_rate.value * capacity_ah
         voltage_limit_a = max((spec.max_terminal_voltage_v.value - ocv_v + v_rc_v) / r0_ohm, 0.0)
+        available_a = available_charge_current_a(spec, soc, cell_temp_k, v_rc_v)
+
+    applied_mag_a = min(requested_mag_a, available_a)
+    applied_current_a = applied_mag_a if is_discharge else -applied_mag_a
 
     derate_temp_k = spec.thermal_node.derate_temp_k.value
     max_temp_k = spec.thermal_node.max_temp_k.value
     hot_scale = _hot_derate_scale(cell_temp_k, derate_temp_k, max_temp_k)
+    below_min_operating_temp = cell_temp_k <= spec.min_operating_temp_k.value
 
     cold_threshold_k = spec.cold_derate_threshold_temp_k.value
     cold_scale = 1.0
-    if not is_discharge:
+    if not is_discharge and not below_min_operating_temp:
         cold_scale = _cold_derate_scale(cell_temp_k, cold_threshold_k, spec.cold_derate_activation_temp_k.value)
-    below_min_operating_temp = cell_temp_k <= spec.min_operating_temp_k.value
-    if below_min_operating_temp:
-        cold_scale = 0.0
 
-    applied_mag_a = min(requested_mag_a, c_rate_limit_a, voltage_limit_a) * hot_scale * cold_scale
-    applied_current_a = applied_mag_a if is_discharge else -applied_mag_a
+    soc_scale = 1.0
+    if is_discharge:
+        soc_scale = _soc_floor_scale(soc, spec.soc_floor.value, spec.soc_floor_full_available_soc.value)
 
-    direction = "discharge" if is_discharge else "charge"
+    request_was_reduced = applied_mag_a < requested_mag_a
+
     if requested_mag_a > c_rate_limit_a:
         causal_events.append(
             make_causal_event(
@@ -177,7 +248,7 @@ def step_battery(
                 severity="warning",
             )
         )
-    if hot_scale < 1.0:
+    if request_was_reduced and hot_scale < 1.0:
         causal_events.append(
             make_causal_event(
                 sim_time_s=sim_time_s,
@@ -203,7 +274,7 @@ def step_battery(
                 severity="critical",
             )
         )
-    elif cold_scale < 1.0:
+    elif request_was_reduced and cold_scale < 1.0:
         causal_events.append(
             make_causal_event(
                 sim_time_s=sim_time_s,
@@ -211,6 +282,19 @@ def step_battery(
                 description=(
                     f"Cell temp {cell_temp_k:.1f}K below cold-derate threshold {cold_threshold_k:.1f}K; "
                     f"current scaled to {cold_scale:.1%}."
+                ),
+                affected_component="battery",
+                severity="warning",
+            )
+        )
+    if request_was_reduced and soc_scale < 1.0:
+        causal_events.append(
+            make_causal_event(
+                sim_time_s=sim_time_s,
+                event_type="SOC_FLOOR_LIMIT_TRIGGERED",
+                description=(
+                    f"SOC {soc:.3f} below soc_floor_full_available_soc "
+                    f"{spec.soc_floor_full_available_soc.value:.3f}; discharge current scaled to {soc_scale:.1%}."
                 ),
                 affected_component="battery",
                 severity="warning",

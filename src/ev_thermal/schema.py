@@ -161,6 +161,14 @@ class VehicleDynamics(BaseModel):
     driveline_efficiency: Sourced[float] = Field(
         ..., description="Driveline (gearbox + differential) mechanical efficiency, as a fraction 0-1."
     )
+    tire_road_friction_coefficient: Sourced[float] = Field(
+        ...,
+        description=(
+            "TODO(spec-sourcing): placeholder. Coefficient of friction between "
+            "tire and road, dimensionless, for the mechanical traction (wheel-slip) "
+            "torque limit: max_traction_force = coefficient * mass * g."
+        ),
+    )
 
 
 class BatterySpec(BaseModel):
@@ -257,6 +265,19 @@ class BatterySpec(BaseModel):
             "1.0 at/above it."
         ),
     )
+    soc_floor: Sourced[float] = Field(
+        ...,
+        description=(
+            "TODO(spec-sourcing): placeholder BMS reserve-capacity policy, distinct "
+            "from the voltage-limit physics: discharge is fully cut off at/below "
+            "this SOC to protect cycle life, ramping up to full availability at "
+            "soc_floor_full_available_soc, regardless of what the voltage limit "
+            "would otherwise still allow."
+        ),
+    )
+    soc_floor_full_available_soc: Sourced[float] = Field(
+        ..., description="SOC at/above which the soc_floor discharge restriction is fully lifted."
+    )
 
 
 class MotorSpec(BaseModel):
@@ -326,6 +347,13 @@ class InverterSpec(BaseModel):
     )
     mass_kg: Sourced[float] = Field(..., description="Inverter mass, in kilograms.")
     thermal_node: ThermalNode = Field(..., description="Lumped thermal model of the inverter.")
+    peak_current_a: Sourced[float] = Field(
+        ...,
+        description=(
+            "TODO(spec-sourcing): placeholder. Rated peak AC current, in amps — the "
+            "un-derated ceiling inverter.available_current_a scales down from."
+        ),
+    )
     r_ds_on_ref_ohm: Sourced[float] = Field(
         ...,
         description=(
@@ -676,6 +704,61 @@ class CoolingStepResult(BaseModel):
     thermostat_open_fraction: float = Field(
         ..., description="Fraction of coolant flow routed through the radiator vs. bypassed, 0-1."
     )
+
+
+class DriverStepResult(BaseModel):
+    """Output of one `driver.step_driver` call: torque request split into regen/mechanical braking."""
+
+    torque_request_nm: float = Field(
+        ...,
+        description=(
+            "Total requested torque after PI control and accel/brake clamping, in N*m. "
+            "Positive drives, negative decelerates (regen + mechanical combined)."
+        ),
+    )
+    regen_torque_nm: float = Field(
+        ..., description="Portion of a negative torque_request_nm assigned to regen, in N*m (<=0)."
+    )
+    mechanical_brake_torque_nm: float = Field(
+        ...,
+        description=(
+            "Magnitude of deceleration beyond regen_torque_limit_nm, in N*m (>=0). "
+            "TODO: mechanical brakes aren't modeled thermally yet, just as a torque sink."
+        ),
+    )
+    mechanical_brake_active: bool = Field(
+        ..., description="True if mechanical_brake_torque_nm > 0, i.e. regen alone couldn't cover the request."
+    )
+    integral_error_state: float = Field(
+        ...,
+        description=(
+            "Updated PI integral term (integral of speed error over time), in m. Must be "
+            "threaded through explicitly so a fork branching mid-run doesn't replay with "
+            "the wrong integral history."
+        ),
+    )
+
+
+class ControllerStepResult(BaseModel):
+    """Output of one `controller.step_controller` call: arbitrated commands and cooling policy."""
+
+    commanded_torque_nm: float = Field(
+        ...,
+        description=(
+            "Driver's torque request clamped to the most restrictive of the motor/inverter/"
+            "battery/SOC/traction limits, in N*m."
+        ),
+    )
+    commanded_pump_duty: float = Field(..., description="Commanded coolant pump duty, 0-1.")
+    commanded_fan_duty: float = Field(..., description="Commanded radiator fan duty, 0-1.")
+    battery_current_demand_a: float = Field(
+        ...,
+        description=(
+            "Battery pack current implied by commanded_torque_nm, in amps (positive discharge, "
+            "negative charge), for battery.step_battery's current_request_a input."
+        ),
+    )
+    causal_events: list[CausalEvent] = Field(default_factory=list)
 
 
 class MCConfig(BaseModel):

@@ -62,14 +62,50 @@ not just *what* happened.
 
 ## Known deferred work
 
-- **Derating decision belongs in controller.py, eventually.** `motor.py`,
-  `inverter.py`, and `battery.py` currently each decide for themselves
-  whether to derate, from their own temperature (and, for battery.py,
-  C-rate/voltage) limits alone. Once `controller.py` is implemented, it
-  should own that decision — arbitrating across motor, inverter, battery,
-  SOC, and voltage limits together — while the component modules keep
-  supplying their own limit curves for it to consult. Don't refactor this
-  until `controller.py` is actually built.
+- **Derating migrated to controller.py; component modules kept their own
+  copy too (defense in depth, currently redundant).** `motor.py`,
+  `inverter.py`, and `battery.py` each expose their derate logic as an
+  "available" ceiling callable — `motor.available_torque_nm`,
+  `inverter.available_current_a`,
+  `battery.available_discharge_current_a`/`available_charge_current_a` —
+  which is now the single source of truth for that component's limit.
+  `controller.py`'s `step_controller` is the authoritative arbiter: it calls
+  all of these, converts inverter/battery current ceilings to a common
+  torque currency, takes the most restrictive one, and clamps the driver's
+  request to it, logging one `CausalEvent` per component whose ceiling the
+  request actually exceeds. Each component's own `step_X` function *also*
+  still clamps its own request to its own ceiling internally (unchanged
+  behavior, left in place per instruction rather than duplicating the
+  callables) — so a request already arbitrated by `controller.py` gets
+  clamped again, redundantly but harmlessly, inside `step_motor`/
+  `step_inverter`/`step_battery`. Their own internal derate events are no
+  longer the authoritative ones; `controller.py`'s are. Don't remove the
+  component-level clamping without confirming nothing calls `step_motor`
+  etc. directly without going through `controller.py` first.
+- **Cross-domain torque/current/power conversion in controller.py is a
+  simplification, not a real efficiency-aware model.** It uses
+  `power_w = torque_nm * speed_rad_per_s` and `current_a = power_w /
+  battery_voltage_v` in both directions, ignoring motor/inverter conversion
+  losses entirely — a fully loss-aware version would need the actual
+  operating-point efficiency, which is circular at this supervisory layer.
+  Below `controller.MIN_SPEED_FOR_TORQUE_CONVERSION_RAD_PER_S`,
+  current-based ceilings (inverter, battery) are treated as non-binding
+  rather than converted, since the conversion blows up as speed→0; real
+  stall-torque limiting needs a separate current-limit table, not modeled
+  yet. `controller.py`'s cooling-command policy (`_duty_ramp`, pump/fan duty
+  vs. temperature above thermostat) is likewise an explicit
+  `TODO(tuning)` placeholder, not a calibrated policy.
+- **`driver.py` is settled as the reactive PI controller ("the human
+  pedal"), not trip generation.** The file was originally scaffolded for
+  drive-cycle/trip *generation* (turning a `UsageProfile`'s distributions
+  into a concrete speed-vs-time trace) — that's a different, separate
+  concern from what's implemented now: a reactive PI controller that turns
+  an already-known `target_speed_mps` into a torque request each step.
+  Decision: keep `driver.py` as the PI controller; drive-cycle generation
+  gets its own home later — likely `cycle.py` or a function inside
+  `sim.py`, not this file. Don't build trip generation now; this note
+  exists so the name overlap doesn't cause confusion or get "fixed" into
+  the wrong file later.
 - **`ambient_temp_k` is inert in motor/inverter/battery steps.**
   `motor.step_motor`, `inverter.step_inverter`, and `battery.step_battery`
   all accept `ambient_temp_k` for interface consistency with

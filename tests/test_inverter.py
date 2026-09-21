@@ -36,6 +36,7 @@ def _make_inverter_spec(switching_frequency_hz: float = 10_000.0) -> InverterSpe
         max_junction_temp_k=_sourced(423.15),
         mass_kg=_sourced(15.0),
         thermal_node=node,
+        peak_current_a=_sourced(500.0),
         r_ds_on_ref_ohm=_sourced(0.002),
         r_ds_on_ref_temp_k=_sourced(298.15),
         r_ds_on_temp_coefficient_per_k=_sourced(0.005),
@@ -84,12 +85,12 @@ def test_derate_reduces_available_current_monotonically() -> None:
     derate_temp_k = spec.thermal_node.derate_temp_k.value
     max_temp_k = spec.thermal_node.max_temp_k.value
 
-    below = _step(spec, current_a=100.0, junction_temp_k=derate_temp_k - 5.0)
-    mid = _step(spec, current_a=100.0, junction_temp_k=derate_temp_k + 10.0)
-    high = _step(spec, current_a=100.0, junction_temp_k=derate_temp_k + 20.0)
-    at_max = _step(spec, current_a=100.0, junction_temp_k=max_temp_k)
+    below = _step(spec, current_a=400.0, junction_temp_k=derate_temp_k - 5.0)
+    mid = _step(spec, current_a=400.0, junction_temp_k=derate_temp_k + 10.0)
+    high = _step(spec, current_a=400.0, junction_temp_k=derate_temp_k + 20.0)
+    at_max = _step(spec, current_a=400.0, junction_temp_k=max_temp_k)
 
-    assert below.applied_current_a == 100.0
+    assert below.applied_current_a == 400.0
     assert below.applied_current_a > mid.applied_current_a > high.applied_current_a > at_max.applied_current_a
     assert at_max.applied_current_a == 0.0
     assert len(mid.causal_events) == 1

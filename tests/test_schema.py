@@ -66,6 +66,7 @@ def make_vehicle_dynamics() -> VehicleDynamics:
         wheel_radius_m=sourced(0.33),
         gear_ratio=sourced(9.0),
         driveline_efficiency=sourced(0.95),
+        tire_road_friction_coefficient=sourced(0.9),
     )
 
 
@@ -94,6 +95,8 @@ def make_battery_spec() -> BatterySpec:
         min_operating_temp_k=sourced(253.15),
         cold_derate_threshold_temp_k=sourced(283.15),
         cold_derate_activation_temp_k=sourced(1000.0),
+        soc_floor=sourced(0.05),
+        soc_floor_full_available_soc=sourced(0.1),
     )
 
 
@@ -125,6 +128,7 @@ def make_inverter_spec() -> InverterSpec:
         max_junction_temp_k=sourced(423.15),
         mass_kg=sourced(15.0),
         thermal_node=make_thermal_node("inverter"),
+        peak_current_a=sourced(500.0),
         r_ds_on_ref_ohm=sourced(0.002),
         r_ds_on_ref_temp_k=sourced(298.15),
         r_ds_on_temp_coefficient_per_k=sourced(0.005),

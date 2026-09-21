@@ -30,6 +30,18 @@ def _derate_scale(temp_k: float, derate_temp_k: float, max_temp_k: float) -> flo
     return 1.0 - (temp_k - derate_temp_k) / (max_temp_k - derate_temp_k)
 
 
+def available_torque_nm(spec: MotorSpec, winding_temp_k: float) -> float:
+    """The motor's thermally-derated torque ceiling (magnitude) at `winding_temp_k`.
+
+    This is the single source of truth for the motor's torque limit: both
+    `step_motor` (clamping a request to it) and `controller.py` (comparing it
+    against other components' limits) call this rather than each computing
+    their own copy of the derate curve.
+    """
+    scale = _derate_scale(winding_temp_k, spec.thermal_node.derate_temp_k.value, spec.thermal_node.max_temp_k.value)
+    return spec.peak_torque_nm.value * scale
+
+
 def step_motor(
     spec: MotorSpec,
     torque_request_nm: float,
@@ -52,17 +64,17 @@ def step_motor(
     causal_events: list[CausalEvent] = []
 
     derate_temp_k = spec.thermal_node.derate_temp_k.value
-    max_temp_k = spec.thermal_node.max_temp_k.value
-    scale = _derate_scale(winding_temp_k, derate_temp_k, max_temp_k)
-    applied_torque_nm = torque_request_nm * scale
-    if scale < 1.0:
+    torque_ceiling_nm = available_torque_nm(spec, winding_temp_k)
+    applied_torque_nm = max(-torque_ceiling_nm, min(torque_request_nm, torque_ceiling_nm))
+    if abs(applied_torque_nm) < abs(torque_request_nm):
         causal_events.append(
             make_causal_event(
                 sim_time_s=sim_time_s,
                 event_type="DERATE_TRIGGERED",
                 description=(
                     f"Motor winding temp {winding_temp_k:.1f}K exceeded derate threshold "
-                    f"{derate_temp_k:.1f}K; torque scaled to {scale:.1%} of request."
+                    f"{derate_temp_k:.1f}K; torque request {torque_request_nm:.1f}Nm limited "
+                    f"to {applied_torque_nm:.1f}Nm."
                 ),
                 affected_component="motor",
                 severity="warning",

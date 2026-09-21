@@ -26,6 +26,18 @@ def _derate_scale(temp_k: float, derate_temp_k: float, max_temp_k: float) -> flo
     return 1.0 - (temp_k - derate_temp_k) / (max_temp_k - derate_temp_k)
 
 
+def available_current_a(spec: InverterSpec, junction_temp_k: float) -> float:
+    """The inverter's thermally-derated current ceiling at `junction_temp_k`.
+
+    Single source of truth for the inverter's current limit: both
+    `step_inverter` (clamping a request to it) and `controller.py` (converted
+    to torque, compared against other components' limits) call this rather
+    than each computing their own copy of the derate curve.
+    """
+    scale = _derate_scale(junction_temp_k, spec.thermal_node.derate_temp_k.value, spec.thermal_node.max_temp_k.value)
+    return spec.peak_current_a.value * scale
+
+
 def step_inverter(
     spec: InverterSpec,
     dc_bus_voltage_v: float,
@@ -47,17 +59,17 @@ def step_inverter(
     causal_events: list[CausalEvent] = []
 
     derate_temp_k = spec.thermal_node.derate_temp_k.value
-    max_temp_k = spec.thermal_node.max_temp_k.value
-    scale = _derate_scale(junction_temp_k, derate_temp_k, max_temp_k)
-    applied_current_a = ac_current_request_a * scale
-    if scale < 1.0:
+    current_ceiling_a = available_current_a(spec, junction_temp_k)
+    applied_current_a = min(ac_current_request_a, current_ceiling_a)
+    if applied_current_a < ac_current_request_a:
         causal_events.append(
             make_causal_event(
                 sim_time_s=sim_time_s,
                 event_type="DERATE_TRIGGERED",
                 description=(
                     f"Inverter junction temp {junction_temp_k:.1f}K exceeded derate threshold "
-                    f"{derate_temp_k:.1f}K; current scaled to {scale:.1%} of request."
+                    f"{derate_temp_k:.1f}K; current request {ac_current_request_a:.1f}A limited "
+                    f"to {applied_current_a:.1f}A."
                 ),
                 affected_component="inverter",
                 severity="warning",

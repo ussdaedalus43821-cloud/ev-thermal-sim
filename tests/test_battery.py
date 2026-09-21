@@ -85,6 +85,8 @@ def _make_battery_spec() -> BatterySpec:
         min_operating_temp_k=_sourced(253.15),
         cold_derate_threshold_temp_k=_sourced(283.15),
         cold_derate_activation_temp_k=_sourced(1000.0),
+        soc_floor=_sourced(0.05),
+        soc_floor_full_available_soc=_sourced(0.1),
     )
 
 
@@ -180,6 +182,20 @@ def test_charge_at_0c_is_limited_more_than_charge_at_25c() -> None:
     assert abs(cold.applied_current_a) < abs(warm.applied_current_a)
 
 
+def test_soc_floor_limits_discharge_and_logs_causal_event() -> None:
+    spec = _make_battery_spec()
+    soc_floor = spec.soc_floor.value
+    soc_full_available = spec.soc_floor_full_available_soc.value
+    mid_soc = (soc_floor + soc_full_available) / 2.0
+
+    near_floor = _step(spec, 300.0, mid_soc, _REFERENCE_TEMP_K)
+    above_floor = _step(spec, 300.0, 0.5, _REFERENCE_TEMP_K)
+
+    assert near_floor.applied_current_a < 300.0
+    assert near_floor.applied_current_a < above_floor.applied_current_a
+    assert any(e.event_type == "SOC_FLOOR_LIMIT_TRIGGERED" for e in near_floor.causal_events)
+
+
 def test_undervoltage_clamp_triggers_causal_event() -> None:
     spec = _make_battery_spec()
     result = _step(spec, 200.0, 0.0, _REFERENCE_TEMP_K)
@@ -199,9 +215,11 @@ def test_overvoltage_clamp_triggers_causal_event() -> None:
 def test_over_temperature_clamp_triggers_causal_event() -> None:
     spec = _make_battery_spec()
     derate_temp_k = spec.thermal_node.derate_temp_k.value
-    result = _step(spec, 100.0, 0.5, derate_temp_k + 5.0)
+    # 400A comfortably exceeds the C-rate/voltage ceilings' derated value at
+    # this temp (but not their un-derated value), isolating the thermal derate.
+    result = _step(spec, 400.0, 0.5, derate_temp_k + 5.0)
 
-    assert result.applied_current_a < 100.0
+    assert result.applied_current_a < 400.0
     assert any(e.event_type == "DERATE_TRIGGERED" for e in result.causal_events)
 
 
