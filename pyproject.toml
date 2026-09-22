@@ -10,6 +10,7 @@ dependencies = [
     "scipy>=1.12",
     "streamlit>=1.31",
     "plotly>=5.19",
+    "matplotlib>=3.11.2",
 ]
 
 [dependency-groups]
