@@ -298,3 +298,43 @@ not just *what* happened.
   Not retuned further for now; if the demo profile's cruise temp needs to
   look more realistic before spec-sourcing lands, split the difference
   between the two documented data points here rather than guessing fresh.
+- **Categorical descriptor fields (`chemistry`, `motor_type`, `topology`,
+  `coolant_type`) are plain unwrapped `str`, not `Sourced[str]`, even though
+  they're empirically-known-from-research facts CLAUDE.md's "every uncertain
+  field is `Sourced`" rule would otherwise cover.** Surfaced during the
+  profile-population milestone: new categorical fields added in that
+  milestone (`BatterySpec.cooling_mechanism`, `MotorSpec.cooling_mechanism`,
+  `ThermalArchitecture.heat_pump_type`) WERE wrapped in `Sourced`, per
+  explicit instruction for new fields going forward — real confidence
+  variance exists here (e.g. the Audi e-tron's cell format is reported as
+  "prismatic (later models; pouch at launch)", a genuinely uncertain,
+  vintage-dependent categorical fact worth tracking a source/confidence on).
+  The four existing plain-`str` fields are inconsistent with this but were
+  deliberately NOT retrofitted in that milestone — real churn (every
+  existing profile fixture and test constructs these positionally) for no
+  immediate payoff. Retrofit them to `Sourced[str]` in a later milestone
+  when there's an actual reason to touch every call site anyway, rather
+  than as a standalone change.
+- **`BatterySpec.min_charge_temp_k` (added in the profile-population
+  milestone) is schema-only so far — `battery.py` doesn't read it yet.**
+  `available_charge_current_a` and `available_discharge_current_a` both
+  still use the single `min_operating_temp_k` as the hard cutoff for BOTH
+  directions (today's symmetric behavior, unchanged and still correct for
+  every profile that leaves `min_charge_temp_k` unset). The new field exists
+  because research surfaced a genuinely asymmetric case (BMW i3: charge
+  cuts off at 0°C, discharge continues down to −25°C) that a single shared
+  cutoff can't represent — but wiring it into `available_charge_current_a`
+  is physics-layer work out of scope for a data/schema milestone. When a
+  future milestone wires this in: `available_charge_current_a` should use
+  `min_charge_temp_k.value if min_charge_temp_k is not None else
+  min_operating_temp_k.value` as its cutoff; `available_discharge_current_a`
+  is unaffected and keeps using `min_operating_temp_k` as-is.
+- **`ThermalArchitecture.heat_pump_recovers_powertrain_waste_heat` (added in
+  the profile-population milestone) is schema-only, descriptive metadata —
+  not read by any physics module.** It exists to distinguish a bolt-on
+  cabin-only heat pump from an integrated system that reclaims motor/
+  inverter waste heat (Tesla's octovalve, Audi e-tron, Kia Niro's heat-pump
+  trim) — a real, cited functional difference the research surfaced that
+  `heat_pump_present`/`heat_pump_type` alone can't express. Wiring actual
+  waste-heat recovery into the combined thermal network (`sim.py`'s
+  `_combined_thermal_network`) is a future milestone, not this one.

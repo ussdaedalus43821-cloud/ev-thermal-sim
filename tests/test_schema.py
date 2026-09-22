@@ -24,6 +24,7 @@ from ev_thermal.schema import (
     CoolingLoop,
     DTPolicy,
     ForkPoint,
+    HeatPumpType,
     InverterSpec,
     ManufacturerProfile,
     MCConfig,
@@ -316,6 +317,80 @@ def test_thermal_node_rejects_non_numeric_capacitance() -> None:
             max_temp_k=sourced(333.15),
             derate_temp_k=sourced(318.15),
         )
+
+
+# --- HeatPumpType enum ---
+
+
+def test_heat_pump_type_enum_accepts_known_values() -> None:
+    assert HeatPumpType("none") is HeatPumpType.NONE
+    assert HeatPumpType("resistive_ptc") is HeatPumpType.RESISTIVE_PTC
+    assert HeatPumpType("heat_pump") is HeatPumpType.HEAT_PUMP
+    assert HeatPumpType("integrated_multi_mode") is HeatPumpType.INTEGRATED_MULTI_MODE
+
+
+def test_heat_pump_type_enum_rejects_unknown_value() -> None:
+    with pytest.raises(ValueError):
+        HeatPumpType("turbo")
+
+
+# --- profile-research schema extensions (v1 milestone) ---
+
+
+def test_battery_spec_defaults_new_optional_fields_to_none() -> None:
+    battery = make_battery_spec()
+    assert battery.cooling_mechanism is None
+    assert battery.min_charge_temp_k is None
+
+
+def test_battery_spec_round_trip_with_cooling_mechanism_and_min_charge_temp() -> None:
+    battery = make_battery_spec().model_copy(
+        update={
+            "cooling_mechanism": sourced("direct expansion refrigerant (R134a through the pack)"),
+            "min_charge_temp_k": sourced(273.15),
+        }
+    )
+    restored = BatterySpec.model_validate_json(battery.model_dump_json())
+    assert restored == battery
+    assert restored.cooling_mechanism is not None
+    assert restored.cooling_mechanism.value == "direct expansion refrigerant (R134a through the pack)"
+    assert restored.min_charge_temp_k is not None
+    assert restored.min_charge_temp_k.value == 273.15
+
+
+def test_motor_spec_defaults_cooling_mechanism_to_none() -> None:
+    assert make_motor_spec().cooling_mechanism is None
+
+
+def test_motor_spec_round_trip_with_cooling_mechanism() -> None:
+    motor = make_motor_spec().model_copy(
+        update={"cooling_mechanism": sourced("water jacket")}
+    )
+    restored = MotorSpec.model_validate_json(motor.model_dump_json())
+    assert restored == motor
+    assert restored.cooling_mechanism is not None
+    assert restored.cooling_mechanism.value == "water jacket"
+
+
+def test_thermal_architecture_defaults_heat_pump_fields_to_none() -> None:
+    architecture = make_thermal_architecture()
+    assert architecture.heat_pump_type is None
+    assert architecture.heat_pump_recovers_powertrain_waste_heat is None
+
+
+def test_thermal_architecture_round_trip_with_heat_pump_type_and_waste_heat_recovery() -> None:
+    architecture = make_thermal_architecture().model_copy(
+        update={
+            "heat_pump_type": sourced(HeatPumpType.INTEGRATED_MULTI_MODE),
+            "heat_pump_recovers_powertrain_waste_heat": sourced(True),
+        }
+    )
+    restored = ThermalArchitecture.model_validate_json(architecture.model_dump_json())
+    assert restored == architecture
+    assert restored.heat_pump_type is not None
+    assert restored.heat_pump_type.value is HeatPumpType.INTEGRATED_MULTI_MODE
+    assert restored.heat_pump_recovers_powertrain_waste_heat is not None
+    assert restored.heat_pump_recovers_powertrain_waste_heat.value is True
 
 
 # --- ManufacturerProfile (deep nesting) ---

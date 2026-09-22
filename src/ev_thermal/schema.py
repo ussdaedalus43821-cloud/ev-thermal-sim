@@ -30,6 +30,18 @@ class Confidence(StrEnum):
     HIGH = "high"
 
 
+class HeatPumpType(StrEnum):
+    """A vehicle's cabin/battery heat-generation architecture. A closed taxonomy
+    (unlike e.g. `MotorSpec.motor_type`'s free text) because comparative views
+    across the six reference vehicles want to filter/group on this directly.
+    """
+
+    NONE = "none"
+    RESISTIVE_PTC = "resistive_ptc"
+    HEAT_PUMP = "heat_pump"
+    INTEGRATED_MULTI_MODE = "integrated_multi_mode"
+
+
 class Sourced(BaseModel, Generic[T]):
     """Wraps any empirically-uncertain real-world value.
 
@@ -278,6 +290,28 @@ class BatterySpec(BaseModel):
     soc_floor_full_available_soc: Sourced[float] = Field(
         ..., description="SOC at/above which the soc_floor discharge restriction is fully lifted."
     )
+    cooling_mechanism: Sourced[str] | None = Field(
+        default=None,
+        description=(
+            "How the pack sheds heat, e.g. 'passive air (no active cooling)', "
+            "'indirect liquid (glycol loop)', 'direct expansion refrigerant "
+            "(R134a through the pack, no glycol loop)'. Free text, not an enum: "
+            "real packs sometimes combine mechanisms in ways a closed taxonomy "
+            "would misrepresent. Descriptive only — not read by battery.py yet."
+        ),
+    )
+    min_charge_temp_k: Sourced[float] | None = Field(
+        default=None,
+        description=(
+            "Cell temperature at/below which CHARGE current is cut off entirely, "
+            "if different from min_operating_temp_k (which remains the discharge-"
+            "side, and default/shared, hard cutoff). None means charge shares "
+            "min_operating_temp_k's cutoff, i.e. today's symmetric behavior is "
+            "unchanged. Not yet read by battery.py — see CLAUDE.md's deferred-work "
+            "note; battery.available_charge_current_a still uses "
+            "min_operating_temp_k for both directions until that's wired in."
+        ),
+    )
 
 
 class MotorSpec(BaseModel):
@@ -331,6 +365,17 @@ class MotorSpec(BaseModel):
         description=(
             "TODO(spec-sourcing): placeholder. Fractional extra copper loss applied "
             "during regen braking vs. motoring at the same current, dimensionless."
+        ),
+    )
+    cooling_mechanism: Sourced[str] | None = Field(
+        default=None,
+        description=(
+            "How the motor sheds heat, e.g. 'water jacket', 'oil-cooled stator + "
+            "rotor with dedicated end-winding oil jets', 'rotor-internal coolant + "
+            "stator jacket + bearing-plate cooling lances'. Free text, not an enum: "
+            "real motors commonly combine several simultaneous mechanisms, which a "
+            "single closed category would misrepresent. Descriptive only — not "
+            "read by motor.py yet."
         ),
     )
 
@@ -390,6 +435,28 @@ class ThermalArchitecture(BaseModel):
     )
     heat_pump_present: bool = Field(
         ..., description="Whether cabin heating uses a heat pump vs. resistive heat."
+    )
+    heat_pump_type: Sourced[HeatPumpType] | None = Field(
+        default=None,
+        description=(
+            "The vehicle's overall heat-generation architecture (distinct from "
+            "AuxLoads.cabin_heater_type, which is the cabin-air-specific free-text "
+            "description used for HVAC power accounting): whether there's no heat "
+            "pump at all, a resistive PTC heater, a heat pump, or an integrated "
+            "multi-mode system (e.g. Tesla's octovalve) that shares hardware "
+            "across cabin/battery/powertrain thermal management. None means not "
+            "yet researched/populated for this profile."
+        ),
+    )
+    heat_pump_recovers_powertrain_waste_heat: Sourced[bool] | None = Field(
+        default=None,
+        description=(
+            "Whether the heat pump system reclaims motor/inverter waste heat "
+            "(into the cabin loop and/or the battery loop) rather than only "
+            "moving heat between cabin air and ambient. True for e.g. Tesla's "
+            "octovalve, Audi e-tron, Kia Niro's heat-pump trim. None means not "
+            "yet researched/populated for this profile."
+        ),
     )
     battery_preconditioning: bool = Field(
         ..., description="Whether the vehicle can pre-heat/pre-cool the battery before a planned fast charge."
