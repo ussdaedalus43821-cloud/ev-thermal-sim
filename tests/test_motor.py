@@ -7,7 +7,7 @@ TODO(spec-sourcing) markers on the corresponding `MotorSpec` fields in schema.py
 
 from __future__ import annotations
 
-from ev_thermal.motor import step_motor
+from ev_thermal.motor import available_torque_nm, step_motor
 from ev_thermal.schema import Confidence, MotorSpec, Sourced, ThermalNode
 
 _COOLANT_TEMP_K = 298.15
@@ -118,3 +118,19 @@ def test_derate_reduces_available_torque_monotonically() -> None:
     assert mid.causal_events[0].event_type == "DERATE_TRIGGERED"
     assert mid.causal_events[0].affected_component == "motor"
     assert len(below.causal_events) == 0
+
+
+def test_available_torque_is_nearly_full_just_above_derate_threshold() -> None:
+    """Regression guard: available_torque_nm must ramp DOWN from peak at
+    derate_temp_k, not collapse to zero immediately above it (which would
+    mean the curve is inverted or derate_temp_k/max_temp_k have collapsed
+    into a degenerate step function).
+    """
+    spec = _make_motor_spec()
+    derate_temp_k = spec.thermal_node.derate_temp_k.value
+    peak_torque_nm = spec.peak_torque_nm.value
+
+    torque_nm = available_torque_nm(spec, derate_temp_k + 0.5)
+
+    assert torque_nm > 0.0
+    assert torque_nm > 0.9 * peak_torque_nm

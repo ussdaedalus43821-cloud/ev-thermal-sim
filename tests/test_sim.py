@@ -229,6 +229,25 @@ def test_coolant_above_ambient_below_component_temps_after_5_minutes() -> None:
     assert coolant_temp_k < max(component_temps_k)
 
 
+def test_driver_pi_settles_within_30s_to_within_1kmh_at_dt_1s() -> None:
+    """Regression guard for sim.py's dt=1.0s driver gains (SIM_DRIVER_KP_NM_PER_MPS/
+    SIM_DRIVER_KI_NM_PER_M): a constant-target cruise, well inside every component's
+    thermal/current ceiling, must settle and stay settled — this isolates the PI
+    loop's own stability from the separate thermal-derate-driven limit-cycling that
+    a torque ceiling flapping near a component's max_temp_k can otherwise produce.
+    """
+    profile = _make_profile()
+    scenario = _make_scenario(profile)
+    target_mps = 20.0
+    one_kmh_mps = 1.0 / 3.6
+
+    result = run_scenario(profile, scenario, duration_s=60.0, target_speed_mps=lambda _t: target_mps)
+
+    for time_s, speed_mps in zip(result.time_series.time_s, result.time_series.speed_mps, strict=True):
+        if time_s >= 30.0:
+            assert abs(speed_mps - target_mps) < one_kmh_mps
+
+
 def test_requested_torque_recorded_and_matches_commanded_when_unclamped() -> None:
     """A gentle cruise well under every component's limit should never get
     clamped by controller.py, so the driver's raw request and the commanded

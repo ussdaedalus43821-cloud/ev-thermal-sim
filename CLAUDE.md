@@ -253,3 +253,38 @@ not just *what* happened.
   after motor.py's placeholders are replaced with a real efficiency map.
   Don't rely on absolute loss/temperature magnitudes from a sim.py run
   until then.
+- **The demo profile's motor loss coefficients (`examples/first_run.py` and
+  `dashboard/app.py`'s duplicated `build_profile()`, NOT motor.py's own test
+  fixture) were recalibrated away from the note above's implausible values,
+  specifically because the dashboard milestone surfaced a genuine thermal
+  runaway, not just an unrealistic-but-harmless number.** At this profile's
+  ~30mph cruise (~365 rad/s), the original `mechanical_loss_coefficient_w_
+  per_rad3_per_s3=0.0002`/`iron_loss_coefficient_w_per_rad_per_s=2.0` produced
+  ~9.8kW + ~0.7kW of parasitic heat — heat that doesn't depend on applied
+  torque at all (both loss terms are speed-only), so it persists even at
+  zero commanded torque. Against this profile's ~8kW-at-best radiator, any
+  run long enough to reach thermal steady state (the dashboard's 1800s trip
+  option, but even a ~530s run at either 0°C or 25°C ambient) drove winding
+  temp past `max_temp_k` and pinned it there, since cutting torque to zero
+  doesn't reduce the dominant parasitic loss — producing a sustained
+  `MOTOR_LIMIT_TRIGGERED` lockout and, because the torque ceiling then
+  hunted at/near zero while parasitic heat kept the temp hovering at the
+  boundary, a genuine thermal limit-cycle in vehicle speed (not a driver-PI
+  gain instability — the PI itself was verified separately to settle
+  cleanly and correctly freeze its integral via anti-windup once saturated;
+  see `test_driver_pi_settles_within_30s_to_within_1kmh_at_dt_1s` in
+  test_sim.py). Recalibrated to `iron_loss_coefficient_w_per_rad_per_s=0.4`/
+  `mechanical_loss_coefficient_w_per_rad3_per_s3=3e-6` (~150W each at cruise,
+  ~300W total parasitic heat — in line with a real passenger-car traction
+  motor's bearing/windage/iron loss at moderate cruise, per real-world
+  guidance, not motor.py's own hand-picked 200 rad/s test point), which
+  reaches thermal steady state well below `derate_temp_k` at both 0°C and
+  25°C ambient over a full 1800s run. Still `TODO(spec-sourcing)` placeholder
+  values, not sourced motor data — just recalibrated for plausibility at the
+  speed this specific demo profile is actually driven at, the same "a
+  constant tuned for one context breaks down in another, so it gets its own
+  documented override in the calling context" pattern already used for
+  `sim.SIM_DRIVER_KP_NM_PER_MPS`/`SIM_DRIVER_KI_NM_PER_M`. motor.py's own
+  test fixture (`tests/test_motor.py`) is unchanged and still uses the
+  original 0.0002/2.0 values at its own 200 rad/s test point — this
+  recalibration is scoped to the demo profile only, not to motor.py itself.

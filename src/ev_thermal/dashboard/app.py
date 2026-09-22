@@ -21,6 +21,7 @@ this milestone.
 from __future__ import annotations
 
 import math
+from typing import NamedTuple
 
 import plotly.graph_objects as go
 import streamlit as st
@@ -29,6 +30,7 @@ from plotly.subplots import make_subplots
 from ev_thermal.schema import (
     AuxLoads,
     BatterySpec,
+    CausalEvent,
     ChargingProfile,
     Climate,
     Confidence,
@@ -59,6 +61,52 @@ SEVERITY_COLOR = {
 """UI-only color mapping onto CausalEvent.severity, a field the physics layer
 already sets (see causal.py/controller.py/motor.py/battery.py/inverter.py's
 own severity= calls) — not a new classification invented in the UI."""
+
+
+class _EventGroup(NamedTuple):
+    event_type: str
+    affected_component: str
+    severity: str
+    description: str
+    first_sim_time_s: float
+    last_sim_time_s: float
+    fired_count: int
+
+
+def _dedupe_consecutive_events(events: list[CausalEvent]) -> list[_EventGroup]:
+    """Collapses immediately-consecutive CausalEvents with identical event_type,
+    affected_component, and description (the same what/why/consequence, not just
+    the same event_type) into one group with a fired-count and a time span, so a
+    long run of an unchanging condition (e.g. a sustained derate lockout logging
+    the same event every step) doesn't spam the feed with hundreds of duplicate
+    lines. Events whose description text differs (even by a changing number) are
+    NOT merged — that's a UI-only exact-match dedup, not a new similarity
+    threshold invented on top of the physics layer's own event data.
+    """
+    groups: list[_EventGroup] = []
+    for event in events:
+        if groups:
+            last = groups[-1]
+            if (
+                event.event_type == last.event_type
+                and event.affected_component == last.affected_component
+                and event.description == last.description
+            ):
+                groups[-1] = last._replace(last_sim_time_s=event.sim_time_s, fired_count=last.fired_count + 1)
+                continue
+        groups.append(
+            _EventGroup(
+                event_type=event.event_type,
+                affected_component=event.affected_component,
+                severity=event.severity,
+                description=event.description,
+                first_sim_time_s=event.sim_time_s,
+                last_sim_time_s=event.sim_time_s,
+                fired_count=1,
+            )
+        )
+    return groups
+
 
 COMPONENT_COLOR = {
     "motor": "#1f77b4",
@@ -148,8 +196,8 @@ def build_profile() -> ManufacturerProfile:
         winding_resistance_ref_ohm=_sourced(0.05),
         winding_resistance_ref_temp_k=_sourced(298.15),
         torque_constant_nm_per_a=_sourced(1.0),
-        iron_loss_coefficient_w_per_rad_per_s=_sourced(2.0),
-        mechanical_loss_coefficient_w_per_rad3_per_s3=_sourced(0.0002),
+        iron_loss_coefficient_w_per_rad_per_s=_sourced(0.4),
+        mechanical_loss_coefficient_w_per_rad3_per_s3=_sourced(3e-6),
         regen_extra_loss_fraction=_sourced(0.15),
     )
 
@@ -418,17 +466,26 @@ with right_col:
         st.caption("Run a scenario to see events.")
     else:
         result, _profile = run_output
+        event_groups = _dedupe_consecutive_events(result.causal_events)
         with st.container(height=900):
-            for event in reversed(result.causal_events):
-                color = SEVERITY_COLOR.get(event.severity, "#888888")
+            for group in reversed(event_groups):
+                color = SEVERITY_COLOR.get(group.severity, "#888888")
+                if group.fired_count > 1:
+                    span_s = group.last_sim_time_s - group.first_sim_time_s
+                    time_label = f"t={group.first_sim_time_s:.1f}-{group.last_sim_time_s:.1f}s"
+                    fired_label = f" &middot; fired {group.fired_count} times over {span_s:.1f}s"
+                else:
+                    time_label = f"t={group.first_sim_time_s:.1f}s"
+                    fired_label = ""
                 st.markdown(
                     f"<div style='border-left: 4px solid {color}; padding: 4px 0 4px 10px; margin-bottom: 10px;'>"
                     f"<div style='font-size: 0.85em; color: {color}; font-weight: 600;'>"
-                    f"t={event.sim_time_s:.1f}s &middot; {event.event_type} &middot; {event.affected_component}"
+                    f"{time_label} &middot; {group.event_type} &middot; {group.affected_component}"
+                    f"{fired_label}"
                     f"</div>"
-                    f"<div style='font-size: 0.9em;'>{event.description}</div>"
+                    f"<div style='font-size: 0.9em;'>{group.description}</div>"
                     f"</div>",
                     unsafe_allow_html=True,
                 )
-            if not result.causal_events:
+            if not event_groups:
                 st.caption("No events this run.")

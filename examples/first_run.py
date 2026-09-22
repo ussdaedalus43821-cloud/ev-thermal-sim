@@ -124,8 +124,8 @@ def build_profile() -> ManufacturerProfile:
         winding_resistance_ref_ohm=_sourced(0.05),
         winding_resistance_ref_temp_k=_sourced(298.15),
         torque_constant_nm_per_a=_sourced(1.0),
-        iron_loss_coefficient_w_per_rad_per_s=_sourced(2.0),
-        mechanical_loss_coefficient_w_per_rad3_per_s3=_sourced(0.0002),
+        iron_loss_coefficient_w_per_rad_per_s=_sourced(0.4),
+        mechanical_loss_coefficient_w_per_rad3_per_s3=_sourced(3e-6),
         regen_extra_loss_fraction=_sourced(0.15),
     )
 
