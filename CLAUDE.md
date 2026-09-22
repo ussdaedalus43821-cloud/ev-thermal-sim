@@ -288,3 +288,13 @@ not just *what* happened.
   test fixture (`tests/test_motor.py`) is unchanged and still uses the
   original 0.0002/2.0 values at its own 200 rad/s test point — this
   recalibration is scoped to the demo profile only, not to motor.py itself.
+  **Confirmed fixed, but the retune likely overshot low: this profile's
+  motor now reaches steady state around ~30°C at moderate cruise, versus a
+  real traction motor's more typical 60-90°C at moderate cruise.** Flagging
+  as a tuning note, not a new bug — the underlying issue (parasitic loss too
+  large relative to radiator capacity) is fixed, and both the too-high
+  original values and the too-low retuned values are `TODO(spec-sourcing)`
+  placeholders either way, superseded once real coefficients are sourced.
+  Not retuned further for now; if the demo profile's cruise temp needs to
+  look more realistic before spec-sourcing lands, split the difference
+  between the two documented data points here rather than guessing fresh.
