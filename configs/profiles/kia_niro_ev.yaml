@@ -1,2 +1,441 @@
-# ManufacturerProfile data for the Kia Niro EV — not yet populated.
+# ManufacturerProfile data for the Kia Niro EV (2018+, long-range/64kWh
+# heat-pump trim).
+# Source: docs/research/profiles_v1.md — Kia Niro EV.
 # See src/ev_thermal/schema.py:ManufacturerProfile for the shape.
+#
+# Represents the 64kWh long-range pack with the heat-pump trim, since the
+# research describes that configuration in the most thermal detail (shared
+# coolant loop through battery/motor/inverter/heat pump, waste-heat
+# scavenging). The 39.2kWh standard-range pack exists per research but
+# isn't modeled as a separate profile.
+#
+# model_year_range: research states an open-ended "2018+"; no end year is
+# given, so this uses [2018, 2018] rather than inventing one.
+#
+# VehicleDynamics, AuxLoads, and most of the battery's equivalent-circuit
+# parameters are NOT covered by the research — shared placeholder values,
+# identical across all six profiles. See nissan_leaf.yaml's header comment
+# for the full rationale.
+#
+# Note (not a schema field): research's central Niro story is that the
+# thermal HARDWARE (liquid cooling + heat pump) is solid, but early models
+# lacked battery preconditioning for DC fast charging, and the shared
+# coolant loop sometimes prioritized cabin comfort over pack conditioning
+# — an integration/control-policy failure mode, not a hardware one. A 2020
+# Niro drive-motor overheating sensor fault (erroneously cut power to
+# turtle mode, required motor replacement) is also documented — a control/
+# sensor fault, not a thermal-design flaw either.
+
+name: "Kia Niro EV (64 kWh, heat-pump trim)"
+model_year_range: [2018, 2018]
+
+vehicle_dynamics:
+  curb_mass_kg:
+    value: 1800.0
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  drag_coefficient:
+    value: 0.28
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  frontal_area_m2:
+    value: 2.3
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  rolling_resistance_coefficient:
+    value: 0.01
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  wheel_radius_m:
+    value: 0.33
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  gear_ratio:
+    value: 9.0
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  driveline_efficiency:
+    value: 0.95
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  tire_road_friction_coefficient:
+    value: 0.9
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+
+battery:
+  chemistry: "nickel-rich NMC"
+  capacity_kwh_nominal:
+    value: 64.0
+    confidence: high
+    source: "docs/research/profiles_v1.md — Kia Niro EV"
+  capacity_kwh_usable:
+    value: 64.0
+    confidence: low
+    source: "docs/research/profiles_v1.md — Kia Niro EV"
+    note: "research gives only a single 64kWh figure, no separate gross/usable split — using the same value for both"
+  nominal_voltage_v:
+    value: 356.0
+    confidence: high
+    source: "docs/research/profiles_v1.md — Kia Niro EV"
+  internal_resistance_ohm:
+    value: 0.05
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  mass_kg:
+    value: 450.0
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+    note: "pack mass not stated for the Niro in research"
+  specific_heat_j_per_kg_k:
+    value: 900.0
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  max_charge_c_rate:
+    value: 1.5
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  max_discharge_c_rate:
+    value: 3.0
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  thermal_node:
+    name: "battery_pack"
+    capacitance_j_per_k:
+      value: 405000.0
+      confidence: low
+      source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+      note: "derived from placeholder mass_kg (450.0) * placeholder specific_heat_j_per_kg_k (900.0)"
+    resistance_to_coolant_k_per_w:
+      value: 0.02
+      confidence: low
+      source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+    initial_temp_k: 298.15
+    max_temp_k:
+      value: 333.15
+      confidence: low
+      source: "default, not manufacturer-specific (docs/research/profiles_v1.md's derating-curve caveat)"
+      note: "60C default — research gives a control target (30C) but no separate hard-cutoff figure"
+    derate_temp_k:
+      value: 303.15
+      confidence: low
+      source: "estimated from owner reports and manual warnings"
+      note: "30C: research's 'Active heating below 20C; target max 30C' (docs/research/profiles_v1.md — Kia Niro EV), used as the derate-onset point. Confidence/source per the derating-curve instruction: the linear-ramp shape itself is an estimate even where the boundary temperature is well-documented."
+  capacity_nominal_ah:
+    value: 180.0
+    confidence: high
+    source: "docs/research/profiles_v1.md — Kia Niro EV"
+    note: "directly stated: '356V, 180Ah' — not derived, unlike most other profiles"
+  reference_temp_k:
+    value: 298.15
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  ocv_curve_v:
+    - [{value: 0.0, confidence: low, source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"},
+       {value: 300.0, confidence: low, source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"}]
+    - [{value: 0.1, confidence: low, source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"},
+       {value: 330.0, confidence: low, source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"}]
+    - [{value: 0.5, confidence: low, source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"},
+       {value: 348.0, confidence: low, source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"}]
+    - [{value: 0.9, confidence: low, source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"},
+       {value: 365.0, confidence: low, source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"}]
+    - [{value: 1.0, confidence: low, source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"},
+       {value: 395.0, confidence: low, source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"}]
+  docv_dt_v_per_k:
+    value: 0.0
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  r0_curve_ohm:
+    - [{value: 0.0, confidence: low, source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"},
+       {value: 0.09, confidence: low, source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"}]
+    - [{value: 0.5, confidence: low, source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"},
+       {value: 0.05, confidence: low, source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"}]
+    - [{value: 1.0, confidence: low, source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"},
+       {value: 0.10, confidence: low, source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"}]
+  r0_arrhenius_activation_temp_k:
+    value: 3000.0
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  r1_ohm:
+    value: 0.015
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  c1_farad:
+    value: 3000.0
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  min_terminal_voltage_v:
+    value: 290.0
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  max_terminal_voltage_v:
+    value: 410.0
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  min_operating_temp_k:
+    value: 253.15
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  cold_derate_threshold_temp_k:
+    value: 293.15
+    confidence: medium
+    source: "docs/research/profiles_v1.md — Kia Niro EV"
+    note: "research: 'Active heating below 20C' — used as the cold-derate onset point"
+  cold_derate_activation_temp_k:
+    value: 1000.0
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  soc_floor:
+    value: 0.05
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  soc_floor_full_available_soc:
+    value: 0.1
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  cooling_mechanism:
+    value: "indirect liquid, integrated with A/C via chiller; shared coolant loop runs through battery, motor, inverter, and heat pump; can cool the battery with no air movement (stationary); uses a dedicated blue EV battery coolant, not standard green antifreeze"
+    confidence: high
+    source: "docs/research/profiles_v1.md — Kia Niro EV"
+  min_charge_temp_k: null  # not researched for the Niro (only the BMW i3's asymmetric range is documented)
+
+motors:
+  - motor_type: "PMSM"
+    peak_power_kw:
+      value: 150.0
+      confidence: high
+      source: "docs/research/profiles_v1.md — Kia Niro EV"
+      note: "64kWh long-range variant's figure"
+    continuous_power_kw:
+      value: 150.0
+      confidence: low
+      source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+      note: "research does not give a distinct continuous-power figure; using peak as a placeholder"
+    peak_torque_nm:
+      value: 395.0
+      confidence: high
+      source: "docs/research/profiles_v1.md — Kia Niro EV"
+    efficiency_peak:
+      value: 0.96
+      confidence: low
+      source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+    mass_kg:
+      value: 70.0
+      confidence: low
+      source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+    max_winding_temp_k:
+      value: 453.15
+      confidence: low
+      source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+    thermal_node:
+      name: "motor"
+      capacitance_j_per_k:
+        value: 30000.0
+        confidence: low
+        source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+      resistance_to_coolant_k_per_w:
+        value: 0.03
+        confidence: low
+        source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+      initial_temp_k: 298.15
+      max_temp_k:
+        value: 453.15
+        confidence: low
+        source: "default, not manufacturer-specific (docs/research/profiles_v1.md's derating-curve caveat)"
+        note: "180C default — research documents that power is limited when motor temp is high, and cites a 2020 sensor-fault incident (erroneous overheating detection, turtle mode), but gives no specific threshold/limit pair"
+      derate_temp_k:
+        value: 413.15
+        confidence: low
+        source: "default, not manufacturer-specific (docs/research/profiles_v1.md's derating-curve caveat)"
+        note: "140C default — same reasoning as max_temp_k above"
+    winding_resistance_ref_ohm:
+      value: 0.05
+      confidence: low
+      source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+    winding_resistance_ref_temp_k:
+      value: 298.15
+      confidence: low
+      source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+    torque_constant_nm_per_a:
+      value: 1.0
+      confidence: low
+      source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+    iron_loss_coefficient_w_per_rad_per_s:
+      value: 0.4
+      confidence: low
+      source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+    mechanical_loss_coefficient_w_per_rad3_per_s3:
+      value: 3.0e-6
+      confidence: low
+      source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+    regen_extra_loss_fraction:
+      value: 0.15
+      confidence: low
+      source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+    cooling_mechanism:
+      value: "shared coolant loop with battery and inverter; motor/electronics waste heat used for cabin heating via a heat exchanger on heat-pump models"
+      confidence: high
+      source: "docs/research/profiles_v1.md — Kia Niro EV"
+
+inverter:
+  topology: "not specified in research"
+  peak_power_kw:
+    value: 150.0
+    confidence: low
+    source: "docs/research/profiles_v1.md — Kia Niro EV"
+    note: "derived: assumed to match the motor's peak_power_kw, not independently stated"
+  efficiency_peak:
+    value: 0.98
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  switching_frequency_hz:
+    value: 10000.0
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  max_junction_temp_k:
+    value: 423.15
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  mass_kg:
+    value: 15.0
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  thermal_node:
+    name: "inverter"
+    capacitance_j_per_k:
+      value: 3000.0
+      confidence: low
+      source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+    resistance_to_coolant_k_per_w:
+      value: 0.05
+      confidence: low
+      source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+    initial_temp_k: 298.15
+    max_temp_k:
+      value: 423.15
+      confidence: low
+      source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+    derate_temp_k:
+      value: 398.15
+      confidence: low
+      source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  peak_current_a:
+    value: 500.0
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  r_ds_on_ref_ohm:
+    value: 0.002
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  r_ds_on_ref_temp_k:
+    value: 298.15
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  r_ds_on_temp_coefficient_per_k:
+    value: 0.005
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  switching_energy_coefficient_j_per_v:
+    value: 0.00003
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+
+thermal_architecture:
+  cooling_loops:
+    - name: "shared_loop"
+      coolant_type: "dedicated blue EV battery coolant (not standard green antifreeze)"
+      loop_volume_l:
+        value: 6.0
+        confidence: low
+        source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+      pump_max_flow_l_per_min:
+        value: 20.0
+        confidence: low
+        source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+      pump_power_w:
+        value: 80.0
+        confidence: low
+        source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+      radiator_ua_w_per_k:
+        value: 400.0
+        confidence: low
+        source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+      fan_power_w:
+        value: 150.0
+        confidence: low
+        source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+      chiller_present: true  # research: "liquid-cooled, integrated with A/C via chiller"
+      chiller_capacity_w: null  # capacity not stated
+      serves: ["battery", "motor", "inverter"]  # research: "Coolant loop runs through battery, motor, inverter, heat pump" — one shared loop
+      coolant_specific_heat_j_per_kg_k:
+        value: 3600.0
+        confidence: low
+        source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+      coolant_density_kg_per_m3:
+        value: 1050.0
+        confidence: low
+        source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+      thermostat_temp_k:
+        value: 293.15
+        confidence: medium
+        source: "docs/research/profiles_v1.md — Kia Niro EV"
+        note: "research: 'Active heating below 20C' — used as the thermostat setpoint"
+      thermostat_full_open_temp_k:
+        value: 303.15
+        confidence: medium
+        source: "docs/research/profiles_v1.md — Kia Niro EV"
+        note: "research: 'target max 30C' — used as the full-open point"
+      radiator_frontal_area_m2:
+        value: 0.25
+        confidence: low
+        source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+      fan_max_air_velocity_mps:
+        value: 6.0
+        confidence: low
+        source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  thermal_network:
+    nodes: {}
+    edges: []
+    ambient_coupling: {}
+  shared_loop: true  # research: one coolant loop through battery, motor, inverter, and heat pump
+  heat_pump_present: true  # research: heat-pump trim modeled; "Heat pump scavenges waste heat from power electronics"
+  heat_pump_type:
+    value: "integrated_multi_mode"
+    confidence: medium
+    source: "docs/research/profiles_v1.md — Kia Niro EV"
+    note: "shares one coolant loop with battery/motor/inverter and scavenges power-electronics waste heat — fits 'integrated' well, though research doesn't use that exact term"
+  heat_pump_recovers_powertrain_waste_heat:
+    value: true
+    confidence: high
+    source: "docs/research/profiles_v1.md — Kia Niro EV"
+    note: "research: 'Heat pump scavenges waste heat from power electronics' — explicit"
+  battery_preconditioning: true  # research: "Preconditioning to 20-25C before fast charging when navigating to charger" (note: research also states early models lacked this — later/full-featured config modeled here, see profile header)
+
+control_strategy:
+  derate_curve:
+    - [{value: 303.15, confidence: low, source: "estimated from owner reports and manual warnings"},
+       {value: 1.0, confidence: low, source: "estimated from owner reports and manual warnings"}]
+    - [{value: 333.15, confidence: low, source: "default, not manufacturer-specific (docs/research/profiles_v1.md's derating-curve caveat)"},
+       {value: 0.0, confidence: low, source: "default, not manufacturer-specific (docs/research/profiles_v1.md's derating-curve caveat)"}]
+  pump_control_policy: "not specified in research (research notes the shared loop 'sometimes prioritized cabin comfort over pack conditioning' as a known integration issue, but gives no explicit control-logic description)"
+  fan_control_policy: "not specified in research"
+  target_battery_temp_range_k:
+    value: [293.15, 303.15]
+    confidence: medium
+    source: "docs/research/profiles_v1.md — Kia Niro EV"
+    note: "research: 'Active heating below 20C; target max 30C'"
+
+aux_loads:
+  hvac_power_w:
+    value: 1000.0
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  cabin_heater_type: "heat pump (scavenges waste heat from power electronics via a heat exchanger)"
+  accessory_load_w:
+    value: 200.0
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  dc_dc_converter_efficiency:
+    value: 0.9
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"

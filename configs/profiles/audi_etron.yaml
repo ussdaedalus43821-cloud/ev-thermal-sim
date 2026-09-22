@@ -1,2 +1,491 @@
-# ManufacturerProfile data for the Audi e-tron — not yet populated.
+# ManufacturerProfile data for the Audi e-tron (2019+).
+# Source: docs/research/profiles_v1.md — Audi e-tron.
 # See src/ev_thermal/schema.py:ManufacturerProfile for the shape.
+#
+# Modeled as a single aggregate motor entry using the "D mode" combined
+# dual-motor output (265kW/561Nm), not two separate front/rear MotorSpec
+# entries — research gives front/rear power split (135kW/165kW) but only a
+# COMBINED torque figure, so splitting into two entries would need an
+# invented per-motor torque split the research doesn't provide. The boost
+# mode (300kW/664Nm) and three-motor S variant (370kW/973Nm) exist per
+# research but aren't modeled — this profile represents the standard dual-
+# motor D-mode configuration.
+#
+# The four independent coolant circuits (22L total) are simplified to two
+# CoolingLoop entries (battery + combined powertrain) — see the
+# thermal_architecture section below for how the researched 22L figure is
+# assigned.
+#
+# model_year_range: research states an open-ended "2019+"; no end year is
+# given, so this uses [2019, 2019] rather than inventing one.
+#
+# VehicleDynamics, AuxLoads, and most of the battery's equivalent-circuit
+# parameters are NOT covered by the research — shared placeholder values,
+# identical across all six profiles. See nissan_leaf.yaml's header comment
+# for the full rationale.
+
+name: "Audi e-tron (D mode, dual-motor)"
+model_year_range: [2019, 2019]
+
+vehicle_dynamics:
+  curb_mass_kg:
+    value: 1800.0
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  drag_coefficient:
+    value: 0.28
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  frontal_area_m2:
+    value: 2.3
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  rolling_resistance_coefficient:
+    value: 0.01
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  wheel_radius_m:
+    value: 0.33
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  gear_ratio:
+    value: 9.0
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  driveline_efficiency:
+    value: 0.95
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  tire_road_friction_coefficient:
+    value: 0.9
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+
+battery:
+  chemistry: "not specified in research (prismatic in later models, pouch at launch — cell format given, chemistry family not)"
+  capacity_kwh_nominal:
+    value: 95.0
+    confidence: high
+    source: "docs/research/profiles_v1.md — Audi e-tron"
+  capacity_kwh_usable:
+    value: 86.0
+    confidence: high
+    source: "docs/research/profiles_v1.md — Audi e-tron"
+  nominal_voltage_v:
+    value: 396.0
+    confidence: high
+    source: "docs/research/profiles_v1.md — Audi e-tron"
+  internal_resistance_ohm:
+    value: 0.05
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  mass_kg:
+    value: 700.0
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+    note: "pack mass not stated for the e-tron in research (module/cell counts given, not total mass)"
+  specific_heat_j_per_kg_k:
+    value: 900.0
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  max_charge_c_rate:
+    value: 1.5
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  max_discharge_c_rate:
+    value: 3.0
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  thermal_node:
+    name: "battery_pack"
+    capacitance_j_per_k:
+      value: 630000.0
+      confidence: low
+      source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+      note: "derived from placeholder mass_kg (700.0) * placeholder specific_heat_j_per_kg_k (900.0)"
+    resistance_to_coolant_k_per_w:
+      value: 0.015
+      confidence: low
+      source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+      note: "set slightly tighter than the other profiles' 0.02 placeholder, reflecting research's 'thermal gel beneath each module' and large coolant volume — a qualitative, not quantitative, adjustment"
+    initial_temp_k: 298.15
+    max_temp_k:
+      value: 338.15
+      confidence: low
+      source: "estimated from owner reports and manual warnings"
+      note: "65C: research's derating 'hardly possible even under highly dynamic driving' (docs/research/profiles_v1.md — Audi e-tron) — per the derating-curve caveat's explicit e-tron guidance, set a high threshold; exact figure not stated"
+    derate_temp_k:
+      value: 328.15
+      confidence: low
+      source: "estimated from owner reports and manual warnings"
+      note: "55C — same 'hardly possible to derate, set high threshold' guidance as max_temp_k; exact figure not stated"
+  capacity_nominal_ah:
+    value: 239.9
+    confidence: high
+    source: "docs/research/profiles_v1.md — Audi e-tron"
+    note: "derived from capacity_kwh_nominal * 1000 / nominal_voltage_v (95000/396); Ah not directly stated"
+  reference_temp_k:
+    value: 298.15
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  ocv_curve_v:
+    - [{value: 0.0, confidence: low, source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"},
+       {value: 300.0, confidence: low, source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"}]
+    - [{value: 0.1, confidence: low, source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"},
+       {value: 330.0, confidence: low, source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"}]
+    - [{value: 0.5, confidence: low, source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"},
+       {value: 348.0, confidence: low, source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"}]
+    - [{value: 0.9, confidence: low, source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"},
+       {value: 365.0, confidence: low, source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"}]
+    - [{value: 1.0, confidence: low, source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"},
+       {value: 395.0, confidence: low, source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"}]
+  docv_dt_v_per_k:
+    value: 0.0
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  r0_curve_ohm:
+    - [{value: 0.0, confidence: low, source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"},
+       {value: 0.09, confidence: low, source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"}]
+    - [{value: 0.5, confidence: low, source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"},
+       {value: 0.05, confidence: low, source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"}]
+    - [{value: 1.0, confidence: low, source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"},
+       {value: 0.10, confidence: low, source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"}]
+  r0_arrhenius_activation_temp_k:
+    value: 3000.0
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  r1_ohm:
+    value: 0.015
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  c1_farad:
+    value: 3000.0
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  min_terminal_voltage_v:
+    value: 290.0
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  max_terminal_voltage_v:
+    value: 410.0
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  min_operating_temp_k:
+    value: 253.15
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  cold_derate_threshold_temp_k:
+    value: 283.15
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  cold_derate_activation_temp_k:
+    value: 1000.0
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  soc_floor:
+    value: 0.05
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  soc_floor_full_available_soc:
+    value: 0.1
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  cooling_mechanism:
+    value: "indirect liquid: flat extruded aluminum sections with thermal gel beneath each module; 22L coolant, 40m of cooling lines, four independent circuits"
+    confidence: high
+    source: "docs/research/profiles_v1.md — Audi e-tron"
+  min_charge_temp_k: null  # not researched for the e-tron (only the BMW i3's asymmetric range is documented)
+
+motors:
+  - motor_type: "not specified in research"
+    peak_power_kw:
+      value: 265.0
+      confidence: high
+      source: "docs/research/profiles_v1.md — Audi e-tron"
+      note: "D-mode combined front+rear output (135kW front + 165kW rear); boost mode (300kW) and three-motor S variant (370kW) not modeled — see profile header"
+    continuous_power_kw:
+      value: 235.0
+      confidence: high
+      source: "docs/research/profiles_v1.md — Audi e-tron"
+      note: "research: 'after 30 min full load at high ambient, still 2 x 70kW rear + 95kW front' = 235kW combined sustained output"
+    peak_torque_nm:
+      value: 561.0
+      confidence: high
+      source: "docs/research/profiles_v1.md — Audi e-tron"
+      note: "D-mode combined torque"
+    efficiency_peak:
+      value: 0.96
+      confidence: low
+      source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+    mass_kg:
+      value: 70.0
+      confidence: low
+      source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+    max_winding_temp_k:
+      value: 453.15
+      confidence: low
+      source: "docs/research/profiles_v1.md — Audi e-tron"
+      note: "research states rotor-internal cooling 'keeps temps below 180C (453.15K)' — used as a proxy for winding limit since no separate winding-specific figure is given"
+    thermal_node:
+      name: "motor"
+      capacitance_j_per_k:
+        value: 30000.0
+        confidence: low
+        source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+      resistance_to_coolant_k_per_w:
+        value: 0.03
+        confidence: low
+        source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+      initial_temp_k: 298.15
+      max_temp_k:
+        value: 453.15
+        confidence: low
+        source: "estimated from owner reports and manual warnings"
+        note: "180C: same rotor-cooling figure used for max_winding_temp_k above (docs/research/profiles_v1.md — Audi e-tron). Confidence/source per the derating-curve instruction: the linear-ramp shape itself is an estimate even where the boundary temperature is well-documented."
+      derate_temp_k:
+        value: 433.15
+        confidence: low
+        source: "estimated from owner reports and manual warnings"
+        note: "160C: research states derating is 'hardly possible even under highly dynamic driving' (docs/research/profiles_v1.md — Audi e-tron); set close to but below the 180C rotor limit, exact onset not stated"
+    winding_resistance_ref_ohm:
+      value: 0.05
+      confidence: low
+      source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+    winding_resistance_ref_temp_k:
+      value: 298.15
+      confidence: low
+      source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+    torque_constant_nm_per_a:
+      value: 1.0
+      confidence: low
+      source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+    iron_loss_coefficient_w_per_rad_per_s:
+      value: 0.4
+      confidence: low
+      source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+    mechanical_loss_coefficient_w_per_rad3_per_s3:
+      value: 3.0e-6
+      confidence: low
+      source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+    regen_extra_loss_fraction:
+      value: 0.15
+      confidence: low
+      source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+    cooling_mechanism:
+      value: "rotor internal cooling (coolant through hollow rotor shafts); stators and end shields water-cooled; cooling lances for rotor-internal, stator-jacket, and bearing-plate cooling"
+      confidence: high
+      source: "docs/research/profiles_v1.md — Audi e-tron"
+
+inverter:
+  topology: "not specified in research"
+  peak_power_kw:
+    value: 265.0
+    confidence: low
+    source: "docs/research/profiles_v1.md — Audi e-tron"
+    note: "derived: assumed to match the aggregate motor's peak_power_kw, not independently stated"
+  efficiency_peak:
+    value: 0.98
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  switching_frequency_hz:
+    value: 10000.0
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  max_junction_temp_k:
+    value: 423.15
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  mass_kg:
+    value: 15.0
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  thermal_node:
+    name: "inverter"
+    capacitance_j_per_k:
+      value: 3000.0
+      confidence: low
+      source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+    resistance_to_coolant_k_per_w:
+      value: 0.05
+      confidence: low
+      source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+    initial_temp_k: 298.15
+    max_temp_k:
+      value: 423.15
+      confidence: low
+      source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+    derate_temp_k:
+      value: 398.15
+      confidence: low
+      source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  peak_current_a:
+    value: 500.0
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  r_ds_on_ref_ohm:
+    value: 0.002
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  r_ds_on_ref_temp_k:
+    value: 298.15
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  r_ds_on_temp_coefficient_per_k:
+    value: 0.005
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  switching_energy_coefficient_j_per_v:
+    value: 0.00003
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+
+thermal_architecture:
+  cooling_loops:
+    - name: "battery_loop"
+      coolant_type: "50/50 water-glycol"
+      loop_volume_l:
+        value: 22.0
+        confidence: medium
+        source: "docs/research/profiles_v1.md — Audi e-tron"
+        note: "research states 22L total across FOUR independent circuits; this profile simplifies to two loops (battery + powertrain), and assigns the full researched total to the battery loop rather than splitting it further — a simplification, not a researched per-loop figure"
+      pump_max_flow_l_per_min:
+        value: 20.0
+        confidence: low
+        source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+      pump_power_w:
+        value: 80.0
+        confidence: low
+        source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+      radiator_ua_w_per_k:
+        value: 400.0
+        confidence: low
+        source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+      fan_power_w:
+        value: 150.0
+        confidence: low
+        source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+      chiller_present: false  # research does not describe a discrete chiller unit for the e-tron
+      chiller_capacity_w: null
+      serves: ["battery"]
+      coolant_specific_heat_j_per_kg_k:
+        value: 3600.0
+        confidence: low
+        source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+      coolant_density_kg_per_m3:
+        value: 1050.0
+        confidence: low
+        source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+      thermostat_temp_k:
+        value: 298.15
+        confidence: medium
+        source: "docs/research/profiles_v1.md — Audi e-tron"
+        note: "research: 'Target 25-35C, tightly controlled' — using the low end (25C) as the thermostat setpoint"
+      thermostat_full_open_temp_k:
+        value: 308.15
+        confidence: medium
+        source: "docs/research/profiles_v1.md — Audi e-tron"
+        note: "research: 'Target 25-35C' — using the high end (35C) as the full-open point"
+      radiator_frontal_area_m2:
+        value: 0.25
+        confidence: low
+        source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+      fan_max_air_velocity_mps:
+        value: 6.0
+        confidence: low
+        source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+    - name: "powertrain_loop"
+      coolant_type: "50/50 water-glycol"
+      loop_volume_l:
+        value: 6.0
+        confidence: low
+        source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+        note: "the researched 22L total was assigned to the battery_loop above; this is a placeholder, not a share of that figure"
+      pump_max_flow_l_per_min:
+        value: 20.0
+        confidence: low
+        source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+      pump_power_w:
+        value: 80.0
+        confidence: low
+        source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+      radiator_ua_w_per_k:
+        value: 400.0
+        confidence: low
+        source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+      fan_power_w:
+        value: 150.0
+        confidence: low
+        source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+      chiller_present: false
+      chiller_capacity_w: null
+      serves: ["motor", "inverter"]
+      coolant_specific_heat_j_per_kg_k:
+        value: 3600.0
+        confidence: low
+        source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+      coolant_density_kg_per_m3:
+        value: 1050.0
+        confidence: low
+        source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+      thermostat_temp_k:
+        value: 308.15
+        confidence: low
+        source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+      thermostat_full_open_temp_k:
+        value: 313.15
+        confidence: low
+        source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+      radiator_frontal_area_m2:
+        value: 0.25
+        confidence: low
+        source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+      fan_max_air_velocity_mps:
+        value: 6.0
+        confidence: low
+        source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  thermal_network:
+    nodes: {}
+    edges: []
+    ambient_coupling: {}
+  shared_loop: false  # research: four independent circuits; simplified here to two, still separate
+  heat_pump_present: true  # research: "Heat pump standard"
+  heat_pump_type:
+    value: "integrated_multi_mode"
+    confidence: medium
+    source: "docs/research/profiles_v1.md — Audi e-tron"
+    note: "research: 'Heat pump standard; recovers up to 3kW waste heat from HV battery' — implies an integrated system, though the research's own phrase describes recovering the BATTERY's waste heat, not motor/inverter waste heat specifically (see heat_pump_recovers_powertrain_waste_heat below)"
+  heat_pump_recovers_powertrain_waste_heat:
+    value: false
+    confidence: medium
+    source: "docs/research/profiles_v1.md — Audi e-tron"
+    note: "research states the heat pump recovers waste heat FROM the HV battery, not from the motor/inverter specifically — a different capability than this field describes (see ThermalArchitecture.heat_pump_recovers_powertrain_waste_heat's own docstring). Not the same claim as Tesla's octovalve or Kia Niro's power-electronics waste-heat recovery."
+  battery_preconditioning: false  # not explicitly described for the e-tron in research; conservative default given research silence
+
+control_strategy:
+  derate_curve:
+    - [{value: 328.15, confidence: low, source: "estimated from owner reports and manual warnings"},
+       {value: 1.0, confidence: low, source: "estimated from owner reports and manual warnings"}]
+    - [{value: 338.15, confidence: low, source: "estimated from owner reports and manual warnings"},
+       {value: 0.0, confidence: low, source: "estimated from owner reports and manual warnings"}]
+  pump_control_policy: "not specified in research"
+  fan_control_policy: "not specified in research"
+  target_battery_temp_range_k:
+    value: [298.15, 308.15]
+    confidence: medium
+    source: "docs/research/profiles_v1.md — Audi e-tron"
+    note: "research: 'Target 25-35C, tightly controlled'"
+
+aux_loads:
+  hvac_power_w:
+    value: 1000.0
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  cabin_heater_type: "heat pump (standard; recovers up to 3kW waste heat from the HV battery)"
+  accessory_load_w:
+    value: 200.0
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  dc_dc_converter_efficiency:
+    value: 0.9
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
