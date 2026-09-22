@@ -47,6 +47,7 @@ def _step(
     battery_voltage_v: float = _BATTERY_VOLTAGE_V,
     speed_rad_per_s: float = 100.0,
     coolant_temp_k: float = _NOMINAL_TEMP_K,
+    pump_aggressiveness: float = 1.0,
 ):
     return step_controller(
         driver_torque_request_nm,
@@ -64,6 +65,7 @@ def _step(
         speed_rad_per_s,
         coolant_temp_k,
         sim_time_s=0.0,
+        pump_aggressiveness=pump_aggressiveness,
     )
 
 
@@ -144,6 +146,22 @@ def test_battery_current_demand_matches_commanded_torque_direction() -> None:
 
     assert motoring.battery_current_demand_a > 0.0
     assert regen.battery_current_demand_a < 0.0
+
+
+def test_pump_aggressiveness_default_matches_unparameterized_behavior() -> None:
+    default_call = _step(battery_cell_temp_k=312.0, coolant_temp_k=312.0)
+    explicit_default = _step(battery_cell_temp_k=312.0, coolant_temp_k=312.0, pump_aggressiveness=1.0)
+
+    assert default_call.commanded_pump_duty == explicit_default.commanded_pump_duty
+    assert default_call.commanded_fan_duty == explicit_default.commanded_fan_duty
+
+
+def test_higher_pump_aggressiveness_reaches_full_duty_over_narrower_window() -> None:
+    mild = _step(battery_cell_temp_k=312.0, coolant_temp_k=312.0, pump_aggressiveness=0.5)
+    aggressive = _step(battery_cell_temp_k=312.0, coolant_temp_k=312.0, pump_aggressiveness=2.0)
+
+    assert aggressive.commanded_pump_duty > mild.commanded_pump_duty
+    assert aggressive.commanded_fan_duty > mild.commanded_fan_duty
 
 
 def test_battery_ceiling_matches_available_discharge_current_a_via_power_conversion() -> None:

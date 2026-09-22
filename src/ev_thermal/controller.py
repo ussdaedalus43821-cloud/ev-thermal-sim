@@ -26,7 +26,12 @@ Cooling policy (`_duty_ramp`) is an explicit placeholder, TODO(tuning): pump
 duty scales with the hottest component's temperature above the loop's
 thermostat threshold; fan duty scales with coolant temperature above the same
 threshold. Neither goes below its own minimum duty — real pumps/fans idle
-rather than fully stopping.
+rather than fully stopping. `pump_aggressiveness` (default 1.0, matching the
+original unparameterized behavior) scales `DUTY_RAMP_SPAN_K` down for both
+ramps: a higher value reaches full duty over a narrower temperature window
+above thermostat (a more eager response), a lower value spreads the same
+ramp over a wider window. It's a multiplier on an already-placeholder shape,
+not a real calibrated control law.
 
 SOC-floor limiting is NOT a separate term in the min() below: it's already
 folded into `battery.available_discharge_current_a`'s own ceiling (see that
@@ -95,6 +100,7 @@ def step_controller(
     speed_rad_per_s: float,
     coolant_temp_k: float,
     sim_time_s: float,
+    pump_aggressiveness: float = 1.0,
 ) -> ControllerStepResult:
     """Arbitrate the driver's torque request against every component's limit
     and produce commanded torque, cooling duties, and battery current demand.
@@ -198,8 +204,9 @@ def step_controller(
 
     max_component_temp_k = max(motor_winding_temp_k, inverter_junction_temp_k, battery_cell_temp_k)
     thermostat_temp_k = cooling_loop_spec.thermostat_temp_k.value
-    commanded_pump_duty = _duty_ramp(max_component_temp_k, thermostat_temp_k, DUTY_RAMP_SPAN_K, MIN_PUMP_DUTY)
-    commanded_fan_duty = _duty_ramp(coolant_temp_k, thermostat_temp_k, DUTY_RAMP_SPAN_K, MIN_FAN_DUTY)
+    effective_span_k = DUTY_RAMP_SPAN_K / pump_aggressiveness
+    commanded_pump_duty = _duty_ramp(max_component_temp_k, thermostat_temp_k, effective_span_k, MIN_PUMP_DUTY)
+    commanded_fan_duty = _duty_ramp(coolant_temp_k, thermostat_temp_k, effective_span_k, MIN_FAN_DUTY)
 
     return ControllerStepResult(
         commanded_torque_nm=commanded_torque_nm,

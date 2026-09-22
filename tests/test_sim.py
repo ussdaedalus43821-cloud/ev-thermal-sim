@@ -10,6 +10,8 @@ from __future__ import annotations
 import copy
 import math
 
+import pytest
+
 from ev_thermal.cooling import step_cooling
 from ev_thermal.schema import (
     AuxLoads,
@@ -225,6 +227,70 @@ def test_coolant_above_ambient_below_component_temps_after_5_minutes() -> None:
 
     assert coolant_temp_k > ambient_temp_k
     assert coolant_temp_k < max(component_temps_k)
+
+
+def test_requested_torque_recorded_and_matches_commanded_when_unclamped() -> None:
+    """A gentle cruise well under every component's limit should never get
+    clamped by controller.py, so the driver's raw request and the commanded
+    torque recorded in the time series should match at every step.
+    """
+    profile = _make_profile()
+    scenario = _make_scenario(profile)
+
+    result = run_scenario(profile, scenario, duration_s=10.0, target_speed_mps=lambda _t: 5.0)
+
+    assert len(result.time_series.requested_torque_nm) == len(result.time_series.commanded_torque_nm)
+    for requested, commanded in zip(
+        result.time_series.requested_torque_nm[1:], result.time_series.commanded_torque_nm[1:], strict=True
+    ):
+        assert requested == pytest.approx(commanded)
+
+
+def test_uphill_grade_requires_more_torque_than_flat_at_same_cruise_speed() -> None:
+    profile = _make_profile()
+    scenario = _make_scenario(profile)
+
+    flat = run_scenario(profile, scenario, duration_s=30.0, target_speed_mps=lambda _t: 15.0, grade_rad=0.0)
+    uphill = run_scenario(
+        profile, scenario, duration_s=30.0, target_speed_mps=lambda _t: 15.0, grade_rad=math.radians(5.0)
+    )
+
+    assert uphill.time_series.requested_torque_nm[-1] > flat.time_series.requested_torque_nm[-1]
+
+
+def test_downhill_grade_requires_less_torque_than_flat_at_same_cruise_speed() -> None:
+    profile = _make_profile()
+    scenario = _make_scenario(profile)
+
+    flat = run_scenario(profile, scenario, duration_s=30.0, target_speed_mps=lambda _t: 15.0, grade_rad=0.0)
+    downhill = run_scenario(
+        profile, scenario, duration_s=30.0, target_speed_mps=lambda _t: 15.0, grade_rad=math.radians(-5.0)
+    )
+
+    assert downhill.time_series.requested_torque_nm[-1] < flat.time_series.requested_torque_nm[-1]
+
+
+def test_higher_pump_aggressiveness_commands_higher_duty_above_thermostat() -> None:
+    """Runs advance_one_step (not the full run_scenario loop) with the battery
+    already above the loop's thermostat threshold, so the duty ramp is
+    actually active — a full-length run_scenario call at these fixtures'
+    default ambient never gets components hot enough to cross the
+    thermostat, which would make pump_aggressiveness's effect unobservable
+    through peak temps alone.
+    """
+    profile = _make_profile()
+    scenario = _make_scenario(profile)
+    battery_name = profile.battery.thermal_node.name
+    thermostat_temp_k = profile.thermal_architecture.cooling_loops[0].thermostat_temp_k.value
+
+    state = initialize_sim_state(profile, scenario, scenario.random_seed)
+    hot_temps_k = {**state.node_temps_k, battery_name: thermostat_temp_k + 5.0}
+    state = state.model_copy(update={"node_temps_k": hot_temps_k})
+
+    mild = advance_one_step(profile, scenario, state, target_speed_mps=20.0, pump_aggressiveness=0.5)
+    aggressive = advance_one_step(profile, scenario, state, target_speed_mps=20.0, pump_aggressiveness=2.0)
+
+    assert aggressive.pump_duty > mild.pump_duty
 
 
 def test_zero_pump_duty_leaves_combined_network_with_no_escape_path() -> None:

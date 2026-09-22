@@ -31,6 +31,8 @@ from ev_thermal.schema import (
     MotorSpec,
     Scenario,
     SimState,
+    SimStepRecord,
+    SimTimeSeries,
     Sourced,
     ThermalArchitecture,
     ThermalNetwork,
@@ -411,6 +413,79 @@ def test_sim_state_round_trip_with_rng_state() -> None:
     restored = SimState.model_validate_json(state.model_dump_json())
     assert restored == state
     assert restored.rng_state["bit_generator"] == "PCG64"
+
+
+def make_sim_state() -> SimState:
+    import numpy as np
+
+    rng = np.random.default_rng(seed=1)
+    return SimState(
+        state_id="state-0001",
+        scenario_id="scenario-0001",
+        sim_time_s=1.0,
+        odometer_km=0.01,
+        battery_soc=0.6,
+        battery_soh=1.0,
+        node_temps_k={"battery_pack": 298.15},
+        rng_state=rng.bit_generator.state,
+        fork_lineage=[],
+        step_count=1,
+        dt_current_s=1.0,
+        speed_mps=5.0,
+        battery_v_rc_v=0.1,
+        driver_integral_error_state=0.0,
+        battery_throughput_ah=0.0,
+        event_ids=[],
+        battery_voltage_v=350.0,
+    )
+
+
+def make_sim_step_record() -> SimStepRecord:
+    return SimStepRecord(
+        new_state=make_sim_state(),
+        causal_events=[],
+        requested_torque_nm=150.0,
+        commanded_torque_nm=120.0,
+        motor_mechanical_power_w=600.0,
+        motor_electrical_power_w=650.0,
+        battery_electrical_power_w=670.0,
+        battery_ocv_power_w=680.0,
+        pump_duty=0.4,
+        fan_duty=0.3,
+        heat_rejected_w=200.0,
+        motor_loss_w=50.0,
+        inverter_loss_w=10.0,
+        battery_loss_w=10.0,
+        aux_power_w=1200.0,
+        active_limit_event_types=["MOTOR_LIMIT_TRIGGERED"],
+    )
+
+
+def test_sim_step_record_round_trip_with_requested_torque() -> None:
+    record = make_sim_step_record()
+    restored = SimStepRecord.model_validate_json(record.model_dump_json())
+    assert restored == record
+    assert restored.requested_torque_nm == 150.0
+    assert restored.requested_torque_nm != restored.commanded_torque_nm
+
+
+def test_sim_time_series_round_trip_with_requested_torque() -> None:
+    series = SimTimeSeries(
+        time_s=[0.0, 1.0],
+        speed_mps=[0.0, 5.0],
+        requested_torque_nm=[200.0, 150.0],
+        commanded_torque_nm=[150.0, 120.0],
+        motor_electrical_power_w=[0.0, 650.0],
+        soc=[0.6, 0.6],
+        node_temps_k={"battery_pack": [298.15, 298.2]},
+        pump_duty=[0.2, 0.4],
+        fan_duty=[0.1, 0.3],
+        heat_rejected_w=[0.0, 200.0],
+        active_limit_event_types=[[], ["MOTOR_LIMIT_TRIGGERED"]],
+    )
+    restored = SimTimeSeries.model_validate_json(series.model_dump_json())
+    assert restored == series
+    assert restored.requested_torque_nm == [200.0, 150.0]
 
 
 # --- ForkPoint / CausalEvent ---

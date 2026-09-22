@@ -874,6 +874,9 @@ class SimTimeSeries(BaseModel):
 
     time_s: list[float] = Field(default_factory=list)
     speed_mps: list[float] = Field(default_factory=list)
+    requested_torque_nm: list[float] = Field(
+        default_factory=list, description="Driver's raw torque request each step, in N*m (see SimStepRecord)."
+    )
     commanded_torque_nm: list[float] = Field(default_factory=list)
     motor_electrical_power_w: list[float] = Field(default_factory=list)
     soc: list[float] = Field(default_factory=list)
@@ -896,6 +899,13 @@ class SimStepRecord(BaseModel):
     new_state: SimState
     causal_events: list[CausalEvent] = Field(
         default_factory=list, description="Every CausalEvent logged during this one step, across all components."
+    )
+    requested_torque_nm: float = Field(
+        ...,
+        description=(
+            "Driver's raw torque request this step, in N*m, BEFORE controller.py's "
+            "arbitration clamp (see commanded_torque_nm for the post-arbitration value)."
+        ),
     )
     commanded_torque_nm: float
     motor_mechanical_power_w: float = Field(

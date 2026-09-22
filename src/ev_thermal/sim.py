@@ -36,8 +36,11 @@ Step order within one dt, and why:
 7. Vehicle speed advance — motor's actually-applied torque converted back to
    wheel force via the driveline (the exact inverse of how
    `vehicle.motor_torque_request_nm` derived the request), net against road
-   load at the CURRENT (pre-step) speed, integrated to a new speed. Grade is
-   assumed flat (0 rad) — no route/grade model exists yet.
+   load at the CURRENT (pre-step) speed, integrated to a new speed. `grade_rad`
+   (default 0.0, flat) is a single scalar applied for the whole run via
+   `vehicle.rolling_resistance_force_n`/`vehicle.grade_force_n` — still not a
+   route/elevation profile (no per-position grade model exists), just a
+   constant road slope for the dashboard's "road grade" control.
 8. Collect every component's `CausalEvent`s (controller's are authoritative;
    motor/inverter/battery still emit their own too, per CLAUDE.md's note on
    the intentional redundancy — all are recorded here regardless).
@@ -109,6 +112,7 @@ from ev_thermal.schema import (
 from ev_thermal.thermal import node_time_constant_s, step_thermal_network
 from ev_thermal.vehicle import (
     aerodynamic_drag_force_n,
+    grade_force_n,
     motor_angular_velocity_rad_per_s,
     rolling_resistance_force_n,
     wheel_force_from_torque_n,
@@ -125,6 +129,8 @@ PARKED_WARM_DT_S = 5.0
 MAX_DT_HALVINGS = 20
 
 DEFAULT_DRIVER_AGGRESSION = 1.0
+DEFAULT_GRADE_RAD = 0.0
+DEFAULT_PUMP_AGGRESSIVENESS = 1.0
 REGEN_TORQUE_LIMIT_FRACTION_OF_PEAK = 0.5
 """TODO(tuning): placeholder driver-behavior limits, derived from the motor's
 own peak_torque_nm rather than an unrelated arbitrary constant, so the
@@ -290,11 +296,16 @@ def advance_one_step(
     target_speed_mps: float,
     driver_aggression: float = DEFAULT_DRIVER_AGGRESSION,
     max_dt_s: float | None = None,
+    grade_rad: float = DEFAULT_GRADE_RAD,
+    pump_aggressiveness: float = DEFAULT_PUMP_AGGRESSIVENESS,
 ) -> SimStepRecord:
     """Advance `state` by one adaptively-chosen step (see module docstring for
     the 9-step sequence and why it's ordered this way). `max_dt_s`, if given,
     caps the chosen dt (used by `run_scenario` to avoid overshooting
-    `duration_s` on the last step).
+    `duration_s` on the last step). `grade_rad` is a constant road grade for
+    the whole run (default 0.0, flat); `pump_aggressiveness` scales the
+    cooling duty-ramp response (default 1.0, matching the original
+    unparameterized behavior) — see controller.step_controller's docstring.
     """
     motor_spec = profile.motors[0]
     inverter_spec = profile.inverter
@@ -359,6 +370,7 @@ def advance_one_step(
         motor_speed_rad_per_s,
         state.node_temps_k[COOLANT_NODE_NAME],
         state.sim_time_s,
+        pump_aggressiveness=pump_aggressiveness,
     )
     causal_events.extend(controller_result.causal_events)
 
@@ -437,7 +449,7 @@ def advance_one_step(
         dt_s=dt_s,
     )
 
-    # 7. vehicle speed advance (grade assumed flat: no route model yet)
+    # 7. vehicle speed advance (grade_rad: constant whole-run slope, no route/elevation model yet)
     wheel_torque_nm = wheel_torque_from_motor_torque_nm(
         motor_heat.applied_torque_nm, vehicle_dynamics.gear_ratio.value, vehicle_dynamics.driveline_efficiency.value
     )
@@ -449,9 +461,10 @@ def advance_one_step(
         vehicle_dynamics.frontal_area_m2.value,
     )
     rolling_n = rolling_resistance_force_n(
-        vehicle_dynamics.curb_mass_kg.value, vehicle_dynamics.rolling_resistance_coefficient.value, grade_rad=0.0
+        vehicle_dynamics.curb_mass_kg.value, vehicle_dynamics.rolling_resistance_coefficient.value, grade_rad=grade_rad
     )
-    acceleration_mps2 = (wheel_force_n - drag_n - rolling_n) / vehicle_dynamics.curb_mass_kg.value
+    grade_n = grade_force_n(vehicle_dynamics.curb_mass_kg.value, grade_rad)
+    acceleration_mps2 = (wheel_force_n - drag_n - rolling_n - grade_n) / vehicle_dynamics.curb_mass_kg.value
     new_speed_mps = max(0.0, state.speed_mps + acceleration_mps2 * dt_s)
 
     # 8-9. assemble new state
@@ -481,6 +494,7 @@ def advance_one_step(
     return SimStepRecord(
         new_state=new_state,
         causal_events=causal_events,
+        requested_torque_nm=driver_result.torque_request_nm,
         commanded_torque_nm=controller_result.commanded_torque_nm,
         motor_mechanical_power_w=motor_heat.mechanical_power_w,
         motor_electrical_power_w=motor_heat.electrical_power_w,
@@ -504,6 +518,8 @@ def run_scenario(
     target_speed_mps: Callable[[float], float] = lambda _t: 0.0,
     initial_state: SimState | None = None,
     driver_aggression: float = DEFAULT_DRIVER_AGGRESSION,
+    grade_rad: float = DEFAULT_GRADE_RAD,
+    pump_aggressiveness: float = DEFAULT_PUMP_AGGRESSIVENESS,
 ) -> RunResult:
     """Run `profile` under `scenario` for `duration_s` seconds.
 
@@ -514,6 +530,10 @@ def run_scenario(
     `initial_state`, if given, resumes from that state instead of building a
     fresh t=0 one (`initialize_sim_state`) — this is how fork replay works:
     call `run_scenario` again with a previous run's `final_state`.
+
+    `grade_rad` and `pump_aggressiveness` are passed straight through to
+    `advance_one_step` every step (see its docstring); both default to the
+    original unparameterized behavior (flat road, unscaled duty ramp).
     """
     if initial_state is not None:
         state = initial_state
@@ -523,6 +543,7 @@ def run_scenario(
     time_series = SimTimeSeries(
         time_s=[state.sim_time_s],
         speed_mps=[state.speed_mps],
+        requested_torque_nm=[0.0],
         commanded_torque_nm=[0.0],
         motor_electrical_power_w=[0.0],
         soc=[state.battery_soc],
@@ -545,7 +566,14 @@ def run_scenario(
     while state.sim_time_s < end_time_s:
         remaining_s = end_time_s - state.sim_time_s
         record = advance_one_step(
-            profile, scenario, state, target_speed_mps(state.sim_time_s), driver_aggression, max_dt_s=remaining_s
+            profile,
+            scenario,
+            state,
+            target_speed_mps(state.sim_time_s),
+            driver_aggression,
+            max_dt_s=remaining_s,
+            grade_rad=grade_rad,
+            pump_aggressiveness=pump_aggressiveness,
         )
         dt_s = record.new_state.sim_time_s - state.sim_time_s
         state = record.new_state
@@ -558,6 +586,7 @@ def run_scenario(
 
         time_series.time_s.append(state.sim_time_s)
         time_series.speed_mps.append(state.speed_mps)
+        time_series.requested_torque_nm.append(record.requested_torque_nm)
         time_series.commanded_torque_nm.append(record.commanded_torque_nm)
         time_series.motor_electrical_power_w.append(record.motor_electrical_power_w)
         time_series.soc.append(state.battery_soc)
