@@ -595,6 +595,25 @@ class SimState(BaseModel):
     )
     step_count: int = Field(..., description="Number of simulation steps taken to reach this state.")
     dt_current_s: float = Field(..., description="Current adaptive step size, in seconds.")
+    speed_mps: float = Field(..., description="Current vehicle speed, in m/s.")
+    battery_v_rc_v: float = Field(..., description="Battery single-RC-pair state voltage, in volts.")
+    driver_integral_error_state: float = Field(
+        ..., description="Driver PI controller's integral speed-error term, in meters."
+    )
+    battery_throughput_ah: float = Field(
+        ..., description="Cumulative |current|*dt charge throughput, in amp-hours (aging-model input, unused so far)."
+    )
+    event_ids: list[str] = Field(
+        default_factory=list, description="event_ids of every CausalEvent logged up to this state."
+    )
+    battery_voltage_v: float = Field(
+        ...,
+        description=(
+            "Battery terminal voltage as of the end of the previous step, in volts. "
+            "controller.py's step uses this (not the current step's not-yet-computed "
+            "value) for its current<->torque conversions."
+        ),
+    )
 
 
 class MistakeCase(BaseModel):
@@ -628,6 +647,38 @@ class MistakeCase(BaseModel):
     severity: str = Field(..., description="e.g. 'info', 'warning', 'critical'.")
 
 
+class MotorHeatResult(BaseModel):
+    """Output of `motor.compute_motor_heat`: everything `MotorStepResult` has except
+    `winding_temp_k`, since this doesn't advance the motor's own thermal state — see
+    that function's docstring for why (sim.py's combined multi-node thermal solve).
+    """
+
+    electrical_power_w: float = Field(
+        ...,
+        description=(
+            "Electrical power at the motor terminals, in watts. Positive draws from "
+            "the bus (motoring), negative returns power to it (regen)."
+        ),
+    )
+    mechanical_power_w: float = Field(
+        ...,
+        description=(
+            "Mechanical power at the motor shaft, in watts. Positive delivers to "
+            "the load, negative absorbs from it."
+        ),
+    )
+    current_a: float = Field(..., description="Motor phase current magnitude, in amps.")
+    copper_loss_w: float = Field(..., description="Resistive winding loss, in watts.")
+    iron_loss_w: float = Field(..., description="Core/iron loss, in watts.")
+    mechanical_loss_w: float = Field(..., description="Windage/friction loss, in watts.")
+    total_heat_w: float = Field(..., description="copper_loss_w + iron_loss_w + mechanical_loss_w, in watts.")
+    applied_torque_nm: float = Field(
+        ...,
+        description="Torque actually applied after derating, in N*m (may be less in magnitude than requested).",
+    )
+    causal_events: list[CausalEvent] = Field(default_factory=list)
+
+
 class MotorStepResult(BaseModel):
     """Output of one `motor.step_motor` call: losses, power flow, and updated winding temp."""
 
@@ -645,6 +696,7 @@ class MotorStepResult(BaseModel):
             "the load, negative absorbs from it."
         ),
     )
+    current_a: float = Field(..., description="Motor phase current magnitude, in amps.")
     copper_loss_w: float = Field(..., description="Resistive winding loss, in watts.")
     iron_loss_w: float = Field(..., description="Core/iron loss, in watts.")
     mechanical_loss_w: float = Field(..., description="Windage/friction loss, in watts.")
@@ -652,6 +704,20 @@ class MotorStepResult(BaseModel):
     applied_torque_nm: float = Field(
         ...,
         description="Torque actually applied after derating, in N*m (may be less in magnitude than requested).",
+    )
+    causal_events: list[CausalEvent] = Field(default_factory=list)
+
+
+class InverterHeatResult(BaseModel):
+    """Output of `inverter.compute_inverter_heat`: everything `InverterStepResult` has
+    except `junction_temp_k` — see that function's docstring for why.
+    """
+
+    conduction_loss_w: float = Field(..., description="I^2 * R_ds_on(T_j) conduction loss, in watts.")
+    switching_loss_w: float = Field(..., description="Switching loss, in watts.")
+    total_loss_w: float = Field(..., description="Sum of conduction and switching loss, in watts.")
+    applied_current_a: float = Field(
+        ..., description="Current actually allowed through after derating, in amps (may be less than requested)."
     )
     causal_events: list[CausalEvent] = Field(default_factory=list)
 
@@ -665,6 +731,29 @@ class InverterStepResult(BaseModel):
     junction_temp_k: float = Field(..., description="Updated junction temperature after this step, in kelvin.")
     applied_current_a: float = Field(
         ..., description="Current actually allowed through after derating, in amps (may be less than requested)."
+    )
+    causal_events: list[CausalEvent] = Field(default_factory=list)
+
+
+class BatteryElectricalResult(BaseModel):
+    """Output of `battery.compute_battery_electrical_step`: everything `BatteryStepResult`
+    has except `cell_temp_k` — see that function's docstring for why.
+    """
+
+    terminal_voltage_v: float = Field(..., description="V = OCV - I*R0 - V_RC, in volts.")
+    ocv_v: float = Field(..., description="Open-circuit voltage at this step's SOC and cell_temp_k, in volts.")
+    applied_current_a: float = Field(
+        ...,
+        description=(
+            "Current actually applied after all limits, in amps. Positive is "
+            "discharge, negative is charge; may be smaller in magnitude than requested."
+        ),
+    )
+    soc: float = Field(..., description="Updated state of charge after this step, 0-1.")
+    v_rc_v: float = Field(..., description="Updated single-RC-pair state voltage, in volts.")
+    irreversible_heat_w: float = Field(..., description="I^2*R0 + I^2*R1 resistive heat, in watts.")
+    entropic_heat_w: float = Field(
+        ..., description="I*T*dOCV/dT reversible heat, in watts. Sign flips between charge and discharge."
     )
     causal_events: list[CausalEvent] = Field(default_factory=list)
 
@@ -754,11 +843,99 @@ class ControllerStepResult(BaseModel):
     battery_current_demand_a: float = Field(
         ...,
         description=(
-            "Battery pack current implied by commanded_torque_nm, in amps (positive discharge, "
-            "negative charge), for battery.step_battery's current_request_a input."
+            "Battery pack current implied by commanded_torque_nm via mechanical power alone "
+            "(torque*speed/battery_voltage_v), in amps (positive discharge, negative charge). "
+            "A rough, energy-INCOMPLETE estimate — it ignores motor/inverter losses entirely, "
+            "same simplification as the torque<->current conversions elsewhere in this module. "
+            "Good enough for arbitration; NOT what should drive battery.step_battery's actual "
+            "current_request_a (that needs motor/inverter's real computed electrical draw, which "
+            "isn't known yet at this point in the step sequence — see sim.py's own derivation)."
         ),
     )
     causal_events: list[CausalEvent] = Field(default_factory=list)
+
+
+class EnergyTotals(BaseModel):
+    """Cumulative energy accounting over a `run_scenario` call, in joules."""
+
+    consumed_j: float = Field(..., description="Total electrical energy drawn from the battery (discharge).")
+    regen_recovered_j: float = Field(..., description="Total electrical energy returned to the battery (charge).")
+    motor_loss_j: float = Field(..., description="Sum of motor copper+iron+mechanical loss over the run.")
+    inverter_loss_j: float = Field(..., description="Sum of inverter conduction+switching loss over the run.")
+    battery_loss_j: float = Field(..., description="Sum of battery irreversible+entropic heat over the run.")
+    radiator_rejected_j: float = Field(..., description="Sum of heat rejected at the radiator over the run.")
+    aux_j: float = Field(..., description="Sum of auxiliary (HVAC/accessory) electrical draw over the run.")
+
+
+class SimTimeSeries(BaseModel):
+    """Per-step history over a `run_scenario` call. Every list is the same length (one
+    entry per step, including the initial state).
+    """
+
+    time_s: list[float] = Field(default_factory=list)
+    speed_mps: list[float] = Field(default_factory=list)
+    commanded_torque_nm: list[float] = Field(default_factory=list)
+    motor_electrical_power_w: list[float] = Field(default_factory=list)
+    soc: list[float] = Field(default_factory=list)
+    node_temps_k: dict[str, list[float]] = Field(
+        default_factory=dict, description="ThermalNode name -> temperature history, in kelvin."
+    )
+    pump_duty: list[float] = Field(default_factory=list)
+    fan_duty: list[float] = Field(default_factory=list)
+    heat_rejected_w: list[float] = Field(default_factory=list)
+    active_limit_event_types: list[list[str]] = Field(
+        default_factory=list, description="controller.py CausalEvent.event_types active at each step."
+    )
+
+
+class SimStepRecord(BaseModel):
+    """Output of `sim.advance_one_step`: the new state plus everything `run_scenario`
+    needs to extend its time series and energy totals without re-deriving them.
+    """
+
+    new_state: SimState
+    causal_events: list[CausalEvent] = Field(
+        default_factory=list, description="Every CausalEvent logged during this one step, across all components."
+    )
+    commanded_torque_nm: float
+    motor_mechanical_power_w: float = Field(
+        ..., description="Mechanical power at the motor shaft this step, in watts (see MotorHeatResult)."
+    )
+    motor_electrical_power_w: float
+    battery_electrical_power_w: float = Field(
+        ...,
+        description=(
+            "terminal_voltage_v * applied_current_a, in watts. Positive discharges "
+            "(consumed), negative charges (regen-recovered)."
+        ),
+    )
+    battery_ocv_power_w: float = Field(
+        ...,
+        description=(
+            "ocv_v * applied_current_a, in watts: the battery's gross chemical energy "
+            "conversion rate, before its own internal (R0/R1) loss. terminal_voltage_v * "
+            "applied_current_a (battery_electrical_power_w) is this minus that internal loss."
+        ),
+    )
+    pump_duty: float
+    fan_duty: float
+    heat_rejected_w: float
+    motor_loss_w: float
+    inverter_loss_w: float
+    battery_loss_w: float
+    aux_power_w: float
+    active_limit_event_types: list[str] = Field(
+        default_factory=list, description="controller.py's CausalEvent.event_types active this step."
+    )
+
+
+class RunResult(BaseModel):
+    """Output of `sim.run_scenario`: the full record of one simulation run."""
+
+    final_state: SimState
+    time_series: SimTimeSeries
+    causal_events: list[CausalEvent] = Field(default_factory=list)
+    energy_totals: EnergyTotals
 
 
 class MCConfig(BaseModel):

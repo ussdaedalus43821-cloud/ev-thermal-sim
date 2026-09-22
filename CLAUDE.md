@@ -142,13 +142,114 @@ not just *what* happened.
   Add active chiller heat removal (presumably gated by some control signal,
   once controller.py exists) as its own increment, not folded into the
   radiator's epsilon-NTU calculation.
-- **The coolant loop isn't closed yet.** `cooling.py`'s
-  `coolant_outlet_temp_k` output isn't threaded anywhere: `motor.py`,
-  `inverter.py`, and `battery.py` each still take an externally-supplied
-  `coolant_temp_k` as a fixed boundary condition for their own
-  `thermal.step_thermal_network` call, not the actual evolving temperature
-  a shared coolant loop would have after picking up their heat and passing
-  through the radiator. Closing this loop — feeding `cooling.py`'s output
-  back in as next-step's `coolant_temp_k` input to the components it
-  serves — is sim.py's job once it exists, not something to hack into the
-  component modules now.
+- **The coolant loop is now closed, by sim.py — via a real coolant node, not
+  cooling.py's own boundary-temp mechanism.** `motor.py`, `inverter.py`, and
+  `battery.py` still each independently call `thermal.step_thermal_network`
+  on an isolated single-node network with an externally-supplied
+  `coolant_temp_k` boundary — that's unchanged, and is what
+  `motor.compute_motor_heat` / `inverter.compute_inverter_heat` /
+  `battery.compute_battery_electrical_step` exist to let sim.py bypass.
+  sim.py instead builds ONE `ThermalNetwork` per step spanning motor+
+  inverter+battery+a real coolant `ThermalNode` (capacitance derived from
+  the loop's volume/density/specific-heat), connected by edges using
+  `1/resistance_to_coolant_k_per_w` as conductance, with the radiator's
+  `heat_rejected_w` applied as a sink on the coolant node — see
+  `sim._combined_thermal_network` and `sim.py`'s module docstring for the
+  full reasoning. `coolant_flow_l_per_min=0.0` is passed to that one
+  combined call specifically to disable the per-node boundary mechanism, so
+  heat only flows through the explicit edges (no double-counting between
+  the two mechanisms).
+- **Single-cooling-loop, single-motor simplification in sim.py.**
+  `ManufacturerProfile.thermal_architecture.thermal_network` and
+  `CoolingLoop.serves` are both ignored: sim.py hardcodes
+  `profile.thermal_architecture.cooling_loops[0]` as THE loop connected to
+  ALL three components, and `profile.motors[0]` as THE motor, rather than
+  reading the schema's own (more general) topology description. Multi-loop
+  (e.g. separate battery vs. powertrain loops) and dual-motor orchestration
+  are deferred; when built, they replace this hardcoding, not extend it.
+- **`available_torque_nm`/`available_current_a`/`available_discharge_current_a`
+  converted to a common "torque currency" in controller.py ignores
+  motor/inverter conversion losses — and so does the resulting
+  `battery_current_demand_a`, which is NOT what should drive the actual
+  battery step.** This was already noted for the arbitration ceilings when
+  controller.py was built; sim.py's own integration surfaced the sharper
+  version of it: using `battery_current_demand_a` (mechanical-power-only)
+  as the actual `current_request_a` for
+  `battery.compute_battery_electrical_step` would make motor/inverter
+  losses appear from nowhere in the energy balance. sim.py instead derives
+  the real battery current request from motor/inverter's actual computed
+  electrical draw once it's known (`(motor_electrical_power_w +
+  inverter_total_loss_w) / battery_voltage_v`, plus aux) — this is why
+  battery.py's step comes after motor/inverter's in the sequence, not just
+  because the spec listed it that way. Confirmed by the energy-balance test:
+  battery's gross chemical output (OCV*I) balances against motor mechanical
+  work + all three components' losses + aux draw to within ~0.5%.
+- **`_stabilize_dt_s` must check the battery's RC-pair time constant too,
+  separately from the thermal network's node time constants.** Discovered
+  via integration testing: at a coarse (parked-tier) dt, the combined
+  thermal network was stable but `battery.compute_battery_electrical_step`
+  still raised `BatteryStabilityError`, because R1*C1 is a completely
+  unrelated Euler-stability requirement enforced inside that function, not
+  part of `ThermalNetwork` at all. sim.py's dt selection halves against
+  `min(thermal node time constants, battery R1*C1)` together.
+- **The adaptive dt tier check uses `max(current_speed, target_speed)`, not
+  current speed alone.** Also discovered via integration testing: at t=0
+  (stationary, target speed above the driving threshold), current-speed-only
+  classification picked the coarse "parked" dt tier for the very first
+  step — while the driver was about to command near-maximum torque — and
+  vehicle-speed integration diverged wildly (reached 130+ m/s in one step)
+  before the loop got a chance to react. This is a vehicle-dynamics accuracy
+  problem, not a thermal-stability one, so `_stabilize_dt_s` wouldn't have
+  caught it either.
+- **sim.py passes its own PI gains to driver.py, not driver.py's defaults.**
+  `driver.DEFAULT_KP_NM_PER_MPS`/`DEFAULT_KI_NM_PER_M` (800/40) are tuned
+  against driver.py's own tests, which use dt=0.1s. At sim.py's dt=1.0s
+  driving step those gains are unstable (a linearized loop-gain check comes
+  out to roughly 5-6x the stability boundary for a typical fixture vehicle),
+  confirmed empirically: the vehicle oscillated between the torque ceiling
+  and its negative every step instead of converging. sim.py passes its own
+  `SIM_DRIVER_KP_NM_PER_MPS`/`SIM_DRIVER_KI_NM_PER_M` (60/5) explicitly
+  rather than changing driver.py's defaults, since those defaults are
+  validated against a different dt regime and driver.py's own tests
+  shouldn't be tied to sim.py's integration needs. **Driver PI gains are
+  dt-dependent, full stop** — the loop-gain scales with dt (see
+  `sim.SIM_DRIVER_KP_NM_PER_MPS`'s docstring for the formula), so any future
+  controller reacting to speed error at a different step size (a real
+  ADAS/autopilot speed-hold controller, a different adaptive-dt regime,
+  etc.) needs its own gains re-derived or re-validated for its own dt, not
+  a copy of either driver.py's or sim.py's current numbers.
+- **The dt policy's "or charging" clause isn't wired up.** The tiered
+  adaptive-dt policy given for this milestone was "driving OR charging: fine
+  dt" — sim.py only checks vehicle speed, not battery charge direction,
+  because there's no external-charger model yet to make "parked but
+  charging" a real, distinguishable state this milestone. Wire this in once
+  a charger model exists.
+- **`CausalEvent.event_id` and `SimState.state_id` are deterministic, not
+  random uuids.** Both were `uuid.uuid4()`-based before this milestone
+  (`causal.make_causal_event`, and sim.py's own state construction). That
+  broke sim.py's core determinism requirement (same seed + same inputs ->
+  byte-identical output, including these ID fields) on every single run, so
+  both were changed: `event_id` is now a sha256 hash of the event's own
+  content (sim_time_s, event_type, affected_component, description), and
+  `state_id` is `f"{scenario_id}-step-{step_count:06d}"`. Don't revert
+  either to a random scheme without re-solving determinism some other way.
+- **Motor mechanical-loss coefficient produces implausible absolute losses
+  at realistic driveline speeds; replace with a real efficiency map in the
+  spec-sourcing milestone.** motor.py's placeholder
+  `mechanical_loss_coefficient_w_per_rad3_per_s3` was tuned (in the motor.py
+  milestone) to give a plausible 85-96% efficiency at a hand-picked 200
+  rad/s test operating point — but it was never validated against the speed
+  a real driveline actually produces. sim.py's integration surfaced that
+  gap: a 20 m/s cruise puts the shared test fixture's motor at roughly 545
+  rad/s, where the same cubic-in-speed coefficient produces on the order of
+  30+ kW of mechanical loss alone — implausibly large for a modest-power
+  cruise. This is a spec-sourcing problem for motor.py, revealed by
+  integration, not a sim.py bug: it doesn't break anything (no NaN/Inf), and
+  sim.py's own tests check internal consistency, not absolute realism.
+  **This is exactly why sim.py's energy-balance test asserts a relative
+  error threshold (battery output vs. mechanical work + losses, within 2%),
+  not an absolute-magnitude one** — the balance holds regardless of whether
+  the loss coefficients are realistic, so the test stays valid before and
+  after motor.py's placeholders are replaced with a real efficiency map.
+  Don't rely on absolute loss/temperature magnitudes from a sim.py run
+  until then.

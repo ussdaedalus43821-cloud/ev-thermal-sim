@@ -401,6 +401,12 @@ def test_sim_state_round_trip_with_rng_state() -> None:
         fork_lineage=["root"],
         step_count=120,
         dt_current_s=1.0,
+        speed_mps=22.0,
+        battery_v_rc_v=0.4,
+        driver_integral_error_state=1.2,
+        battery_throughput_ah=15.0,
+        event_ids=["evt-0001"],
+        battery_voltage_v=350.0,
     )
     restored = SimState.model_validate_json(state.model_dump_json())
     assert restored == state

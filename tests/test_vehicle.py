@@ -12,6 +12,8 @@ from ev_thermal.vehicle import (
     motor_power_w,
     motor_torque_request_nm,
     road_load_force_n,
+    wheel_force_from_torque_n,
+    wheel_torque_from_motor_torque_nm,
     wheel_torque_nm,
 )
 
@@ -130,3 +132,26 @@ def test_motor_power_matches_torque_times_angular_velocity() -> None:
 
     assert motor_power_w(torque_nm, omega) == torque_nm * omega
     assert omega == (speed_mps / _WHEEL_RADIUS_M) * _GEAR_RATIO
+
+
+def test_wheel_torque_from_motor_torque_round_trips_when_motoring() -> None:
+    original_wheel_torque_nm = 400.0
+    motor_torque_nm = motor_torque_request_nm(original_wheel_torque_nm, _GEAR_RATIO, _DRIVELINE_EFFICIENCY)
+    recovered_wheel_torque_nm = wheel_torque_from_motor_torque_nm(motor_torque_nm, _GEAR_RATIO, _DRIVELINE_EFFICIENCY)
+
+    assert recovered_wheel_torque_nm == pytest.approx(original_wheel_torque_nm)
+
+
+def test_wheel_torque_from_motor_torque_round_trips_when_regen_braking() -> None:
+    original_wheel_torque_nm = -300.0
+    motor_torque_nm = motor_torque_request_nm(original_wheel_torque_nm, _GEAR_RATIO, _DRIVELINE_EFFICIENCY)
+    recovered_wheel_torque_nm = wheel_torque_from_motor_torque_nm(motor_torque_nm, _GEAR_RATIO, _DRIVELINE_EFFICIENCY)
+
+    assert recovered_wheel_torque_nm == pytest.approx(original_wheel_torque_nm)
+
+
+def test_wheel_force_from_torque_is_inverse_of_wheel_torque() -> None:
+    force_n = 500.0
+    torque_nm = wheel_torque_nm(force_n, _WHEEL_RADIUS_M)
+
+    assert wheel_force_from_torque_n(torque_nm, _WHEEL_RADIUS_M) == pytest.approx(force_n)

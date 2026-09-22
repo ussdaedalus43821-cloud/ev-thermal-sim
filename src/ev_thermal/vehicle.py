@@ -101,3 +101,23 @@ def motor_torque_request_nm(wheel_torque_nm: float, gear_ratio: float, driveline
 
 def motor_power_w(motor_torque_nm: float, motor_angular_velocity_rad_per_s: float) -> float:
     return motor_torque_nm * motor_angular_velocity_rad_per_s
+
+
+def wheel_torque_from_motor_torque_nm(motor_torque_nm: float, gear_ratio: float, driveline_efficiency: float) -> float:
+    """Wheel torque resulting from an actual motor-shaft torque — the exact inverse of
+    `motor_torque_request_nm`. Used to find out what a motor *actually* delivered
+    (e.g. after thermal derating reduced it below what was requested), as opposed to
+    `motor_torque_request_nm`'s use of finding out what a *desired* wheel torque requires.
+
+    `motor_torque_nm` and the resulting wheel torque always share the same sign
+    (motoring: both >=0; regen: both <0), so branching on `motor_torque_nm`'s
+    sign here is equivalent to branching on the wheel torque's sign there.
+    """
+    if motor_torque_nm >= 0.0:
+        return motor_torque_nm * gear_ratio * driveline_efficiency
+    return motor_torque_nm * gear_ratio / driveline_efficiency
+
+
+def wheel_force_from_torque_n(wheel_torque_nm: float, wheel_radius_m: float) -> float:
+    """Inverse of `wheel_torque_nm`: force at the wheel implied by a wheel torque."""
+    return wheel_torque_nm / wheel_radius_m

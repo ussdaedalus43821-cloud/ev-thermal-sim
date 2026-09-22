@@ -28,9 +28,10 @@ applied to both directions:
 Entropic heat (`I*T*dOCV/dT`) is real and included, but is fully inert
 whenever `docv_dt_v_per_k` is 0.0 (the placeholder default in every test
 fixture so far). A run using a zero-dOCV/dT spec will under-predict thermal
-load during fast charging, where entropic heat is largest. `step_battery`
-emits a one-time (per Python warning-filter default) `InertEntropicHeatWarning`
-in that case so this isn't silently wrong.
+load during fast charging, where entropic heat is largest.
+`compute_battery_electrical_step` emits a one-time (per Python
+warning-filter default) `InertEntropicHeatWarning` in that case so this
+isn't silently wrong.
 
 `available_discharge_current_a`/`available_charge_current_a` are the single
 source of truth for the battery's current ceiling — combining C-rate,
@@ -52,7 +53,14 @@ import math
 import warnings
 
 from ev_thermal.causal import make_causal_event
-from ev_thermal.schema import BatterySpec, BatteryStepResult, CausalEvent, Sourced, ThermalNetwork
+from ev_thermal.schema import (
+    BatteryElectricalResult,
+    BatterySpec,
+    BatteryStepResult,
+    CausalEvent,
+    Sourced,
+    ThermalNetwork,
+)
 from ev_thermal.thermal import step_thermal_network
 
 
@@ -165,24 +173,22 @@ def available_charge_current_a(spec: BatterySpec, soc: float, cell_temp_k: float
     return min(c_rate_limit_a, voltage_limit_a) * thermal_scale
 
 
-def step_battery(
+def compute_battery_electrical_step(
     spec: BatterySpec,
     current_request_a: float,
     soc: float,
     cell_temp_k: float,
     v_rc_v: float,
-    coolant_temp_k: float,
-    coolant_flow_l_per_min: float,
-    ambient_temp_k: float,
     dt_s: float,
     sim_time_s: float,
-) -> BatteryStepResult:
-    """Advance the battery by one step of size `dt_s`.
-
-    `ambient_temp_k` is accepted for interface consistency with
-    `thermal.step_thermal_network` but currently has no effect, since
-    `BatterySpec` doesn't yet carry an ambient conductance for its node
-    (coolant is the only modeled sink).
+) -> BatteryElectricalResult:
+    """Everything about one battery step except advancing the pack's own
+    temperature. Split out from `step_battery` for the same reason as
+    `motor.compute_motor_heat` — see that function's docstring. Unlike
+    motor/inverter, most of a battery step (voltage, SOC, V_RC) doesn't touch
+    `thermal.step_thermal_network` at all even in `step_battery` — only
+    `cell_temp_k`'s own advancement does, so this function is nearly all of
+    `step_battery`'s logic; only the final thermal call is pulled out.
     """
     causal_events: list[CausalEvent] = []
 
@@ -315,7 +321,6 @@ def step_battery(
             stacklevel=2,
         )
     entropic_heat_w = applied_current_a * cell_temp_k * spec.docv_dt_v_per_k.value
-    total_heat_w = irreversible_heat_w + entropic_heat_w
 
     tau_rc_s = r1_ohm * c1_farad
     if dt_s >= tau_rc_s:
@@ -338,7 +343,45 @@ def step_battery(
             )
         )
 
+    return BatteryElectricalResult(
+        terminal_voltage_v=terminal_voltage_v,
+        ocv_v=ocv_v,
+        applied_current_a=applied_current_a,
+        soc=new_soc,
+        v_rc_v=new_v_rc_v,
+        irreversible_heat_w=irreversible_heat_w,
+        entropic_heat_w=entropic_heat_w,
+        causal_events=causal_events,
+    )
+
+
+def step_battery(
+    spec: BatterySpec,
+    current_request_a: float,
+    soc: float,
+    cell_temp_k: float,
+    v_rc_v: float,
+    coolant_temp_k: float,
+    coolant_flow_l_per_min: float,
+    ambient_temp_k: float,
+    dt_s: float,
+    sim_time_s: float,
+) -> BatteryStepResult:
+    """Advance the battery by one step of size `dt_s`, standalone (isolated-node
+    thermal step — see `compute_battery_electrical_step`'s docstring for why
+    `sim.py` doesn't use this).
+
+    `ambient_temp_k` is accepted for interface consistency with
+    `thermal.step_thermal_network` but currently has no effect, since
+    `BatterySpec` doesn't yet carry an ambient conductance for its node
+    (coolant is the only modeled sink).
+    """
+    electrical_result = compute_battery_electrical_step(
+        spec, current_request_a, soc, cell_temp_k, v_rc_v, dt_s, sim_time_s
+    )
+
     node_name = spec.thermal_node.name
+    total_heat_w = electrical_result.irreversible_heat_w + electrical_result.entropic_heat_w
     network = ThermalNetwork(nodes={node_name: spec.thermal_node}, edges=[], ambient_coupling={})
     new_temps_k = step_thermal_network(
         network,
@@ -351,13 +394,13 @@ def step_battery(
     )
 
     return BatteryStepResult(
-        terminal_voltage_v=terminal_voltage_v,
-        ocv_v=ocv_v,
-        applied_current_a=applied_current_a,
-        soc=new_soc,
-        v_rc_v=new_v_rc_v,
+        terminal_voltage_v=electrical_result.terminal_voltage_v,
+        ocv_v=electrical_result.ocv_v,
+        applied_current_a=electrical_result.applied_current_a,
+        soc=electrical_result.soc,
+        v_rc_v=electrical_result.v_rc_v,
         cell_temp_k=new_temps_k[node_name],
-        irreversible_heat_w=irreversible_heat_w,
-        entropic_heat_w=entropic_heat_w,
-        causal_events=causal_events,
+        irreversible_heat_w=electrical_result.irreversible_heat_w,
+        entropic_heat_w=electrical_result.entropic_heat_w,
+        causal_events=electrical_result.causal_events,
     )
