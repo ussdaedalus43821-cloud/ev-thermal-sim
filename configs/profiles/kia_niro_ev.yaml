@@ -381,7 +381,7 @@ thermal_architecture:
         source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
       chiller_present: true  # research: "liquid-cooled, integrated with A/C via chiller"
       chiller_capacity_w: null  # capacity not stated
-      serves: ["battery", "motor", "inverter"]  # research: "Coolant loop runs through battery, motor, inverter, heat pump" — one shared loop
+      serves: ["battery_pack", "motor", "inverter"]  # research: "Coolant loop runs through battery, motor, inverter, heat pump" — one shared loop
       coolant_specific_heat_j_per_kg_k:
         value: 3600.0
         confidence: low

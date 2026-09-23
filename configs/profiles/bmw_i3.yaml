@@ -13,6 +13,14 @@
 # (charge 0-60C, discharge -25-60C) that a single min_operating_temp_k
 # field can't represent.
 #
+# CAUTION -- battery.thermal_node.resistance_to_ambient_k_per_w below is an
+# APPROXIMATION, not physically the ambient resistance: the i3's real DX
+# (direct expansion) refrigerant cooling is an active loop to a colder-than-
+# air sink, and this schema doesn't yet support a refrigerant-loop
+# abstraction (see CLAUDE.md's Milestone D). See that field's own note for
+# the full caveat and docs/model_reference.md's BMW i3 section. Do not use
+# i3-vs-Leaf battery comparisons for publication until Milestone D lands.
+#
 # model_year_range: research states an open-ended "2013+"; no end year is
 # given, so this uses [2013, 2013] rather than inventing one.
 #
@@ -119,10 +127,10 @@ battery:
       source: "default, not manufacturer-specific (docs/research/profiles_v1.md's derating-curve caveat)"
       note: "45C default — research gives the hard operating-range ceiling (60C) but no separate derate-onset threshold below it"
     resistance_to_ambient_k_per_w:
-      value: 0.33
+      value: 0.02
       confidence: low
-      source: "placeholder — estimated from physical plausibility, not sourced"
-      note: "targets a soak time constant tau=R*C on the order of 'a few hours to a day' (0.33 K/W * 207000 J/K = 68310s ~= 19h), reproducing 'pack soaks toward ambient over a day' for a battery with no glycol coolant loop (see cooling_mechanism: direct expansion refrigerant, not connected to any CoolingLoop below). The shape (hours, not seconds) is what matters here, not the absolute R value — see CLAUDE.md's ambient-coupling milestone note."
+      source: "approximation — DX refrigerant cooling to colder-than-air sink, not modeled as a proper loop"
+      note: "This value stands in for a refrigerant cooling loop that the schema does not yet support. It is NOT physically the ambient resistance. Real i3 battery thermal behavior requires Milestone D (refrigerant loop abstraction). Do not use i3-vs-Leaf battery comparisons for publication until Milestone D lands."
   capacity_nominal_ah:
     value: 61.8
     confidence: high

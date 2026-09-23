@@ -22,8 +22,11 @@ def _sourced(value: float) -> Sourced[float]:
 
 
 def _make_cooling_loop() -> CoolingLoop:
+    """A single shared loop serving all three components — matches the topology
+    tests/test_sim.py's _make_profile() (which reuses this fixture) assumes.
+    """
     return CoolingLoop(
-        name="battery_loop",
+        name="shared_loop",
         coolant_type="50/50 water-glycol",
         loop_volume_l=_sourced(6.0),
         pump_max_flow_l_per_min=_sourced(20.0),
@@ -31,7 +34,7 @@ def _make_cooling_loop() -> CoolingLoop:
         radiator_ua_w_per_k=_sourced(400.0),
         fan_power_w=_sourced(150.0),
         chiller_present=False,
-        serves=["battery"],
+        serves=["battery_pack", "motor", "inverter"],
         coolant_specific_heat_j_per_kg_k=_sourced(3600.0),
         coolant_density_kg_per_m3=_sourced(1050.0),
         thermostat_temp_k=_sourced(308.15),

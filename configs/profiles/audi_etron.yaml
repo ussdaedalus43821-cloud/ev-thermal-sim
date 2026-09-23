@@ -381,7 +381,7 @@ thermal_architecture:
         source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
       chiller_present: false  # research does not describe a discrete chiller unit for the e-tron
       chiller_capacity_w: null
-      serves: ["battery"]
+      serves: ["battery_pack"]
       coolant_specific_heat_j_per_kg_k:
         value: 3600.0
         confidence: low

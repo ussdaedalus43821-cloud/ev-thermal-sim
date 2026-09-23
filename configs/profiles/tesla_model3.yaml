@@ -373,7 +373,7 @@ thermal_architecture:
         source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
       chiller_present: false  # research does not use the word "chiller" for Model 3; the octovalve's refrigerant paths aren't described as a discrete chiller unit
       chiller_capacity_w: null
-      serves: ["battery"]
+      serves: ["battery_pack"]
       coolant_specific_heat_j_per_kg_k:
         value: 3600.0
         confidence: low

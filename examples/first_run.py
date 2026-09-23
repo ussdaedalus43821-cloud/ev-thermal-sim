@@ -30,7 +30,7 @@ from ev_thermal.schema import (
     Sourced,
     UsageProfile,
 )
-from ev_thermal.sim import COOLANT_NODE_NAME, run_scenario
+from ev_thermal.sim import coolant_node_names, run_scenario
 
 RUN_DURATION_S = 600.0
 CRUISE_SPEED_MPS = 13.4  # ~30 mph
@@ -110,6 +110,8 @@ def main() -> None:
     motor_name = profile.motors[0].thermal_node.name
     inverter_name = profile.inverter.thermal_node.name
     battery_name = profile.battery.thermal_node.name
+    coolant_names = coolant_node_names(profile)
+    primary_coolant_name = coolant_names[0]  # table below shows one loop; the Leaf has exactly one
 
     result = run_scenario(
         profile,
@@ -132,7 +134,7 @@ def main() -> None:
             f"{ts.time_s[i]:6.0f} {ts.speed_mps[i]:7.2f} {ts.soc[i] * 100:7.2f} "
             f"{k_to_c(ts.node_temps_k[motor_name][i]):9.1f} "
             f"{k_to_c(ts.node_temps_k[battery_name][i]):8.1f} "
-            f"{k_to_c(ts.node_temps_k[COOLANT_NODE_NAME][i]):10.1f} "
+            f"{k_to_c(ts.node_temps_k[primary_coolant_name][i]):10.1f} "
             f"{ts.pump_duty[i]:5.2f} {ts.commanded_torque_nm[i]:11.1f}  {limits}"
         )
 
@@ -151,14 +153,17 @@ def main() -> None:
     print(f"Peak motor temp:        {k_to_c(max(ts.node_temps_k[motor_name])):.1f} C")
     print(f"Peak inverter temp:     {k_to_c(max(ts.node_temps_k[inverter_name])):.1f} C")
     print(f"Peak battery temp:      {k_to_c(max(ts.node_temps_k[battery_name])):.1f} C")
-    print(f"Peak coolant temp:      {k_to_c(max(ts.node_temps_k[COOLANT_NODE_NAME])):.1f} C")
+    for coolant_name in coolant_names:
+        print(f"Peak coolant temp ({coolant_name}): {k_to_c(max(ts.node_temps_k[coolant_name])):.1f} C")
     print(f"Total time derated:     {derated_s:.0f}s of {ts.time_s[-1]:.0f}s")
 
     if args.plot:
-        save_plot(result, motor_name, inverter_name, battery_name)
+        save_plot(result, motor_name, inverter_name, battery_name, coolant_names)
 
 
-def save_plot(result: RunResult, motor_name: str, inverter_name: str, battery_name: str) -> None:
+def save_plot(
+    result: RunResult, motor_name: str, inverter_name: str, battery_name: str, coolant_names: list[str]
+) -> None:
     import matplotlib
 
     matplotlib.use("Agg")
@@ -179,7 +184,7 @@ def save_plot(result: RunResult, motor_name: str, inverter_name: str, battery_na
         (motor_name, "motor"),
         (inverter_name, "inverter"),
         (battery_name, "battery"),
-        (COOLANT_NODE_NAME, "coolant"),
+        *((name, name) for name in coolant_names),
     ]
     for name, label in temp_series:
         axes[2].plot(ts.time_s, [k_to_c(t) for t in ts.node_temps_k[name]], label=label)

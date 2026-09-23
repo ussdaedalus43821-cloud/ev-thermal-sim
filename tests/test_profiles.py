@@ -157,6 +157,33 @@ def test_derate_temp_below_max_temp_for_every_thermal_node(stem: str, profiles: 
 
 
 @pytest.mark.parametrize("stem", PROFILE_STEMS)
+def test_every_cooling_loop_serves_entry_matches_a_real_thermal_node_name(
+    stem: str, profiles: dict[str, ManufacturerProfile]
+) -> None:
+    """Regression guard for the battery/battery_pack naming mismatch found
+    during the topology-wiring milestone's planning: every profile's
+    CoolingLoop.serves listed "battery" while the actual battery
+    ThermalNode.name is "battery_pack", which would have silently made
+    every profile's battery thermally isolated once CoolingLoop.serves
+    became authoritative -- including the four profiles whose batteries
+    are genuinely actively liquid-cooled. This asserts the two vocabularies
+    can never drift apart again undetected.
+    """
+    profile = profiles[stem]
+    valid_names = {
+        profile.battery.thermal_node.name,
+        profile.inverter.thermal_node.name,
+        *(motor.thermal_node.name for motor in profile.motors),
+    }
+    for loop in profile.thermal_architecture.cooling_loops:
+        for served_name in loop.serves:
+            assert served_name in valid_names, (
+                f"{stem}: {loop.name}.serves references {served_name!r}, "
+                f"which doesn't match any ThermalNode.name ({sorted(valid_names)})"
+            )
+
+
+@pytest.mark.parametrize("stem", PROFILE_STEMS)
 def test_profile_runs_60s_default_scenario_without_raising(stem: str, profiles: dict[str, ManufacturerProfile]) -> None:
     profile = profiles[stem]
     scenario = _make_scenario(profile)
@@ -209,10 +236,14 @@ def test_leaf_battery_soaks_toward_ambient_over_hours_not_seconds(
     soaks over a day in the sun,' not a temperature swing per simulation step.
     This exercises the full run_scenario stack, not thermal.py's isolated-node
     unit tests (see test_node_level_ambient_resistance_cools_with_time_
-    constant_tau_equals_rc in test_thermal.py for the analytical version) --
-    the battery here is still also weakly coupled to the shared coolant node
-    (serves-authoritative topology is Milestone B, not this one), so this is
-    a qualitative order-of-magnitude check, not an exact RC-decay match.
+    constant_tau_equals_rc in test_thermal.py for the analytical version).
+    Since the topology-wiring milestone (CoolingLoop.serves is now
+    authoritative — the Leaf's powertrain_loop correctly excludes the
+    battery), the battery's only path here really is the ambient one, so
+    this is now close to a pure RC decay, not just order-of-magnitude —
+    though still not asserted to the same 5% tolerance as the isolated-node
+    unit test, since aux-load battery current draw is a small but real
+    second heat source this integration-level test doesn't null out.
     """
     profile = profiles["nissan_leaf"]
     battery_name = profile.battery.thermal_node.name

@@ -42,7 +42,7 @@ from ev_thermal.schema import (
     Sourced,
     UsageProfile,
 )
-from ev_thermal.sim import COOLANT_NODE_NAME, run_scenario
+from ev_thermal.sim import coolant_node_name, run_scenario
 
 CRUISE_SPEED_MPS = 13.4  # ~30 mph — UI demo drive-cycle default
 
@@ -279,7 +279,6 @@ with center_col:
             (motor_name, "motor"),
             (inverter_name, "inverter"),
             (battery_name, "battery"),
-            (COOLANT_NODE_NAME, "coolant"),
         ]:
             temp_fig.add_trace(
                 go.Scatter(
@@ -287,6 +286,18 @@ with center_col:
                     y=[k_to_c(t) for t in ts.node_temps_k[node_name]],
                     name=label,
                     line=dict(color=COMPONENT_COLOR[label]),
+                )
+            )
+        cooling_loops = profile.thermal_architecture.cooling_loops
+        for loop_index, loop in enumerate(cooling_loops):
+            coolant_name = coolant_node_name(loop.name)
+            trace_label = "coolant" if len(cooling_loops) == 1 else f"coolant ({loop.name})"
+            temp_fig.add_trace(
+                go.Scatter(
+                    x=ts.time_s,
+                    y=[k_to_c(t) for t in ts.node_temps_k[coolant_name]],
+                    name=trace_label,
+                    line=dict(color=COMPONENT_COLOR["coolant"], dash="solid" if loop_index == 0 else "dot"),
                 )
             )
         derate_temps_k = {

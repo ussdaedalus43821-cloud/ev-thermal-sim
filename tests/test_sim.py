@@ -28,10 +28,11 @@ from ev_thermal.schema import (
     UsageProfile,
 )
 from ev_thermal.sim import (
-    COOLANT_NODE_NAME,
     _combined_thermal_network,
-    _coolant_thermal_node,
+    _coolant_thermal_nodes,
     advance_one_step,
+    coolant_node_name,
+    coolant_node_names,
     initialize_sim_state,
     run_scenario,
 )
@@ -220,9 +221,11 @@ def test_coolant_above_ambient_below_component_temps_after_5_minutes() -> None:
     result = run_scenario(profile, scenario, duration_s=300.0, target_speed_mps=lambda _t: 20.0)
 
     ambient_temp_k = scenario.climate.mean_annual_temp_k.value
-    coolant_temp_k = result.final_state.node_temps_k[COOLANT_NODE_NAME]
+    coolant_names = set(coolant_node_names(profile))
+    assert len(coolant_names) == 1, "this fixture's single shared loop should produce exactly one coolant node"
+    coolant_temp_k = result.final_state.node_temps_k[next(iter(coolant_names))]
     component_temps_k = [
-        temp for name, temp in result.final_state.node_temps_k.items() if name != COOLANT_NODE_NAME
+        temp for name, temp in result.final_state.node_temps_k.items() if name not in coolant_names
     ]
 
     assert coolant_temp_k > ambient_temp_k
@@ -327,16 +330,17 @@ def test_zero_pump_duty_leaves_combined_network_with_no_escape_path() -> None:
     profile = _make_profile()
     scenario = _make_scenario(profile)
     cooling_spec = profile.thermal_architecture.cooling_loops[0]
+    coolant_name = coolant_node_name(cooling_spec.name)
     ambient_temp_k = scenario.climate.mean_annual_temp_k.value
 
     temps_k = {
         profile.motors[0].thermal_node.name: profile.motors[0].thermal_node.initial_temp_k,
         profile.inverter.thermal_node.name: profile.inverter.thermal_node.initial_temp_k,
         profile.battery.thermal_node.name: profile.battery.thermal_node.initial_temp_k,
-        COOLANT_NODE_NAME: ambient_temp_k,
+        coolant_name: ambient_temp_k,
     }
-    coolant_node = _coolant_thermal_node(cooling_spec, temps_k[COOLANT_NODE_NAME])
-    network = _combined_thermal_network(profile, coolant_node)
+    coolant_nodes = _coolant_thermal_nodes([cooling_spec], temps_k)
+    network = _combined_thermal_network(profile, coolant_nodes)
 
     heat_inputs_w = {
         profile.motors[0].thermal_node.name: 500.0,
@@ -346,10 +350,10 @@ def test_zero_pump_duty_leaves_combined_network_with_no_escape_path() -> None:
 
     previous_temps_k = dict(temps_k)
     for _ in range(10):
-        cooling_result = step_cooling(cooling_spec, previous_temps_k[COOLANT_NODE_NAME], ambient_temp_k, 20.0, 0.0, 0.0)
+        cooling_result = step_cooling(cooling_spec, previous_temps_k[coolant_name], ambient_temp_k, 20.0, 0.0, 0.0)
         assert cooling_result.heat_rejected_w == 0.0
 
-        step_heat_inputs_w = {**heat_inputs_w, COOLANT_NODE_NAME: -cooling_result.heat_rejected_w}
+        step_heat_inputs_w = {**heat_inputs_w, coolant_name: -cooling_result.heat_rejected_w}
         new_temps_k = step_thermal_network(
             network,
             previous_temps_k,

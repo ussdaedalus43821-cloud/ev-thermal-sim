@@ -193,27 +193,68 @@ not just *what* happened.
     connected to the shared `cooling_loops[0]` coolant node exactly as
     before. It exists so Milestone B doesn't have to invent an ambient-loss
     number under time pressure once a component actually becomes isolated.
-  - **Milestone B (next):** make `CoolingLoop.serves` authoritative —
-    `sim._combined_thermal_network` builds one coolant node per loop (not
-    one global `COOLANT_NODE_NAME`), edges only components a loop actually
-    serves, and `step_cooling` is called once per loop. This is where the
-    Leaf's battery actually stops being wired to a loop it isn't served
-    by, and where `COOLANT_NODE_NAME`'s single-name assumption in
-    `dashboard/app.py`, `examples/first_run.py`, and several `test_sim.py`
-    tests needs to generalize to "however many coolant nodes exist."
-  - **Milestone C (after B):** `controller.py`'s pump/fan duty computation
-    is currently single-loop-scoped (`ControllerStepResult.commanded_
-    pump_duty`/`commanded_fan_duty` are single floats, one duty pair
-    computed from the max temp across *all three* components against *one*
-    thermostat). Multi-loop needs per-loop duty, which is a schema change
-    to `ControllerStepResult`/`SimStepRecord`/`SimTimeSeries` (scalar ->
-    per-loop dict), plus a dashboard duty-panel change to match.
-  `thermal.py` itself needs no changes for B or C — confirmed during
-  Milestone A's planning that `step_thermal_network`/`node_time_constant_s`
-  already operate generically over an arbitrary `ThermalNetwork` graph
-  (no hardcoded node count or single-coolant-node assumption anywhere in
-  that module); only `sim.py`'s network-building and `controller.py`'s
-  duty logic are hardcoded to a single loop.
+  - **Milestone B (done):** `CoolingLoop.serves` is now authoritative.
+    `sim._combined_thermal_network` builds one coolant `ThermalNode` per
+    entry in `cooling_loops` (named via the new public `coolant_node_name`/
+    `coolant_node_names` helpers, not one global `COOLANT_NODE_NAME`
+    constant, which is removed), and edges each component only to the
+    loop(s) whose `serves` actually names it. A component no loop serves
+    gets no coolant edge at all — falls back to Milestone A's ambient path,
+    or is adiabatic if that's also unset. `step_cooling` is called once per
+    loop. `dashboard/app.py`, `examples/first_run.py`, and `test_sim.py`
+    were all updated off the single-coolant-node assumption. **Planning
+    this milestone surfaced a real, pre-existing bug**, not just a design
+    decision: every profile's `CoolingLoop.serves` (and
+    `tests/test_cooling.py`'s shared fixture) wrote `"battery"`, but
+    `BatterySpec.thermal_node.name` is `"battery_pack"` — a silent string
+    mismatch that would have made *every* profile's battery thermally
+    isolated once `serves` became authoritative, including the four
+    profiles whose batteries are genuinely actively liquid-cooled (Model 3,
+    Bolt, e-tron, Niro). Fixed in all six YAMLs and the test fixture before
+    landing the code change; `tests/test_profiles.py`'s
+    `test_every_cooling_loop_serves_entry_matches_a_real_thermal_node_name`
+    guards against this class of bug recurring silently.
+    **Known compromise, accepted for this milestone:** `controller.py` is
+    still single-loop-scoped — it only ever sees `cooling_loops[0]` and
+    produces one `commanded_pump_duty`/`commanded_fan_duty` pair (see
+    Milestone C below). `sim.advance_one_step` broadcasts that one pair to
+    *every* loop's `step_cooling` call. For multi-loop profiles (Model 3,
+    Bolt, e-tron), this means the motor/inverter loop is commanded off the
+    same signal as the battery loop, even though a real vehicle controls
+    them independently — the motor loop's pump can ramp up because the
+    *battery* got hot, or vice versa. Physically wrong in detail, but
+    strictly better than the alternative considered (only `cooling_loops[0]`
+    gets commanded duty, every other loop sits at duty=0 forever) — that
+    would mean e.g. Model 3's motor/inverter loop never pumps at all.
+    Acceptable until Milestone C.
+  - **Milestone C (next):** `controller.py`'s pump/fan duty computation
+    becomes genuinely per-loop — `max_component_temp_k` computed only from
+    the components a given loop serves, compared against that loop's own
+    `thermostat_temp_k`, one `(pump_duty, fan_duty)` pair per loop. This
+    needs a schema change: `ControllerStepResult.commanded_pump_duty`/
+    `commanded_fan_duty` (and `SimStepRecord`/`SimTimeSeries`'s matching
+    fields) go from scalar to per-loop `dict[str, float]`, plus a dashboard
+    duty-panel change to show one trace per loop instead of one. Note:
+    `SimStepRecord.heat_rejected_w` does NOT need this treatment — it's
+    already a legitimate sum across loops (real total energy rejected),
+    not a scalar standing in for per-loop values, so Milestone B left it
+    as a single float on purpose.
+  - **Milestone D (after C):** refrigerant-loop abstraction. The schema
+    has no way to represent an active refrigerant loop (the BMW i3's DX
+    system, or a battery chiller circuit) as anything other than a
+    `CoolingLoop` (glycol-shaped) or the node-level ambient path. The i3's
+    profile currently approximates DX cooling by giving its battery an
+    unrealistically low `resistance_to_ambient_k_per_w` (see that field's
+    own note in `bmw_i3.yaml` and `docs/model_reference.md`) — a stand-in,
+    not a real model of refrigerant thermodynamics. Do not use i3-vs-Leaf
+    battery comparisons for publication until this lands.
+  `thermal.py` itself needed no changes for Milestone B and needs none for
+  C either — confirmed during Milestone A's planning, and again true after
+  B actually landed, that `step_thermal_network`/`node_time_constant_s`
+  already operate generically over an arbitrary `ThermalNetwork` graph (no
+  hardcoded node count or single-coolant-node assumption anywhere in that
+  module); only `sim.py`'s network-building and `controller.py`'s duty
+  logic were ever hardcoded to a single loop.
 - **Ambient coupling is a node-level property
   (`ThermalNode.resistance_to_ambient_k_per_w`), not a network-level one
   (`ThermalNetwork.ambient_coupling`, now deprecated).** Added in the
@@ -239,13 +280,24 @@ not just *what* happened.
   estimated from physical plausibility, not sourced"` — actively-cooled
   nodes (motor/inverter always, and battery for Model 3/Bolt/e-tron/Niro)
   use a shared weak-secondary-path placeholder (2.0 K/W) that's negligible
-  next to their dominant coolant path; the Leaf's and i3's batteries
-  (no coolant loop at all) instead target a soak time constant tau=R*C on
-  the order of "a few hours to a day" (Leaf: 0.25 K/W against its 270,000
-  J/K placeholder capacitance = 67,500s ~= 18.75h; i3: 0.33 K/W against its
-  207,000 J/K capacitance = 68,310s ~= 19h) — the shape (hours, not
-  seconds) is what matters until real convective coefficients are sourced,
-  not the absolute R value.
+  next to their dominant coolant path; the Leaf's battery (genuinely no
+  active cooling at all) targets a soak time constant tau=R*C on the order
+  of "a few hours to a day" (0.25 K/W against its 270,000 J/K placeholder
+  capacitance = 67,500s ~= 18.75h) — the shape (hours, not seconds) is what
+  matters until real convective coefficients are sourced, not the absolute
+  R value. **The BMW i3's battery is the one exception, and its value means
+  something different: it's an explicit DX-refrigerant-cooling
+  approximation (0.02 K/W, ~69min), not a passive-soak number** — added
+  during Milestone B's planning when treating the i3 like the Leaf (fully
+  ambient-only) was caught as physically wrong: the i3 has real active
+  refrigerant cooling (research: "Target ~20C," and 93.77% SoH at 100k km
+  proves it works), and modeling it as ambient-only would make it behave
+  like an air-cooled Leaf, silently breaking the comparison project's core
+  claim for that vehicle. See that field's own `note` in `bmw_i3.yaml` and
+  the Milestone D entry above — this is a temporary stand-in the schema
+  doesn't yet have a better way to express, not a real refrigerant-loop
+  model. Do not use i3-vs-Leaf battery comparisons for publication until
+  Milestone D lands.
 - **`available_torque_nm`/`available_current_a`/`available_discharge_current_a`
   converted to a common "torque currency" in controller.py ignores
   motor/inverter conversion losses — and so does the resulting

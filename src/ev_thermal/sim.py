@@ -21,18 +21,25 @@ Step order within one dt, and why:
    winding/junction temperature.
 4. `battery.compute_battery_electrical_step` — current, terminal voltage, SOC/
    V_RC update, and heat, WITHOUT advancing the pack's own temperature.
-5. `cooling.step_cooling` — heat rejected by the radiator, using the coolant
-   node's current (start-of-step) temperature as its `coolant_inlet_temp_k`.
+5. `cooling.step_cooling` — heat rejected by the radiator, called ONCE PER
+   `CoolingLoop` (see the topology note below), each using that loop's own
+   coolant node's current (start-of-step) temperature as its
+   `coolant_inlet_temp_k`.
 6. `thermal.step_thermal_network` — ONE combined solve across motor+inverter+
-   battery+coolant nodes together, with each component's heat as a source,
-   radiator rejection as a sink on the coolant node, and edges (not the
-   ad-hoc per-node "coolant boundary" mechanism) connecting each component to
-   the coolant node, using `1/resistance_to_coolant_k_per_w` as edge
-   conductance. This is why steps 3-4 don't advance temperature themselves:
-   a real coolant node needs all four nodes integrated together, not four
-   separate isolated-node solves. `coolant_flow_l_per_min=0.0` is passed to
-   disable the legacy per-node boundary mechanism for this call, so heat only
-   flows through the explicit edges (no double-counting).
+   battery+ALL coolant nodes together (one per loop), with each component's
+   heat as a source, each loop's radiator rejection as a sink on ITS OWN
+   coolant node, and edges (not the ad-hoc per-node "coolant boundary"
+   mechanism) connecting each component to the coolant node(s) of whichever
+   loop(s) actually serve it, per `CoolingLoop.serves`, using
+   `1/resistance_to_coolant_k_per_w` as edge conductance. A component no
+   loop serves gets no coolant edge at all — it falls back to whatever
+   `ThermalNode.resistance_to_ambient_k_per_w` path it has (see the
+   ambient-coupling milestone note in CLAUDE.md), or is fully adiabatic if
+   that's also unset. This is why steps 3-4 don't advance temperature
+   themselves: a real coolant node needs all nodes integrated together, not
+   isolated per-node solves. `coolant_flow_l_per_min=0.0` is passed to
+   disable the legacy per-node boundary mechanism for this call, so heat
+   only flows through the explicit edges (no double-counting).
 7. Vehicle speed advance — motor's actually-applied torque converted back to
    wheel force via the driveline (the exact inverse of how
    `vehicle.motor_torque_request_nm` derived the request), net against road
@@ -74,11 +81,24 @@ including this field) requires it. `causal.make_causal_event`'s `event_id`
 is similarly a deterministic hash of the event's own content, not a uuid4 —
 see that function's docstring.
 
-Single-cooling-loop, single-motor simplification: `profile.thermal_architecture
-.cooling_loops[0]` is treated as THE loop serving all three components, and
-`profile.motors[0]` as THE motor, regardless of `CoolingLoop.serves` or
-dual-motor support in the schema. Multi-loop/dual-motor orchestration is
+Single-motor simplification: `profile.motors[0]` is treated as THE motor,
+regardless of dual-motor support in the schema. Dual-motor orchestration is
 deferred.
+
+Multi-loop topology (this is Milestone B of the three-milestone split
+documented in CLAUDE.md — Milestone A added `resistance_to_ambient_k_per_w`,
+this one makes `CoolingLoop.serves` authoritative, Milestone C will make
+`controller.py`'s pump/fan duty genuinely per-loop): `_combined_thermal_network`
+builds one coolant `ThermalNode` per entry in `cooling_loops` (named via
+`coolant_node_name(loop.name)`, not one global name), and edges each
+component to only the loop(s) whose `serves` list names it. `controller.py`
+is still single-loop-scoped as of this milestone — it only ever sees
+`cooling_loops[0]` and produces one `commanded_pump_duty`/`commanded_fan_duty`
+pair. That one pair is broadcast to every loop's `step_cooling` call this
+milestone (see CLAUDE.md's note on this compromise): for multi-loop profiles
+(Model 3, Bolt, e-tron), the motor/inverter loop is commanded off the same
+signal as the battery loop, even though a real vehicle would control them
+independently. Acceptable for this milestone; Milestone C fixes it.
 """
 
 from __future__ import annotations
@@ -118,8 +138,6 @@ from ev_thermal.vehicle import (
     wheel_force_from_torque_n,
     wheel_torque_from_motor_torque_nm,
 )
-
-COOLANT_NODE_NAME = "coolant"
 
 DRIVING_SPEED_THRESHOLD_MPS = 0.1
 COOLANT_NEAR_AMBIENT_THRESHOLD_K = 2.0
@@ -164,54 +182,89 @@ def _conductance_from_resistance(resistance: Sourced[float]) -> Sourced[float]:
     )
 
 
-def _coolant_thermal_node(cooling_spec: CoolingLoop, temp_k: float) -> ThermalNode:
-    """Builds the coolant's own lumped `ThermalNode` for the combined network.
+def coolant_node_name(loop_name: str) -> str:
+    """Public: the coolant ThermalNode name for a given CoolingLoop's own
+    `.name` — one per loop, not one shared global name. Used by callers
+    (dashboard, examples/first_run.py, tests) that need to enumerate a
+    profile's coolant nodes without reaching into sim.py's private helpers.
+    """
+    return f"coolant_{loop_name}"
 
-    Capacitance is derived from the loop's own volume/density/specific heat.
+
+def coolant_node_names(profile: ManufacturerProfile) -> list[str]:
+    """Public: every coolant node name this profile's loops produce, in
+    `cooling_loops` order.
+    """
+    return [coolant_node_name(loop.name) for loop in profile.thermal_architecture.cooling_loops]
+
+
+def _coolant_thermal_nodes(cooling_loops: list[CoolingLoop], temps_k: dict[str, float]) -> dict[str, ThermalNode]:
+    """Builds one lumped coolant `ThermalNode` per `CoolingLoop`, keyed by
+    `coolant_node_name`.
+
+    Capacitance is derived from each loop's own volume/density/specific heat.
     `max_temp_k`/`derate_temp_k`/`resistance_to_coolant_k_per_w` are required
-    by `ThermalNode` but genuinely unused here: nothing reads the coolant
+    by `ThermalNode` but genuinely unused here: nothing reads a coolant
     node's own derate/max-temp limits or its own coolant-boundary resistance
     (only the explicit edges to it matter in the combined network), so
     they're set to obviously-non-binding placeholders, not spec values.
+    `temps_k` supplies each node's current (not "initial" in the run-lifetime
+    sense) temp, falling back to ambient if a name isn't present yet.
     """
-    capacitance_j_per_k = (
-        cooling_spec.loop_volume_l.value
-        / 1000.0
-        * cooling_spec.coolant_density_kg_per_m3.value
-        * cooling_spec.coolant_specific_heat_j_per_kg_k.value
-    )
-    return ThermalNode(
-        name=COOLANT_NODE_NAME,
-        capacitance_j_per_k=_sourced(capacitance_j_per_k, "derived from loop_volume_l/density/specific_heat"),
-        resistance_to_coolant_k_per_w=_sourced(1.0, "unused for the coolant node itself"),
-        initial_temp_k=temp_k,
-        max_temp_k=_sourced(1000.0, "unused: no derate curve applies to the coolant node itself"),
-        derate_temp_k=_sourced(1000.0, "unused: no derate curve applies to the coolant node itself"),
-    )
+    nodes: dict[str, ThermalNode] = {}
+    for loop in cooling_loops:
+        name = coolant_node_name(loop.name)
+        capacitance_j_per_k = (
+            loop.loop_volume_l.value / 1000.0 * loop.coolant_density_kg_per_m3.value
+            * loop.coolant_specific_heat_j_per_kg_k.value
+        )
+        nodes[name] = ThermalNode(
+            name=name,
+            capacitance_j_per_k=_sourced(capacitance_j_per_k, "derived from loop_volume_l/density/specific_heat"),
+            resistance_to_coolant_k_per_w=_sourced(1.0, "unused for the coolant node itself"),
+            initial_temp_k=temps_k[name],
+            max_temp_k=_sourced(1000.0, "unused: no derate curve applies to the coolant node itself"),
+            derate_temp_k=_sourced(1000.0, "unused: no derate curve applies to the coolant node itself"),
+        )
+    return nodes
 
 
-def _combined_thermal_network(profile: ManufacturerProfile, coolant_node: ThermalNode) -> ThermalNetwork:
-    motor_node = profile.motors[0].thermal_node
-    inverter_node = profile.inverter.thermal_node
-    battery_node = profile.battery.thermal_node
-    coolant_name = coolant_node.name
-
-    edges = [
-        (motor_node.name, coolant_name, _conductance_from_resistance(motor_node.resistance_to_coolant_k_per_w)),
-        (inverter_node.name, coolant_name, _conductance_from_resistance(inverter_node.resistance_to_coolant_k_per_w)),
-        (battery_node.name, coolant_name, _conductance_from_resistance(battery_node.resistance_to_coolant_k_per_w)),
-    ]
-    nodes = {
-        motor_node.name: motor_node,
-        inverter_node.name: inverter_node,
-        battery_node.name: battery_node,
-        coolant_name: coolant_node,
+def _combined_thermal_network(profile: ManufacturerProfile, coolant_nodes: dict[str, ThermalNode]) -> ThermalNetwork:
+    """`CoolingLoop.serves` is authoritative here: a component gets a coolant
+    edge only for the loop(s) whose `serves` names it. A component no loop
+    serves gets no coolant edge at all — its only remaining path is whatever
+    `resistance_to_ambient_k_per_w` it has (Milestone A), or none.
+    """
+    component_nodes = {
+        profile.motors[0].thermal_node.name: profile.motors[0].thermal_node,
+        profile.inverter.thermal_node.name: profile.inverter.thermal_node,
+        profile.battery.thermal_node.name: profile.battery.thermal_node,
     }
+
+    edges = []
+    for loop in profile.thermal_architecture.cooling_loops:
+        coolant_name = coolant_node_name(loop.name)
+        for served_name in loop.serves:
+            component_node = component_nodes.get(served_name)
+            if component_node is not None:
+                edges.append(
+                    (
+                        component_node.name,
+                        coolant_name,
+                        _conductance_from_resistance(component_node.resistance_to_coolant_k_per_w),
+                    )
+                )
+
+    nodes = {**component_nodes, **coolant_nodes}
     return ThermalNetwork(nodes=nodes, edges=edges, ambient_coupling={})
 
 
 def _choose_target_dt_s(
-    speed_mps: float, target_speed_mps: float, coolant_temp_k: float, ambient_temp_k: float, dt_policy: DTPolicy
+    speed_mps: float,
+    target_speed_mps: float,
+    coolant_temps_k: list[float],
+    ambient_temp_k: float,
+    dt_policy: DTPolicy,
 ) -> float:
     """`target_speed_mps` is considered alongside `speed_mps` (not just current
     speed) so that pulling away from a stop — current speed 0, target speed
@@ -221,10 +274,15 @@ def _choose_target_dt_s(
     speed integration diverged wildly before the loop ever got a chance to
     react (a vehicle-dynamics accuracy problem, not a thermal-stability one —
     `_stabilize_dt_s` wouldn't have caught it either).
+
+    `coolant_temps_k` is one temperature per loop (multi-loop profiles have
+    more than one) — "coolant near ambient" means ALL of them are, the
+    conservative direction: staying in the fine-dt tier until every loop has
+    settled, not just the first one.
     """
     if max(abs(speed_mps), abs(target_speed_mps)) > DRIVING_SPEED_THRESHOLD_MPS:
         return dt_policy.min_dt_s
-    if abs(coolant_temp_k - ambient_temp_k) <= COOLANT_NEAR_AMBIENT_THRESHOLD_K:
+    if max(abs(temp - ambient_temp_k) for temp in coolant_temps_k) <= COOLANT_NEAR_AMBIENT_THRESHOLD_K:
         return dt_policy.max_dt_s
     return PARKED_WARM_DT_S
 
@@ -253,7 +311,7 @@ def initialize_sim_state(profile: ManufacturerProfile, scenario: Scenario, seed:
     """Builds a fresh t=0 `SimState` for `profile` under `scenario`'s climate.
 
     Initial temps come from each component's own `ThermalNode.initial_temp_k`;
-    the coolant starts at ambient. Initial SOC comes from
+    every loop's coolant node starts at ambient. Initial SOC comes from
     `scenario.charging_profile.typical_start_soc` as a reasonable default,
     not a scenario-specified "starting SOC" concept (none exists in the schema).
     """
@@ -274,7 +332,7 @@ def initialize_sim_state(profile: ManufacturerProfile, scenario: Scenario, seed:
             motor_node.name: motor_node.initial_temp_k,
             inverter_node.name: inverter_node.initial_temp_k,
             battery_node.name: battery_node.initial_temp_k,
-            COOLANT_NODE_NAME: ambient_temp_k,
+            **{name: ambient_temp_k for name in coolant_node_names(profile)},
         },
         rng_state=rng.bit_generator.state,
         fork_lineage=[],
@@ -311,7 +369,8 @@ def advance_one_step(
     inverter_spec = profile.inverter
     battery_spec = profile.battery
     vehicle_dynamics = profile.vehicle_dynamics
-    cooling_spec = profile.thermal_architecture.cooling_loops[0]
+    cooling_loops = profile.thermal_architecture.cooling_loops
+    primary_cooling_spec = cooling_loops[0]  # still single-loop-scoped for controller.py this milestone
 
     motor_name = motor_spec.thermal_node.name
     inverter_name = inverter_spec.thermal_node.name
@@ -323,11 +382,16 @@ def advance_one_step(
     brake_limit_nm = motor_spec.peak_torque_nm.value
     regen_limit_nm = REGEN_TORQUE_LIMIT_FRACTION_OF_PEAK * motor_spec.peak_torque_nm.value
 
-    coolant_node = _coolant_thermal_node(cooling_spec, state.node_temps_k[COOLANT_NODE_NAME])
-    network = _combined_thermal_network(profile, coolant_node)
+    coolant_nodes = _coolant_thermal_nodes(cooling_loops, state.node_temps_k)
+    network = _combined_thermal_network(profile, coolant_nodes)
+    primary_coolant_temp_k = state.node_temps_k[coolant_node_name(primary_cooling_spec.name)]
 
     target_dt_s = _choose_target_dt_s(
-        state.speed_mps, target_speed_mps, state.node_temps_k[COOLANT_NODE_NAME], ambient_temp_k, scenario.dt_policy
+        state.speed_mps,
+        target_speed_mps,
+        [state.node_temps_k[name] for name in coolant_nodes],
+        ambient_temp_k,
+        scenario.dt_policy,
     )
     battery_rc_tau_s = battery_spec.r1_ohm.value * battery_spec.c1_farad.value
     dt_s = _stabilize_dt_s(network, battery_rc_tau_s, target_dt_s)
@@ -360,7 +424,7 @@ def advance_one_step(
         inverter_spec,
         battery_spec,
         vehicle_dynamics,
-        cooling_spec,
+        primary_cooling_spec,
         state.node_temps_k[motor_name],
         state.node_temps_k[inverter_name],
         state.battery_soc,
@@ -368,7 +432,7 @@ def advance_one_step(
         state.battery_v_rc_v,
         state.battery_voltage_v,
         motor_speed_rad_per_s,
-        state.node_temps_k[COOLANT_NODE_NAME],
+        primary_coolant_temp_k,
         state.sim_time_s,
         pump_aggressiveness=pump_aggressiveness,
     )
@@ -422,22 +486,30 @@ def advance_one_step(
     )
     causal_events.extend(battery_electrical.causal_events)
 
-    # 5. cooling
-    cooling_result = step_cooling(
-        cooling_spec,
-        state.node_temps_k[COOLANT_NODE_NAME],
-        ambient_temp_k,
-        state.speed_mps,
-        controller_result.commanded_pump_duty,
-        controller_result.commanded_fan_duty,
-    )
+    # 5. cooling — once per loop, all loops driven by the one controller-commanded
+    # duty pair (still single-loop-scoped this milestone; see module docstring)
+    cooling_results = {
+        loop.name: step_cooling(
+            loop,
+            state.node_temps_k[coolant_node_name(loop.name)],
+            ambient_temp_k,
+            state.speed_mps,
+            controller_result.commanded_pump_duty,
+            controller_result.commanded_fan_duty,
+        )
+        for loop in cooling_loops
+    }
+    total_heat_rejected_w = sum(result.heat_rejected_w for result in cooling_results.values())
 
     # 6. one combined thermal solve
     heat_inputs_w = {
         motor_name: motor_heat.total_heat_w,
         inverter_name: inverter_heat.total_loss_w,
         battery_name: battery_electrical.irreversible_heat_w + battery_electrical.entropic_heat_w,
-        COOLANT_NODE_NAME: -cooling_result.heat_rejected_w,
+        **{
+            coolant_node_name(loop.name): -cooling_results[loop.name].heat_rejected_w
+            for loop in cooling_loops
+        },
     }
     new_temps_k = step_thermal_network(
         network,
@@ -502,7 +574,7 @@ def advance_one_step(
         battery_ocv_power_w=battery_electrical.ocv_v * battery_electrical.applied_current_a,
         pump_duty=controller_result.commanded_pump_duty,
         fan_duty=controller_result.commanded_fan_duty,
-        heat_rejected_w=cooling_result.heat_rejected_w,
+        heat_rejected_w=total_heat_rejected_w,
         motor_loss_w=motor_heat.total_heat_w,
         inverter_loss_w=inverter_heat.total_loss_w,
         battery_loss_w=battery_electrical.irreversible_heat_w + battery_electrical.entropic_heat_w,

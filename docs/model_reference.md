@@ -106,6 +106,14 @@ research only confirms a heat pump exists as an optional upgrade, not what
 the base trim uses instead), and the usual placeholder equivalent-circuit/
 inverter/hydraulics fields.
 
+**Caution — battery ambient-resistance value is an approximation, not a
+measurement:** `resistance_to_ambient_k_per_w` on the i3's battery
+(`configs/profiles/bmw_i3.yaml`) stands in for a refrigerant cooling loop
+that the schema does not yet support. It is NOT physically the ambient
+resistance. Real i3 battery thermal behavior requires Milestone D
+(refrigerant loop abstraction — see CLAUDE.md). Do not use i3-vs-Leaf
+battery comparisons for publication until Milestone D lands.
+
 ### Kia Niro EV (64 kWh, heat-pump trim, 2018+)
 
 **Reliable:** battery capacity, voltage, and amp-hour rating (180Ah is
