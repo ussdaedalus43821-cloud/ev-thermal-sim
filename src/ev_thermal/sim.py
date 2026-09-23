@@ -85,20 +85,19 @@ Single-motor simplification: `profile.motors[0]` is treated as THE motor,
 regardless of dual-motor support in the schema. Dual-motor orchestration is
 deferred.
 
-Multi-loop topology (this is Milestone B of the three-milestone split
-documented in CLAUDE.md — Milestone A added `resistance_to_ambient_k_per_w`,
-this one makes `CoolingLoop.serves` authoritative, Milestone C will make
-`controller.py`'s pump/fan duty genuinely per-loop): `_combined_thermal_network`
-builds one coolant `ThermalNode` per entry in `cooling_loops` (named via
-`coolant_node_name(loop.name)`, not one global name), and edges each
-component to only the loop(s) whose `serves` list names it. `controller.py`
-is still single-loop-scoped as of this milestone — it only ever sees
-`cooling_loops[0]` and produces one `commanded_pump_duty`/`commanded_fan_duty`
-pair. That one pair is broadcast to every loop's `step_cooling` call this
-milestone (see CLAUDE.md's note on this compromise): for multi-loop profiles
-(Model 3, Bolt, e-tron), the motor/inverter loop is commanded off the same
-signal as the battery loop, even though a real vehicle would control them
-independently. Acceptable for this milestone; Milestone C fixes it.
+Multi-loop topology (Milestones A-D documented in CLAUDE.md — A added
+`resistance_to_ambient_k_per_w`, B made `CoolingLoop.serves` authoritative,
+this is C, D is the still-deferred refrigerant-loop abstraction):
+`_combined_thermal_network` builds one coolant `ThermalNode` per entry in
+`cooling_loops` (named via `coolant_node_name(loop.name)`, not one global
+name), and edges each component to only the loop(s) whose `serves` list
+names it. `controller.py`'s pump/fan duty is now genuinely per-loop —
+`ControllerStepResult.commanded_pump_duty`/`commanded_fan_duty` are
+`dict[str, float]` keyed by `CoolingLoop.name`, one entry per loop, each
+computed from only the components *that* loop serves against *that* loop's
+own thermostat. `step_cooling` is called once per loop with that loop's own
+commanded duty (no more broadcasting one shared value, which was Milestone
+B's explicit, temporary compromise).
 """
 
 from __future__ import annotations
@@ -370,7 +369,6 @@ def advance_one_step(
     battery_spec = profile.battery
     vehicle_dynamics = profile.vehicle_dynamics
     cooling_loops = profile.thermal_architecture.cooling_loops
-    primary_cooling_spec = cooling_loops[0]  # still single-loop-scoped for controller.py this milestone
 
     motor_name = motor_spec.thermal_node.name
     inverter_name = inverter_spec.thermal_node.name
@@ -384,7 +382,9 @@ def advance_one_step(
 
     coolant_nodes = _coolant_thermal_nodes(cooling_loops, state.node_temps_k)
     network = _combined_thermal_network(profile, coolant_nodes)
-    primary_coolant_temp_k = state.node_temps_k[coolant_node_name(primary_cooling_spec.name)]
+    # keyed by CoolingLoop.name (controller.py's own vocabulary), not by sim.py's
+    # internal coolant_node_name() -- see controller.py's module docstring
+    coolant_temps_k = {loop.name: state.node_temps_k[coolant_node_name(loop.name)] for loop in cooling_loops}
 
     target_dt_s = _choose_target_dt_s(
         state.speed_mps,
@@ -424,7 +424,7 @@ def advance_one_step(
         inverter_spec,
         battery_spec,
         vehicle_dynamics,
-        primary_cooling_spec,
+        cooling_loops,
         state.node_temps_k[motor_name],
         state.node_temps_k[inverter_name],
         state.battery_soc,
@@ -432,7 +432,7 @@ def advance_one_step(
         state.battery_v_rc_v,
         state.battery_voltage_v,
         motor_speed_rad_per_s,
-        primary_coolant_temp_k,
+        coolant_temps_k,
         state.sim_time_s,
         pump_aggressiveness=pump_aggressiveness,
     )
@@ -486,16 +486,15 @@ def advance_one_step(
     )
     causal_events.extend(battery_electrical.causal_events)
 
-    # 5. cooling — once per loop, all loops driven by the one controller-commanded
-    # duty pair (still single-loop-scoped this milestone; see module docstring)
+    # 5. cooling — once per loop, each driven by that loop's own commanded duty
     cooling_results = {
         loop.name: step_cooling(
             loop,
             state.node_temps_k[coolant_node_name(loop.name)],
             ambient_temp_k,
             state.speed_mps,
-            controller_result.commanded_pump_duty,
-            controller_result.commanded_fan_duty,
+            controller_result.commanded_pump_duty[loop.name],
+            controller_result.commanded_fan_duty[loop.name],
         )
         for loop in cooling_loops
     }
@@ -612,6 +611,7 @@ def run_scenario(
     else:
         state = initialize_sim_state(profile, scenario, scenario.random_seed)
 
+    zero_duty_by_loop = {loop.name: 0.0 for loop in profile.thermal_architecture.cooling_loops}
     time_series = SimTimeSeries(
         time_s=[state.sim_time_s],
         speed_mps=[state.speed_mps],
@@ -620,8 +620,8 @@ def run_scenario(
         motor_electrical_power_w=[0.0],
         soc=[state.battery_soc],
         node_temps_k={name: [temp] for name, temp in state.node_temps_k.items()},
-        pump_duty=[0.0],
-        fan_duty=[0.0],
+        pump_duty=[dict(zero_duty_by_loop)],
+        fan_duty=[dict(zero_duty_by_loop)],
         heat_rejected_w=[0.0],
         active_limit_event_types=[[]],
     )

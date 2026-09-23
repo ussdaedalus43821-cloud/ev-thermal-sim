@@ -27,7 +27,7 @@ from ev_thermal.schema import (
     ThermalNode,
     UsageProfile,
 )
-from ev_thermal.sim import run_scenario
+from ev_thermal.sim import advance_one_step, coolant_node_name, initialize_sim_state, run_scenario
 
 PROFILE_STEMS = ["nissan_leaf", "tesla_model3", "chevrolet_bolt", "audi_etron", "bmw_i3", "kia_niro_ev"]
 
@@ -224,6 +224,42 @@ def test_all_six_profiles_produce_different_peak_temps_under_identical_scenario(
     assert len(set(peak_battery_temps_k.values())) > 1, (
         f"all six profiles produced identical peak battery temps: {peak_battery_temps_k}"
     )
+
+
+def test_two_loop_profile_commands_genuinely_different_duty_per_loop(
+    profiles: dict[str, ManufacturerProfile],
+) -> None:
+    """The actual point of the per-loop-duty milestone: on a real two-loop
+    profile (Model 3 -- battery_loop serves only the battery, motor_oil_loop
+    serves only motor+inverter), a hot battery with a cool motor/inverter
+    must command a high duty on the battery loop while the motor loop stays
+    at its idle minimum -- something the prior milestone's single-broadcast-
+    duty compromise could not produce (it would have raised both loops'
+    duty together, since only the max across ALL components mattered then).
+    """
+    profile = profiles["tesla_model3"]
+    scenario = _make_scenario(profile)
+    battery_name = profile.battery.thermal_node.name
+    battery_loop, motor_loop = profile.thermal_architecture.cooling_loops
+    assert battery_loop.serves == [battery_name]  # sanity: this test's premise depends on the real topology
+
+    state = initialize_sim_state(profile, scenario, scenario.random_seed)
+    hot_battery_temps_k = {
+        **state.node_temps_k,
+        battery_name: battery_loop.thermostat_temp_k.value + 10.0,
+        # the battery loop's own coolant is hot too (a hot pack would heat its
+        # own loop's coolant in reality) -- the motor loop's coolant stays at
+        # ambient, isolating this to a per-loop effect, not a global one
+        coolant_node_name(battery_loop.name): battery_loop.thermostat_temp_k.value + 10.0,
+    }
+    state = state.model_copy(update={"node_temps_k": hot_battery_temps_k})
+
+    record = advance_one_step(profile, scenario, state, target_speed_mps=20.0)
+
+    assert record.pump_duty[battery_loop.name] > record.pump_duty[motor_loop.name]
+    assert record.fan_duty[battery_loop.name] > record.fan_duty[motor_loop.name]
+    # the motor loop should be at (or near) its idle floor, not dragged up by the hot battery
+    assert record.pump_duty[motor_loop.name] < 0.3
 
 
 def test_leaf_battery_soaks_toward_ambient_over_hours_not_seconds(

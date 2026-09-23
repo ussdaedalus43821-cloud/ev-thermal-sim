@@ -303,6 +303,7 @@ def test_higher_pump_aggressiveness_commands_higher_duty_above_thermostat() -> N
     profile = _make_profile()
     scenario = _make_scenario(profile)
     battery_name = profile.battery.thermal_node.name
+    loop_name = profile.thermal_architecture.cooling_loops[0].name
     thermostat_temp_k = profile.thermal_architecture.cooling_loops[0].thermostat_temp_k.value
 
     state = initialize_sim_state(profile, scenario, scenario.random_seed)
@@ -312,7 +313,7 @@ def test_higher_pump_aggressiveness_commands_higher_duty_above_thermostat() -> N
     mild = advance_one_step(profile, scenario, state, target_speed_mps=20.0, pump_aggressiveness=0.5)
     aggressive = advance_one_step(profile, scenario, state, target_speed_mps=20.0, pump_aggressiveness=2.0)
 
-    assert aggressive.pump_duty > mild.pump_duty
+    assert aggressive.pump_duty[loop_name] > mild.pump_duty[loop_name]
 
 
 def test_zero_pump_duty_leaves_combined_network_with_no_escape_path() -> None:

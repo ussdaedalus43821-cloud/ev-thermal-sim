@@ -227,19 +227,39 @@ not just *what* happened.
     gets commanded duty, every other loop sits at duty=0 forever) — that
     would mean e.g. Model 3's motor/inverter loop never pumps at all.
     Acceptable until Milestone C.
-  - **Milestone C (next):** `controller.py`'s pump/fan duty computation
-    becomes genuinely per-loop — `max_component_temp_k` computed only from
-    the components a given loop serves, compared against that loop's own
-    `thermostat_temp_k`, one `(pump_duty, fan_duty)` pair per loop. This
-    needs a schema change: `ControllerStepResult.commanded_pump_duty`/
+  - **Milestone C (done):** `controller.py`'s pump/fan duty computation is
+    now genuinely per-loop. `ControllerStepResult.commanded_pump_duty`/
     `commanded_fan_duty` (and `SimStepRecord`/`SimTimeSeries`'s matching
-    fields) go from scalar to per-loop `dict[str, float]`, plus a dashboard
-    duty-panel change to show one trace per loop instead of one. Note:
-    `SimStepRecord.heat_rejected_w` does NOT need this treatment — it's
-    already a legitimate sum across loops (real total energy rejected),
-    not a scalar standing in for per-loop values, so Milestone B left it
-    as a single float on purpose.
-  - **Milestone D (after C):** refrigerant-loop abstraction. The schema
+    fields) are `dict[str, float]` keyed by `CoolingLoop.name`, one entry
+    per loop, computed from only the components *that* loop's `serves`
+    names, against *that* loop's own `thermostat_temp_k` — replacing
+    Milestone B's single-broadcast compromise. `step_controller`'s
+    `component_temps_k` mapping is built from data it already receives
+    (each spec's own `thermal_node.name` paired with its already-passed
+    temp float), so no new redundant parameter was needed for that half;
+    `coolant_temps_k: dict[str, float]` (new) is keyed by `CoolingLoop.
+    name`, not sim.py's internal `coolant_node_name()` convention — the
+    controller's interface is loop-level and stays decoupled from how
+    sim.py happens to name its coolant nodes internally.
+    **A `CoolingLoop` with an empty `serves` is now a fifth `profile_loader.
+    load_profile` failure mode (`ValueError`, alongside the four from the
+    spec-integration milestone), not a runtime fallback**: an empty-serves
+    loop would otherwise silently contribute a coolant node to the network
+    with nothing connected to it, or force `step_controller` to guess a
+    default duty for a loop that has no real thermal signal. Caught at the
+    load boundary instead, so `controller.py`'s per-loop loop trusts
+    `loop.serves` is never empty rather than defending against it. New
+    behavioral test (`test_two_loop_profile_commands_genuinely_different_
+    duty_per_loop` in `tests/test_profiles.py`) proves the actual point on
+    a real profile: on the Model 3, a hot battery with a cool motor/
+    inverter now commands a high duty on `battery_loop` while
+    `motor_oil_loop` stays near its idle floor — something the prior
+    broadcast compromise could not produce.
+    `SimStepRecord.heat_rejected_w` did NOT need this treatment — it's a
+    legitimate sum across loops (real total energy rejected), not a scalar
+    standing in for per-loop values, so it stayed a single float, per
+    Milestone B's original note.
+  - **Milestone D (next):** refrigerant-loop abstraction. The schema
     has no way to represent an active refrigerant loop (the BMW i3's DX
     system, or a battery chiller circuit) as anything other than a
     `CoolingLoop` (glycol-shaped) or the node-level ambient path. The i3's
@@ -248,10 +268,10 @@ not just *what* happened.
     own note in `bmw_i3.yaml` and `docs/model_reference.md`) — a stand-in,
     not a real model of refrigerant thermodynamics. Do not use i3-vs-Leaf
     battery comparisons for publication until this lands.
-  `thermal.py` itself needed no changes for Milestone B and needs none for
-  C either — confirmed during Milestone A's planning, and again true after
-  B actually landed, that `step_thermal_network`/`node_time_constant_s`
-  already operate generically over an arbitrary `ThermalNetwork` graph (no
+  `thermal.py` itself needed no changes for Milestones B or C — confirmed
+  during Milestone A's planning, and again true after both B and C actually
+  landed, that `step_thermal_network`/`node_time_constant_s` already
+  operate generically over an arbitrary `ThermalNetwork` graph (no
   hardcoded node count or single-coolant-node assumption anywhere in that
   module); only `sim.py`'s network-building and `controller.py`'s duty
   logic were ever hardcoded to a single loop.

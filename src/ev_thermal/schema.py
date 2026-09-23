@@ -925,8 +925,12 @@ class ControllerStepResult(BaseModel):
             "battery/SOC/traction limits, in N*m."
         ),
     )
-    commanded_pump_duty: float = Field(..., description="Commanded coolant pump duty, 0-1.")
-    commanded_fan_duty: float = Field(..., description="Commanded radiator fan duty, 0-1.")
+    commanded_pump_duty: dict[str, float] = Field(
+        ..., description="CoolingLoop.name -> commanded coolant pump duty, 0-1, for that loop."
+    )
+    commanded_fan_duty: dict[str, float] = Field(
+        ..., description="CoolingLoop.name -> commanded radiator fan duty, 0-1, for that loop."
+    )
     battery_current_demand_a: float = Field(
         ...,
         description=(
@@ -970,8 +974,12 @@ class SimTimeSeries(BaseModel):
     node_temps_k: dict[str, list[float]] = Field(
         default_factory=dict, description="ThermalNode name -> temperature history, in kelvin."
     )
-    pump_duty: list[float] = Field(default_factory=list)
-    fan_duty: list[float] = Field(default_factory=list)
+    pump_duty: list[dict[str, float]] = Field(
+        default_factory=list, description="Per-step CoolingLoop.name -> commanded pump duty, 0-1."
+    )
+    fan_duty: list[dict[str, float]] = Field(
+        default_factory=list, description="Per-step CoolingLoop.name -> commanded fan duty, 0-1."
+    )
     heat_rejected_w: list[float] = Field(default_factory=list)
     active_limit_event_types: list[list[str]] = Field(
         default_factory=list, description="controller.py CausalEvent.event_types active at each step."
@@ -1014,8 +1022,8 @@ class SimStepRecord(BaseModel):
             "applied_current_a (battery_electrical_power_w) is this minus that internal loss."
         ),
     )
-    pump_duty: float
-    fan_duty: float
+    pump_duty: dict[str, float]
+    fan_duty: dict[str, float]
     heat_rejected_w: float
     motor_loss_w: float
     inverter_loss_w: float

@@ -317,8 +317,13 @@ with center_col:
         st.plotly_chart(temp_fig, use_container_width=True)
 
         duty_fig = go.Figure()
-        duty_fig.add_trace(go.Scatter(x=ts.time_s, y=ts.pump_duty, name="pump duty"))
-        duty_fig.add_trace(go.Scatter(x=ts.time_s, y=ts.fan_duty, name="fan duty"))
+        for loop in cooling_loops:
+            pump_label = "pump duty" if len(cooling_loops) == 1 else f"pump duty ({loop.name})"
+            fan_label = "fan duty" if len(cooling_loops) == 1 else f"fan duty ({loop.name})"
+            duty_fig.add_trace(
+                go.Scatter(x=ts.time_s, y=[step[loop.name] for step in ts.pump_duty], name=pump_label)
+            )
+            duty_fig.add_trace(go.Scatter(x=ts.time_s, y=[step[loop.name] for step in ts.fan_duty], name=fan_label))
         duty_fig.update_layout(title="Pump / Fan Duty", height=220, margin=dict(t=40), yaxis_title="duty (0-1)")
         st.plotly_chart(duty_fig, use_container_width=True)
 

@@ -23,15 +23,31 @@ non-binding; real stall-torque limiting needs a separate current-limit table,
 not modeled here yet.
 
 Cooling policy (`_duty_ramp`) is an explicit placeholder, TODO(tuning): pump
-duty scales with the hottest component's temperature above the loop's
-thermostat threshold; fan duty scales with coolant temperature above the same
-threshold. Neither goes below its own minimum duty — real pumps/fans idle
-rather than fully stopping. `pump_aggressiveness` (default 1.0, matching the
-original unparameterized behavior) scales `DUTY_RAMP_SPAN_K` down for both
-ramps: a higher value reaches full duty over a narrower temperature window
-above thermostat (a more eager response), a lower value spreads the same
-ramp over a wider window. It's a multiplier on an already-placeholder shape,
-not a real calibrated control law.
+duty scales with the hottest component *that loop actually serves*
+(`CoolingLoop.serves`) above that loop's own thermostat threshold; fan duty
+scales with that same loop's own coolant temperature above the same
+threshold. Genuinely per-loop as of the per-loop-duty milestone: `commanded_
+pump_duty`/`commanded_fan_duty` are `dict[str, float]` keyed by `CoolingLoop.
+name`, one entry per loop in `cooling_loops`, not one shared value broadcast
+to every loop (that was the prior milestone's deliberate, documented
+compromise — see CLAUDE.md). Neither goes below its own minimum duty — real
+pumps/fans idle rather than fully stopping. `pump_aggressiveness` (default
+1.0, matching the original unparameterized behavior) scales `DUTY_RAMP_SPAN_K`
+down for every loop's ramp uniformly (no per-loop aggressiveness knob):
+a higher value reaches full duty over a narrower temperature window above
+thermostat (a more eager response), a lower value spreads the same ramp
+over a wider window. It's a multiplier on an already-placeholder shape, not
+a real calibrated control law.
+
+`coolant_temps_k` and the `serves`-matching below are keyed by `CoolingLoop.
+name`/`ThermalNode.name`, never by sim.py's internal `coolant_{loop_name}`
+node-naming convention — this module's interface is loop-level, staying
+decoupled from how sim.py happens to name coolant nodes in its combined
+network. A `CoolingLoop` with an empty `serves` list is a data error, not
+a valid configuration reaching this function: `profile_loader.load_profile`
+rejects it at load time, so `max(served_temps_k)` below is trusted to
+never receive an empty sequence rather than silently falling back to a
+plausible-looking default.
 
 SOC-floor limiting is NOT a separate term in the min() below: it's already
 folded into `battery.available_discharge_current_a`'s own ceiling (see that
@@ -90,7 +106,7 @@ def step_controller(
     inverter_spec: InverterSpec,
     battery_spec: BatterySpec,
     vehicle_dynamics: VehicleDynamics,
-    cooling_loop_spec: CoolingLoop,
+    cooling_loops: list[CoolingLoop],
     motor_winding_temp_k: float,
     inverter_junction_temp_k: float,
     battery_soc: float,
@@ -98,7 +114,7 @@ def step_controller(
     battery_v_rc_v: float,
     battery_voltage_v: float,
     speed_rad_per_s: float,
-    coolant_temp_k: float,
+    coolant_temps_k: dict[str, float],
     sim_time_s: float,
     pump_aggressiveness: float = 1.0,
 ) -> ControllerStepResult:
@@ -202,11 +218,25 @@ def step_controller(
 
     battery_current_demand_a = (commanded_torque_nm * speed_rad_per_s) / battery_voltage_v
 
-    max_component_temp_k = max(motor_winding_temp_k, inverter_junction_temp_k, battery_cell_temp_k)
-    thermostat_temp_k = cooling_loop_spec.thermostat_temp_k.value
+    component_temps_k = {
+        motor_spec.thermal_node.name: motor_winding_temp_k,
+        inverter_spec.thermal_node.name: inverter_junction_temp_k,
+        battery_spec.thermal_node.name: battery_cell_temp_k,
+    }
     effective_span_k = DUTY_RAMP_SPAN_K / pump_aggressiveness
-    commanded_pump_duty = _duty_ramp(max_component_temp_k, thermostat_temp_k, effective_span_k, MIN_PUMP_DUTY)
-    commanded_fan_duty = _duty_ramp(coolant_temp_k, thermostat_temp_k, effective_span_k, MIN_FAN_DUTY)
+
+    commanded_pump_duty: dict[str, float] = {}
+    commanded_fan_duty: dict[str, float] = {}
+    for loop in cooling_loops:
+        thermostat_temp_k = loop.thermostat_temp_k.value
+        served_temps_k = [component_temps_k[name] for name in loop.serves if name in component_temps_k]
+        max_served_temp_k = max(served_temps_k)  # loop.serves is guaranteed non-empty (load-time check)
+        commanded_pump_duty[loop.name] = _duty_ramp(
+            max_served_temp_k, thermostat_temp_k, effective_span_k, MIN_PUMP_DUTY
+        )
+        commanded_fan_duty[loop.name] = _duty_ramp(
+            coolant_temps_k[loop.name], thermostat_temp_k, effective_span_k, MIN_FAN_DUTY
+        )
 
     return ControllerStepResult(
         commanded_torque_nm=commanded_torque_nm,

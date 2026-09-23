@@ -112,6 +112,7 @@ def main() -> None:
     battery_name = profile.battery.thermal_node.name
     coolant_names = coolant_node_names(profile)
     primary_coolant_name = coolant_names[0]  # table below shows one loop; the Leaf has exactly one
+    primary_loop_name = profile.thermal_architecture.cooling_loops[0].name
 
     result = run_scenario(
         profile,
@@ -135,7 +136,7 @@ def main() -> None:
             f"{k_to_c(ts.node_temps_k[motor_name][i]):9.1f} "
             f"{k_to_c(ts.node_temps_k[battery_name][i]):8.1f} "
             f"{k_to_c(ts.node_temps_k[primary_coolant_name][i]):10.1f} "
-            f"{ts.pump_duty[i]:5.2f} {ts.commanded_torque_nm[i]:11.1f}  {limits}"
+            f"{ts.pump_duty[i][primary_loop_name]:5.2f} {ts.commanded_torque_nm[i]:11.1f}  {limits}"
         )
 
     derated_s = sum(
@@ -158,11 +159,16 @@ def main() -> None:
     print(f"Total time derated:     {derated_s:.0f}s of {ts.time_s[-1]:.0f}s")
 
     if args.plot:
-        save_plot(result, motor_name, inverter_name, battery_name, coolant_names)
+        save_plot(result, motor_name, inverter_name, battery_name, coolant_names, primary_loop_name)
 
 
 def save_plot(
-    result: RunResult, motor_name: str, inverter_name: str, battery_name: str, coolant_names: list[str]
+    result: RunResult,
+    motor_name: str,
+    inverter_name: str,
+    battery_name: str,
+    coolant_names: list[str],
+    primary_loop_name: str,
 ) -> None:
     import matplotlib
 
@@ -191,8 +197,8 @@ def save_plot(
     axes[2].set_ylabel("temp (C)")
     axes[2].legend(loc="upper left")
 
-    axes[3].plot(ts.time_s, ts.pump_duty, label="pump duty")
-    axes[3].plot(ts.time_s, ts.fan_duty, label="fan duty")
+    axes[3].plot(ts.time_s, [step[primary_loop_name] for step in ts.pump_duty], label="pump duty")
+    axes[3].plot(ts.time_s, [step[primary_loop_name] for step in ts.fan_duty], label="fan duty")
     axes[3].set_ylabel("duty")
     axes[3].set_xlabel("time (s)")
     axes[3].legend(loc="upper right")

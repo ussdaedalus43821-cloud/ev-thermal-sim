@@ -80,6 +80,24 @@ def test_load_profile_raises_validation_error_for_missing_required_field(tmp_pat
         load_profile(path)
 
 
+def test_load_profile_raises_value_error_for_empty_cooling_loop_serves(tmp_path: Path) -> None:
+    """A CoolingLoop with an empty serves list is a data error, not a valid
+    configuration -- no loop can serve nothing. Caught here, at the load
+    boundary, so controller.py/sim.py can trust the invariant (loop.serves
+    is never empty) instead of silently no-op-ing deep in the arbitration/
+    duty logic if it were ever violated.
+    """
+    profile = make_manufacturer_profile()
+    data = profile.model_dump(mode="json")
+    data["thermal_architecture"]["cooling_loops"][0]["serves"] = []
+
+    path = tmp_path / "empty_serves.yaml"
+    path.write_text(yaml.safe_dump(data))
+
+    with pytest.raises(ValueError, match="empty serves list"):
+        load_profile(path)
+
+
 def test_load_all_profiles_keys_by_filename_stem(tmp_path: Path) -> None:
     _write_valid_profile_yaml(tmp_path / "vehicle_a.yaml")
     _write_valid_profile_yaml(tmp_path / "vehicle_b.yaml")

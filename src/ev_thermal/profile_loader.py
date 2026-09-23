@@ -21,10 +21,12 @@ def load_profile(path: str | Path) -> ManufacturerProfile:
     """Load and validate one `ManufacturerProfile` from a YAML file.
 
     Raises `FileNotFoundError` if `path` doesn't exist, `ValueError` if the
-    file isn't valid YAML or doesn't parse to a mapping (e.g. an empty or
-    comment-only stub), and `pydantic.ValidationError` (propagated
-    unmodified — it already reports a clear per-field path and reason) if
-    the mapping doesn't satisfy `ManufacturerProfile`.
+    file isn't valid YAML, doesn't parse to a mapping (e.g. an empty or
+    comment-only stub), or has a `CoolingLoop` with an empty `serves` list
+    (a data error — no loop can serve nothing; see below), and
+    `pydantic.ValidationError` (propagated unmodified — it already reports
+    a clear per-field path and reason) if the mapping doesn't satisfy
+    `ManufacturerProfile`.
     """
     path = Path(path)
     text = path.read_text()
@@ -37,7 +39,21 @@ def load_profile(path: str | Path) -> ManufacturerProfile:
     if not isinstance(data, dict):
         raise ValueError(f"{path}: expected a YAML mapping for ManufacturerProfile, got {type(data).__name__}")
 
-    return ManufacturerProfile.model_validate(data)
+    profile = ManufacturerProfile.model_validate(data)
+
+    # An empty serves list would silently contribute a coolant node to the
+    # combined thermal network with no components connected to it -- caught
+    # here, at the load boundary, so controller.py/sim.py can trust the
+    # invariant (loop.serves is never empty) rather than defending against
+    # it (and silently no-op-ing) deep in the arbitration/duty logic.
+    for loop in profile.thermal_architecture.cooling_loops:
+        if not loop.serves:
+            raise ValueError(
+                f"{path}: CoolingLoop {loop.name!r} has an empty serves list — "
+                "a loop must serve at least one component"
+            )
+
+    return profile
 
 
 def load_all_profiles(directory: Path = PROFILES_DIR) -> dict[str, ManufacturerProfile]:

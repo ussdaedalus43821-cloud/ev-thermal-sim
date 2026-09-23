@@ -18,6 +18,7 @@ from tests.test_motor import _make_motor_spec
 
 _NOMINAL_TEMP_K = 298.15
 _BATTERY_VOLTAGE_V = 350.0
+_LOOP_NAME = _make_cooling_loop().name
 
 
 def _sourced(value: float) -> Sourced[float]:
@@ -55,7 +56,7 @@ def _step(
         _make_inverter_spec(),
         _make_battery_spec(),
         _make_vehicle_dynamics(),
-        _make_cooling_loop(),
+        [_make_cooling_loop()],
         motor_winding_temp_k,
         inverter_junction_temp_k,
         battery_soc,
@@ -63,7 +64,7 @@ def _step(
         battery_v_rc_v,
         battery_voltage_v,
         speed_rad_per_s,
-        coolant_temp_k,
+        {_LOOP_NAME: coolant_temp_k},
         sim_time_s=0.0,
         pump_aggressiveness=pump_aggressiveness,
     )
@@ -124,8 +125,8 @@ def test_pump_and_fan_duty_rise_with_component_and_coolant_temp() -> None:
     hot_battery = _step(battery_cell_temp_k=312.0, coolant_temp_k=_NOMINAL_TEMP_K)
     hot_coolant = _step(battery_cell_temp_k=_NOMINAL_TEMP_K, coolant_temp_k=312.0)
 
-    assert hot_battery.commanded_pump_duty > baseline.commanded_pump_duty
-    assert hot_coolant.commanded_fan_duty > baseline.commanded_fan_duty
+    assert hot_battery.commanded_pump_duty[_LOOP_NAME] > baseline.commanded_pump_duty[_LOOP_NAME]
+    assert hot_coolant.commanded_fan_duty[_LOOP_NAME] > baseline.commanded_fan_duty[_LOOP_NAME]
 
 
 def test_no_limits_and_no_heat_gives_minimum_nonzero_duty() -> None:
@@ -136,8 +137,8 @@ def test_no_limits_and_no_heat_gives_minimum_nonzero_duty() -> None:
         coolant_temp_k=_NOMINAL_TEMP_K,
     )
 
-    assert result.commanded_pump_duty > 0.0
-    assert result.commanded_fan_duty > 0.0
+    assert result.commanded_pump_duty[_LOOP_NAME] > 0.0
+    assert result.commanded_fan_duty[_LOOP_NAME] > 0.0
 
 
 def test_battery_current_demand_matches_commanded_torque_direction() -> None:
@@ -152,16 +153,16 @@ def test_pump_aggressiveness_default_matches_unparameterized_behavior() -> None:
     default_call = _step(battery_cell_temp_k=312.0, coolant_temp_k=312.0)
     explicit_default = _step(battery_cell_temp_k=312.0, coolant_temp_k=312.0, pump_aggressiveness=1.0)
 
-    assert default_call.commanded_pump_duty == explicit_default.commanded_pump_duty
-    assert default_call.commanded_fan_duty == explicit_default.commanded_fan_duty
+    assert default_call.commanded_pump_duty[_LOOP_NAME] == explicit_default.commanded_pump_duty[_LOOP_NAME]
+    assert default_call.commanded_fan_duty[_LOOP_NAME] == explicit_default.commanded_fan_duty[_LOOP_NAME]
 
 
 def test_higher_pump_aggressiveness_reaches_full_duty_over_narrower_window() -> None:
     mild = _step(battery_cell_temp_k=312.0, coolant_temp_k=312.0, pump_aggressiveness=0.5)
     aggressive = _step(battery_cell_temp_k=312.0, coolant_temp_k=312.0, pump_aggressiveness=2.0)
 
-    assert aggressive.commanded_pump_duty > mild.commanded_pump_duty
-    assert aggressive.commanded_fan_duty > mild.commanded_fan_duty
+    assert aggressive.commanded_pump_duty[_LOOP_NAME] > mild.commanded_pump_duty[_LOOP_NAME]
+    assert aggressive.commanded_fan_duty[_LOOP_NAME] > mild.commanded_fan_duty[_LOOP_NAME]
 
 
 def test_battery_ceiling_matches_available_discharge_current_a_via_power_conversion() -> None:
