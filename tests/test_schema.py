@@ -100,6 +100,13 @@ def make_battery_spec() -> BatterySpec:
         cold_derate_activation_temp_k=sourced(1000.0),
         soc_floor=sourced(0.05),
         soc_floor_full_available_soc=sourced(0.1),
+        calendar_aging_rate_per_s=sourced(4.4135e-10),
+        calendar_aging_activation_temp_k=sourced(7457.4),
+        calendar_aging_soc_sensitivity=sourced(1.0),
+        cycle_aging_rate_per_ah=sourced(6.660e-7),
+        cycle_aging_activation_temp_k=sourced(3728.7),
+        cycle_aging_c_rate_sensitivity=sourced(1.0),
+        resistance_growth_per_soh_loss=sourced(1.0),
     )
 
 

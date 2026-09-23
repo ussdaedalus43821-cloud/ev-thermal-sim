@@ -332,6 +332,67 @@ class BatterySpec(BaseModel):
             "min_operating_temp_k for both directions until that's wired in."
         ),
     )
+    calendar_aging_rate_per_s: Sourced[float] = Field(
+        ...,
+        description=(
+            "TODO(spec-sourcing): empirical calendar-aging base rate, fraction of "
+            "SOH lost per second at reference_temp_k and 50% SOC. See aging.py's "
+            "module docstring, 'Coefficient provenance', for how this was fit and "
+            "its validated temperature envelope."
+        ),
+    )
+    calendar_aging_activation_temp_k: Sourced[float] = Field(
+        ...,
+        description=(
+            "TODO(spec-sourcing): empirical pseudo-activation temperature (Ea/R) "
+            "scaling calendar_aging_rate_per_s away from reference_temp_k: "
+            "rate(T) = calendar_aging_rate_per_s * exp(activation_temp_k * "
+            "(1/reference_temp_k - 1/T)). Do not treat as a literal SEI-kinetics "
+            "activation energy — see aging.py's docstring."
+        ),
+    )
+    calendar_aging_soc_sensitivity: Sourced[float] = Field(
+        ...,
+        description=(
+            "TODO(spec-sourcing): dimensionless multiplier on calendar aging rate "
+            "as (1 + calendar_aging_soc_sensitivity * (soc - 0.5)); higher SOC "
+            "ages faster. See aging.py's docstring."
+        ),
+    )
+    cycle_aging_rate_per_ah: Sourced[float] = Field(
+        ...,
+        description=(
+            "TODO(spec-sourcing): empirical cycle-aging base rate, fraction of "
+            "SOH lost per amp-hour of throughput at reference_temp_k and 1C. "
+            "See aging.py's module docstring, 'Coefficient provenance' — this "
+            "coefficient is a placeholder assumption, not a calibrated fit."
+        ),
+    )
+    cycle_aging_activation_temp_k: Sourced[float] = Field(
+        ...,
+        description=(
+            "TODO(spec-sourcing): empirical pseudo-activation temperature (Ea/R) "
+            "scaling cycle_aging_rate_per_ah away from reference_temp_k, same "
+            "functional form as calendar_aging_activation_temp_k. Unconstrained by "
+            "any calibration anchor — see aging.py's docstring."
+        ),
+    )
+    cycle_aging_c_rate_sensitivity: Sourced[float] = Field(
+        ...,
+        description=(
+            "TODO(spec-sourcing): exponent n in rate * (applied C-rate)^n scaling "
+            "cycle aging by how hard the pack is being cycled. See aging.py's "
+            "docstring — a placeholder assumption, not a calibrated fit."
+        ),
+    )
+    resistance_growth_per_soh_loss: Sourced[float] = Field(
+        ...,
+        description=(
+            "TODO(spec-sourcing): fractional growth in internal resistance per "
+            "unit of SOH lost: R(soh) = R(soh=1) * (1 + resistance_growth_per_soh_loss "
+            "* (1 - soh)). Placeholder, not sourced from real teardown/fleet data."
+        ),
+    )
 
 
 class MotorSpec(BaseModel):
@@ -700,6 +761,28 @@ class SimState(BaseModel):
             "controller.py's step uses this (not the current step's not-yet-computed "
             "value) for its current<->torque conversions."
         ),
+    )
+    parked_duration_s: float = Field(
+        default=0.0,
+        description=(
+            "Elapsed time, in seconds, since the vehicle was last driving or "
+            "charging. Resets to 0 on driving/charging, increments while parked-"
+            "idle. Drives sim.py's extended-parking dt tier: once parked long "
+            "enough for thermal transients to settle, dt can jump much further "
+            "than the ordinary parked-tier step."
+        ),
+    )
+
+
+class AgingStepResult(BaseModel):
+    """One step's battery aging delta, returned by `aging.compute_aging_step`."""
+
+    new_soh: float = Field(..., description="Battery state of health after this step's aging, 0-1.")
+    calendar_delta: float = Field(
+        ..., description="SOH lost this step from calendar aging alone (non-negative)."
+    )
+    cycle_delta: float = Field(
+        ..., description="SOH lost this step from cycle (throughput) aging alone (non-negative)."
     )
 
 

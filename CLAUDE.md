@@ -277,6 +277,87 @@ not just *what* happened.
     decisions compound over a vehicle's life — impossible to demonstrate
     at all without it). Not abandoned, just correctly ordered behind
     the bigger gap.
+  - **Milestone E1 (done):** calendar + cycle battery aging, SOH feedback
+    into capacity/resistance, and a short-horizon (not yet 20-30-year-
+    performant — see E2 below) long-horizon sim mode. New module
+    `aging.py`: `compute_aging_step` (calendar aging, Arrhenius-in-
+    temperature x linear-in-SOC; cycle aging, Arrhenius-in-temperature x
+    power-law-in-C-rate on throughput; combined additively) and
+    `apply_soh_to_battery_spec` (returns a capacity/resistance-scaled copy
+    of a `BatterySpec` for a given SOH, leaving the raw aging-rate
+    coefficients themselves untouched). `sim.advance_one_step` calls
+    `apply_soh_to_battery_spec` once per step and feeds the aged copy to
+    everywhere that computes a capability ceiling or the actual electrical
+    step (controller arbitration, `compute_battery_electrical_step`), while
+    `compute_aging_step` itself is always called against the RAW unaged
+    spec (aging-rate coefficients don't change with SOH) — see `aging.py`'s
+    module docstring, "Coefficient provenance", for exactly how every
+    coefficient was calibrated or assumed, and `docs/model_reference.md`'s
+    "Aging model confidence and limits" section for the reader-facing
+    summary, including the explicit calibrated-vs-extrapolated 20-40C
+    envelope.
+    **Shared aging coefficients across all six profiles are a deliberate
+    experimental-design choice, not an oversight or a shortcut**: this
+    project's teaching goal is to show how thermal architecture changes
+    battery longevity outcomes, and giving each profile its own chemistry-
+    specific aging coefficients would confound that comparison — any SOH
+    difference between two profiles could then come from either thermal
+    design or chemistry, muddying the exact lesson this simulator exists to
+    teach. Holding coefficients constant makes thermal architecture the
+    sole independent variable. **Deferred (future E3 or later, not
+    scheduled): per-vehicle chemistry aging coefficients — deferred until
+    thermal story is demonstrated in isolation. Real LMO (Leaf), NCA (Model
+    3/Bolt), NMC (Niro), and Samsung cells (i3) age differently. Until then,
+    all six vehicles use identical aging coefficients; vehicle-to-vehicle
+    SOH differences are 100% attributable to thermal behavior.**
+    Also landed this milestone: `SimState.parked_duration_s` and a fourth
+    "extended parking" dt tier in `sim._choose_target_dt_s`, fixing a real
+    hysteresis bug in the pre-existing "coolant near ambient" tier — any
+    nonzero steady parasitic heat while parked can hold coolant at an
+    equilibrium offset from ambient that never closes back inside
+    `COOLANT_NEAR_AMBIENT_THRESHOLD_K`, permanently pinning dt at
+    `PARKED_WARM_DT_S` for the rest of a long run. The new tier is gated on
+    elapsed parked TIME instead (`EXTENDED_PARKING_SETTLING_S`, 3 hours),
+    which can't get stuck the same way — it only ever increases while
+    parked; `run_scenario` now builds the combined `ThermalNetwork` once
+    and reuses it every step instead of rebuilding it (`ThermalNode.
+    initial_temp_k` isn't read by `thermal.step_thermal_network`, which
+    takes current temps as a separate argument, so the network's structure
+    is genuinely static over a run); and `run_scenario` gained
+    `record_interval_s` to decimate `RunResult.time_series` for long-
+    horizon runs without decimating `final_state` or the energy integrals.
+    **Finding surfaced during this milestone, not fixed here:** the
+    extended-parking tier's benefit is currently capped by an unrelated,
+    already-documented constraint — `_stabilize_dt_s`'s battery R1*C1
+    Euler-stability check (see this file's own note on that below) clips
+    ANY requested target dt, including the new tier's day-scale one, down
+    to whatever's stable against the battery's own RC time constant. Every
+    current profile's `r1_ohm`/`c1_farad` are still the shared
+    TODO(spec-sourcing) placeholders (tau=45s), so in practice dt is capped
+    at roughly 42s regardless of how long the vehicle has been parked —
+    measured empirically at ~1,367 steps/sec, meaning a genuinely
+    multi-year, mostly-parked run is still on the order of tens of minutes,
+    not the deep long-horizon speedup the tier's name might suggest. This
+    is why E1's own multi-day determinism test
+    (`test_long_horizon_determinism_same_seed_gives_same_final_state` in
+    `tests/test_sim.py`) is deliberately shrunk to a few days, not literal
+    years, per the milestone's own "keep the wall-clock target loose, don't
+    optimize the driving hot path" scope — and it's also a preview of why
+    E2 (below) exists at all: a real 20-30-year run needs a fundamentally
+    different approach, not just a coarser dt tier.
+  - **Milestone E2 (deferred, not yet scheduled or planned in detail):** a
+    two-tier simulation architecture proposed as the actual answer to
+    long-horizon performance, once it's needed for Monte Carlo (500
+    samples) and fork-branching milestones — full-fidelity per-second
+    simulation cannot support either at a raw 20-30-year scale (~42
+    min/run x 500 samples ~ 15 days, benchmarked during E1's planning).
+    Tier 1 runs ~20-30 representative trip profiles (cold-start commute,
+    hot-soak commute, fast-charge session, highway, city) at full fidelity;
+    Tier 2 extrapolates each trip's aging-rate and thermal/SOC signature
+    across the full horizon via day-type weighting, representing thermal
+    dynamics as distributions rather than second-by-second traces —
+    standard fleet-aging practice. Not designed in detail yet; noted here
+    so it isn't lost, not scheduled next.
   `thermal.py` itself needed no changes for Milestones B or C — confirmed
   during Milestone A's planning, and again true after both B and C actually
   landed, that `step_thermal_network`/`node_time_constant_s` already

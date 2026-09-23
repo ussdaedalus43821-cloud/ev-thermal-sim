@@ -98,6 +98,39 @@ computed from only the components *that* loop serves against *that* loop's
 own thermostat. `step_cooling` is called once per loop with that loop's own
 commanded duty (no more broadcasting one shared value, which was Milestone
 B's explicit, temporary compromise).
+
+Milestone E1 (long-horizon aging mode) additions:
+- Step 4.5, right after the battery's electrical step: `aging.compute_aging_step`
+  runs against the RAW (unaged) `profile.battery` spec and updates
+  `SimState.battery_soh`. Every OTHER use of the battery spec in this
+  function (controller arbitration, the actual electrical step) uses
+  `aging.apply_soh_to_battery_spec(profile.battery, state.battery_soh)`
+  instead — a capacity/resistance-scaled copy — computed once at the top of
+  `advance_one_step` as `aged_battery_spec`, so aging feeds back into the
+  pack's usable capacity and internal resistance every step, not just at
+  the end of a run.
+- `_choose_target_dt_s` gained a fourth tier, gated on `SimState.parked_duration_s`
+  (time since the vehicle last drove or charged) rather than the pre-existing
+  "coolant near ambient" temperature check alone: that check has a real
+  hysteresis bug — any nonzero steady parasitic heat while parked can hold
+  the coolant at an equilibrium offset from ambient that never closes back
+  inside `COOLANT_NEAR_AMBIENT_THRESHOLD_K`, permanently pinning dt at
+  `PARKED_WARM_DT_S` for the rest of a long run. Gating the new extended tier
+  on elapsed parked TIME instead can't get stuck the same way — it only ever
+  increases while parked. `_stabilize_dt_s` still has the final say: the
+  extended tier's target is a request, clipped down to whatever's actually
+  stable every step.
+- `advance_one_step` accepts an optional pre-built `network`; `run_scenario`
+  builds the combined `ThermalNetwork` once (its structure — capacitances,
+  resistances, edges — never changes over a run; `ThermalNode.initial_temp_k`
+  isn't read by `thermal.step_thermal_network`, which takes current temps as
+  a separate argument) and passes it to every step, instead of rebuilding it
+  from scratch every step. `network=None` (the default) preserves
+  `advance_one_step`'s original build-it-fresh, standalone-callable behavior.
+- `run_scenario` gained `record_interval_s` (default 0.0, unchanged
+  every-step recording) to decimate `RunResult.time_series` for long-horizon
+  runs; `RunResult.final_state` and the energy integrals are never decimated,
+  only the time series arrays used for plotting.
 """
 
 from __future__ import annotations
@@ -106,6 +139,7 @@ from collections.abc import Callable
 
 import numpy as np
 
+from ev_thermal.aging import apply_soh_to_battery_spec, compute_aging_step
 from ev_thermal.battery import compute_battery_electrical_step
 from ev_thermal.controller import step_controller
 from ev_thermal.cooling import AIR_DENSITY_KG_PER_M3, step_cooling
@@ -142,6 +176,21 @@ DRIVING_SPEED_THRESHOLD_MPS = 0.1
 COOLANT_NEAR_AMBIENT_THRESHOLD_K = 2.0
 PARKED_WARM_DT_S = 5.0
 """TODO(tuning): placeholder middle tier of the adaptive dt policy."""
+
+EXTENDED_PARKING_SETTLING_S = 3.0 * 3600.0
+"""TODO(tuning): duration of continuous non-driving time after which the
+extended-parking dt tier is requested regardless of the coolant-vs-ambient
+temperature check. See the module docstring's Milestone E1 section for why
+this exists: the temperature-only check can pin dt at PARKED_WARM_DT_S
+forever if a steady parasitic heat load keeps coolant temperature at an
+equilibrium offset from ambient. Gating on elapsed parked time instead
+cannot get stuck the same way."""
+
+EXTENDED_PARKING_TARGET_DT_S = 86400.0
+"""TODO(tuning): requested (not guaranteed) dt once EXTENDED_PARKING_SETTLING_S
+has elapsed. `_stabilize_dt_s` still halves this down to whatever's actually
+stable for the current network/battery RC time constants every step — this
+is a request, not a bypass of the stability check."""
 
 MAX_DT_HALVINGS = 20
 
@@ -258,29 +307,43 @@ def _combined_thermal_network(profile: ManufacturerProfile, coolant_nodes: dict[
     return ThermalNetwork(nodes=nodes, edges=edges, ambient_coupling={})
 
 
+def _is_driving(speed_mps: float, target_speed_mps: float) -> bool:
+    """`target_speed_mps` is considered alongside `speed_mps` (not just current
+    speed) so that pulling away from a stop — current speed 0, target speed
+    well above threshold — is classified as driving from the first step, not
+    "parked." Using current speed alone picked a coarse (up to max_dt_s) step
+    for that very first step in testing, coarse enough that vehicle speed
+    integration diverged wildly before the loop ever got a chance to react (a
+    vehicle-dynamics accuracy problem, not a thermal-stability one —
+    `_stabilize_dt_s` wouldn't have caught it either).
+    """
+    return max(abs(speed_mps), abs(target_speed_mps)) > DRIVING_SPEED_THRESHOLD_MPS
+
+
 def _choose_target_dt_s(
     speed_mps: float,
     target_speed_mps: float,
     coolant_temps_k: list[float],
     ambient_temp_k: float,
     dt_policy: DTPolicy,
+    parked_duration_s: float,
 ) -> float:
-    """`target_speed_mps` is considered alongside `speed_mps` (not just current
-    speed) so that pulling away from a stop — current speed 0, target speed
-    well above threshold — is classified as driving from the first step, not
-    "parked." Using current speed alone picked a coarse (up to max_dt_s)
-    step for that very first step in testing, coarse enough that vehicle
-    speed integration diverged wildly before the loop ever got a chance to
-    react (a vehicle-dynamics accuracy problem, not a thermal-stability one —
-    `_stabilize_dt_s` wouldn't have caught it either).
-
-    `coolant_temps_k` is one temperature per loop (multi-loop profiles have
+    """`coolant_temps_k` is one temperature per loop (multi-loop profiles have
     more than one) — "coolant near ambient" means ALL of them are, the
     conservative direction: staying in the fine-dt tier until every loop has
     settled, not just the first one.
+
+    `parked_duration_s` (elapsed time since last driving/charging, tracked on
+    `SimState`) drives a fourth, extended-parking tier once
+    `EXTENDED_PARKING_SETTLING_S` has elapsed, checked BEFORE the
+    coolant-near-ambient tier — see EXTENDED_PARKING_SETTLING_S's docstring
+    for why a temperature-only check isn't enough on its own for long-horizon
+    runs.
     """
-    if max(abs(speed_mps), abs(target_speed_mps)) > DRIVING_SPEED_THRESHOLD_MPS:
+    if _is_driving(speed_mps, target_speed_mps):
         return dt_policy.min_dt_s
+    if parked_duration_s >= EXTENDED_PARKING_SETTLING_S:
+        return EXTENDED_PARKING_TARGET_DT_S
     if max(abs(temp - ambient_temp_k) for temp in coolant_temps_k) <= COOLANT_NEAR_AMBIENT_THRESHOLD_K:
         return dt_policy.max_dt_s
     return PARKED_WARM_DT_S
@@ -343,6 +406,7 @@ def initialize_sim_state(profile: ManufacturerProfile, scenario: Scenario, seed:
         battery_throughput_ah=0.0,
         event_ids=[],
         battery_voltage_v=profile.battery.nominal_voltage_v.value,
+        parked_duration_s=0.0,
     )
 
 
@@ -355,6 +419,7 @@ def advance_one_step(
     max_dt_s: float | None = None,
     grade_rad: float = DEFAULT_GRADE_RAD,
     pump_aggressiveness: float = DEFAULT_PUMP_AGGRESSIVENESS,
+    network: ThermalNetwork | None = None,
 ) -> SimStepRecord:
     """Advance `state` by one adaptively-chosen step (see module docstring for
     the 9-step sequence and why it's ordered this way). `max_dt_s`, if given,
@@ -363,10 +428,15 @@ def advance_one_step(
     the whole run (default 0.0, flat); `pump_aggressiveness` scales the
     cooling duty-ramp response (default 1.0, matching the original
     unparameterized behavior) — see controller.step_controller's docstring.
+    `network`, if given, is a pre-built combined `ThermalNetwork` (its
+    structure never changes over a run — see the module docstring's
+    Milestone E1 section); `None` (the default) builds one fresh, preserving
+    standalone-callable behavior for callers other than `run_scenario`.
     """
     motor_spec = profile.motors[0]
     inverter_spec = profile.inverter
     battery_spec = profile.battery
+    aged_battery_spec = apply_soh_to_battery_spec(battery_spec, state.battery_soh)
     vehicle_dynamics = profile.vehicle_dynamics
     cooling_loops = profile.thermal_architecture.cooling_loops
 
@@ -380,8 +450,10 @@ def advance_one_step(
     brake_limit_nm = motor_spec.peak_torque_nm.value
     regen_limit_nm = REGEN_TORQUE_LIMIT_FRACTION_OF_PEAK * motor_spec.peak_torque_nm.value
 
-    coolant_nodes = _coolant_thermal_nodes(cooling_loops, state.node_temps_k)
-    network = _combined_thermal_network(profile, coolant_nodes)
+    if network is None:
+        coolant_nodes = _coolant_thermal_nodes(cooling_loops, state.node_temps_k)
+        network = _combined_thermal_network(profile, coolant_nodes)
+    coolant_names = coolant_node_names(profile)
     # keyed by CoolingLoop.name (controller.py's own vocabulary), not by sim.py's
     # internal coolant_node_name() -- see controller.py's module docstring
     coolant_temps_k = {loop.name: state.node_temps_k[coolant_node_name(loop.name)] for loop in cooling_loops}
@@ -389,11 +461,12 @@ def advance_one_step(
     target_dt_s = _choose_target_dt_s(
         state.speed_mps,
         target_speed_mps,
-        [state.node_temps_k[name] for name in coolant_nodes],
+        [state.node_temps_k[name] for name in coolant_names],
         ambient_temp_k,
         scenario.dt_policy,
+        state.parked_duration_s,
     )
-    battery_rc_tau_s = battery_spec.r1_ohm.value * battery_spec.c1_farad.value
+    battery_rc_tau_s = aged_battery_spec.r1_ohm.value * aged_battery_spec.c1_farad.value
     dt_s = _stabilize_dt_s(network, battery_rc_tau_s, target_dt_s)
     if max_dt_s is not None:
         dt_s = min(dt_s, max_dt_s)
@@ -422,7 +495,7 @@ def advance_one_step(
         driver_result.torque_request_nm,
         motor_spec,
         inverter_spec,
-        battery_spec,
+        aged_battery_spec,
         vehicle_dynamics,
         cooling_loops,
         state.node_temps_k[motor_name],
@@ -476,7 +549,7 @@ def advance_one_step(
         state.battery_voltage_v
     ) + aux_current_a
     battery_electrical = compute_battery_electrical_step(
-        battery_spec,
+        aged_battery_spec,
         battery_current_request_a,
         state.battery_soc,
         state.node_temps_k[battery_name],
@@ -485,6 +558,19 @@ def advance_one_step(
         state.sim_time_s,
     )
     causal_events.extend(battery_electrical.causal_events)
+
+    # 4.5. battery aging -- against the RAW (unaged) spec: aging-rate
+    # coefficients themselves don't change with SOH, only the pack's
+    # resulting capacity/resistance do (that's aged_battery_spec, used
+    # everywhere else above).
+    aging_result = compute_aging_step(
+        battery_spec,
+        state.battery_soh,
+        state.node_temps_k[battery_name],
+        state.battery_soc,
+        battery_electrical.applied_current_a,
+        dt_s,
+    )
 
     # 5. cooling — once per loop, each driven by that loop's own commanded duty
     cooling_results = {
@@ -541,6 +627,9 @@ def advance_one_step(
     # 8-9. assemble new state
     new_odometer_km = state.odometer_km + (state.speed_mps + new_speed_mps) / 2.0 * dt_s / 1000.0
     new_event_ids = [event.event_id for event in causal_events]
+    new_parked_duration_s = (
+        0.0 if _is_driving(state.speed_mps, target_speed_mps) else state.parked_duration_s + dt_s
+    )
 
     new_state = SimState(
         state_id=f"{state.scenario_id}-step-{state.step_count + 1:06d}",
@@ -548,7 +637,7 @@ def advance_one_step(
         sim_time_s=state.sim_time_s + dt_s,
         odometer_km=new_odometer_km,
         battery_soc=battery_electrical.soc,
-        battery_soh=state.battery_soh,
+        battery_soh=aging_result.new_soh,
         node_temps_k=new_temps_k,
         rng_state=state.rng_state,
         fork_lineage=state.fork_lineage,
@@ -560,6 +649,7 @@ def advance_one_step(
         battery_throughput_ah=state.battery_throughput_ah + abs(battery_electrical.applied_current_a) * dt_s / 3600.0,
         event_ids=[*state.event_ids, *new_event_ids],
         battery_voltage_v=battery_electrical.terminal_voltage_v,
+        parked_duration_s=new_parked_duration_s,
     )
 
     return SimStepRecord(
@@ -591,6 +681,7 @@ def run_scenario(
     driver_aggression: float = DEFAULT_DRIVER_AGGRESSION,
     grade_rad: float = DEFAULT_GRADE_RAD,
     pump_aggressiveness: float = DEFAULT_PUMP_AGGRESSIVENESS,
+    record_interval_s: float = 0.0,
 ) -> RunResult:
     """Run `profile` under `scenario` for `duration_s` seconds.
 
@@ -605,11 +696,22 @@ def run_scenario(
     `grade_rad` and `pump_aggressiveness` are passed straight through to
     `advance_one_step` every step (see its docstring); both default to the
     original unparameterized behavior (flat road, unscaled duty ramp).
+
+    `record_interval_s`, if greater than 0, decimates `RunResult.time_series`
+    to roughly one sample per that many seconds of simulated time (always
+    including the first and last sample), instead of recording every step —
+    for long-horizon runs where per-step time-series retention would be
+    prohibitively large. 0.0 (default) records every step, matching the
+    original behavior. `RunResult.final_state` and the energy integrals are
+    unaffected either way — only the time-series arrays are decimated.
     """
     if initial_state is not None:
         state = initial_state
     else:
         state = initialize_sim_state(profile, scenario, scenario.random_seed)
+
+    coolant_nodes = _coolant_thermal_nodes(profile.thermal_architecture.cooling_loops, state.node_temps_k)
+    network = _combined_thermal_network(profile, coolant_nodes)
 
     zero_duty_by_loop = {loop.name: 0.0 for loop in profile.thermal_architecture.cooling_loops}
     time_series = SimTimeSeries(
@@ -634,6 +736,8 @@ def run_scenario(
     radiator_rejected_j = 0.0
     aux_j = 0.0
 
+    last_recorded_time_s = state.sim_time_s
+
     end_time_s = state.sim_time_s + duration_s
     while state.sim_time_s < end_time_s:
         remaining_s = end_time_s - state.sim_time_s
@@ -646,6 +750,7 @@ def run_scenario(
             max_dt_s=remaining_s,
             grade_rad=grade_rad,
             pump_aggressiveness=pump_aggressiveness,
+            network=network,
         )
         dt_s = record.new_state.sim_time_s - state.sim_time_s
         state = record.new_state
@@ -656,18 +761,25 @@ def run_scenario(
         else:
             regen_recovered_j += -record.battery_electrical_power_w * dt_s
 
-        time_series.time_s.append(state.sim_time_s)
-        time_series.speed_mps.append(state.speed_mps)
-        time_series.requested_torque_nm.append(record.requested_torque_nm)
-        time_series.commanded_torque_nm.append(record.commanded_torque_nm)
-        time_series.motor_electrical_power_w.append(record.motor_electrical_power_w)
-        time_series.soc.append(state.battery_soc)
-        for name, temp in state.node_temps_k.items():
-            time_series.node_temps_k.setdefault(name, []).append(temp)
-        time_series.pump_duty.append(record.pump_duty)
-        time_series.fan_duty.append(record.fan_duty)
-        time_series.heat_rejected_w.append(record.heat_rejected_w)
-        time_series.active_limit_event_types.append(record.active_limit_event_types)
+        should_record = (
+            record_interval_s <= 0.0
+            or (state.sim_time_s - last_recorded_time_s) >= record_interval_s
+            or state.sim_time_s >= end_time_s
+        )
+        if should_record:
+            last_recorded_time_s = state.sim_time_s
+            time_series.time_s.append(state.sim_time_s)
+            time_series.speed_mps.append(state.speed_mps)
+            time_series.requested_torque_nm.append(record.requested_torque_nm)
+            time_series.commanded_torque_nm.append(record.commanded_torque_nm)
+            time_series.motor_electrical_power_w.append(record.motor_electrical_power_w)
+            time_series.soc.append(state.battery_soc)
+            for name, temp in state.node_temps_k.items():
+                time_series.node_temps_k.setdefault(name, []).append(temp)
+            time_series.pump_duty.append(record.pump_duty)
+            time_series.fan_duty.append(record.fan_duty)
+            time_series.heat_rejected_w.append(record.heat_rejected_w)
+            time_series.active_limit_event_types.append(record.active_limit_event_types)
 
         motor_loss_j += record.motor_loss_w * dt_s
         inverter_loss_j += record.inverter_loss_w * dt_s

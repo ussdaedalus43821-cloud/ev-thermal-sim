@@ -192,6 +192,36 @@ battery:
     source: "docs/research/profiles_v1.md — Nissan Leaf"
   min_charge_temp_k: null  # not researched for the Leaf (only the BMW i3's asymmetric charge/discharge range is documented)
 
+  calendar_aging_rate_per_s:
+    value: 4.4135e-10
+    confidence: low
+    source: "calibrated against two fleet anchors (Leaf/Guam, Model3/Seattle) — see aging.py's module docstring 'Coefficient provenance'; not vehicle-specific, shared across all six profiles by design"
+  calendar_aging_activation_temp_k:
+    value: 7457.4
+    confidence: low
+    source: "calibrated against two fleet anchors (Leaf/Guam, Model3/Seattle) — see aging.py's module docstring 'Coefficient provenance'; not vehicle-specific, shared across all six profiles by design"
+    note: "lower than typical literature Li-ion calendar-aging activation energies expressed the same way (~20,000K+); this is an empirical fit to the two anchors, not a physical constant — do not 'correct' without re-deriving against the same anchors"
+  calendar_aging_soc_sensitivity:
+    value: 1.0
+    confidence: low
+    source: "assumed (fixed choice, not fit) — see aging.py's module docstring 'Coefficient provenance'; not vehicle-specific"
+  cycle_aging_rate_per_ah:
+    value: 6.660e-7
+    confidence: low
+    source: "calibrated against one fleet anchor (82% SOH at 100,000 kWh throughput at 25C) assuming 370V reference pack voltage and 1C reference C-rate — see aging.py's module docstring 'Coefficient provenance'; not vehicle-specific"
+  cycle_aging_activation_temp_k:
+    value: 3728.7
+    confidence: low
+    source: "assumed as calendar_aging_activation_temp_k/2 — unconstrained by the single cycle-aging anchor — see aging.py's module docstring 'Coefficient provenance'; not vehicle-specific"
+  cycle_aging_c_rate_sensitivity:
+    value: 1.0
+    confidence: low
+    source: "assumed (fixed choice, not fit) — see aging.py's module docstring 'Coefficient provenance'; not vehicle-specific"
+  resistance_growth_per_soh_loss:
+    value: 1.0
+    confidence: low
+    source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+
 motors:
   - motor_type: "not specified in research"
     peak_power_kw:

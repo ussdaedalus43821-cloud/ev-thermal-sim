@@ -28,6 +28,11 @@ from ev_thermal.schema import (
     UsageProfile,
 )
 from ev_thermal.sim import (
+    COOLANT_NEAR_AMBIENT_THRESHOLD_K,
+    EXTENDED_PARKING_SETTLING_S,
+    EXTENDED_PARKING_TARGET_DT_S,
+    PARKED_WARM_DT_S,
+    _choose_target_dt_s,
     _combined_thermal_network,
     _coolant_thermal_nodes,
     advance_one_step,
@@ -370,3 +375,121 @@ def test_zero_pump_duty_leaves_combined_network_with_no_escape_path() -> None:
 
     for node_name in previous_temps_k:
         assert previous_temps_k[node_name] > temps_k[node_name]
+
+
+def test_soh_feedback_lowers_battery_current_ceiling_and_commanded_torque() -> None:
+    """Integration check that `SimState.battery_soh` actually threads through
+    `advance_one_step` (via `aging.apply_soh_to_battery_spec`) into a real
+    effect on the arbitrated torque, not just into `aging.py`'s own unit
+    tests. A hot pack plus a hard launch pushes the battery current ceiling
+    into binding territory (mirrors test_controller.py's
+    test_hot_battery_and_cold_motor_battery_limit_dominates), so a degraded
+    pack's higher effective resistance should command less torque than an
+    identical-but-fresh pack under the exact same request.
+    """
+    profile = _make_profile()
+    scenario = _make_scenario(profile)
+    battery_name = profile.battery.thermal_node.name
+
+    # speed_mps=5.5 -> motor_speed_rad_per_s=150 (this fixture's wheel_radius_m=0.33,
+    # gear_ratio=9.0), matching test_controller.py's own battery-limit-binding
+    # fixture; +4.667 m/s of target speed error times SIM_DRIVER_KP_NM_PER_MPS=60
+    # gives a ~280Nm P-term request (integral term is 0 on a fresh state) -- under
+    # accel_limit_nm=310 so the driver's own clamp doesn't saturate it first, but
+    # large enough at this speed to bind the hot battery's current ceiling, mirroring
+    # test_controller.py's test_hot_battery_and_cold_motor_battery_limit_dominates.
+    base_state = initialize_sim_state(profile, scenario, scenario.random_seed)
+    base_state = base_state.model_copy(
+        update={"node_temps_k": {**base_state.node_temps_k, battery_name: 330.0}, "speed_mps": 5.5}
+    )
+    fresh_state = base_state.model_copy(update={"battery_soh": 1.0})
+    aged_state = base_state.model_copy(update={"battery_soh": 0.6})
+
+    fresh_record = advance_one_step(profile, scenario, fresh_state, target_speed_mps=10.167)
+    aged_record = advance_one_step(profile, scenario, aged_state, target_speed_mps=10.167)
+
+    assert aged_record.commanded_torque_nm < fresh_record.commanded_torque_nm < 310.0
+
+
+def test_extended_parking_tier_recovers_after_settling_even_with_elevated_coolant() -> None:
+    """Regression guard for the hysteresis bug the extended-parking tier
+    fixes: the pre-existing coolant-near-ambient check alone can pin dt at
+    PARKED_WARM_DT_S forever if a steady parasitic heat load keeps coolant
+    at an equilibrium offset from ambient that never closes back inside
+    COOLANT_NEAR_AMBIENT_THRESHOLD_K. Gating a fourth tier on elapsed parked
+    TIME instead means that even with coolant PERMANENTLY elevated, once
+    enough parked time has passed, dt recovers to the coarse extended tier.
+    """
+    dt_policy = DTPolicy(min_dt_s=1.0, max_dt_s=60.0, max_temp_change_per_step_k=0.5, method="adaptive-euler")
+    ambient_temp_k = 298.15
+    stuck_coolant_temp_k = ambient_temp_k + COOLANT_NEAR_AMBIENT_THRESHOLD_K + 1.0
+
+    before_settling = _choose_target_dt_s(
+        0.0, 0.0, [stuck_coolant_temp_k], ambient_temp_k, dt_policy, parked_duration_s=0.0
+    )
+    after_settling = _choose_target_dt_s(
+        0.0, 0.0, [stuck_coolant_temp_k], ambient_temp_k, dt_policy, parked_duration_s=EXTENDED_PARKING_SETTLING_S
+    )
+
+    assert before_settling == PARKED_WARM_DT_S
+    assert after_settling == EXTENDED_PARKING_TARGET_DT_S
+
+
+def test_prebuilt_network_produces_identical_step_to_freshly_built_one() -> None:
+    profile = _make_profile()
+    scenario = _make_scenario(profile)
+    state = initialize_sim_state(profile, scenario, scenario.random_seed)
+
+    coolant_nodes = _coolant_thermal_nodes(profile.thermal_architecture.cooling_loops, state.node_temps_k)
+    prebuilt_network = _combined_thermal_network(profile, coolant_nodes)
+
+    fresh_record = advance_one_step(profile, scenario, state, target_speed_mps=20.0)
+    cached_record = advance_one_step(profile, scenario, state, target_speed_mps=20.0, network=prebuilt_network)
+
+    assert fresh_record.new_state == cached_record.new_state
+
+
+def test_record_interval_decimates_time_series_but_not_final_state() -> None:
+    profile = _make_profile()
+    scenario = _make_scenario(profile)
+
+    full = run_scenario(profile, scenario, duration_s=60.0, target_speed_mps=lambda _t: 20.0)
+    decimated = run_scenario(
+        profile, scenario, duration_s=60.0, target_speed_mps=lambda _t: 20.0, record_interval_s=10.0
+    )
+
+    assert decimated.final_state == full.final_state
+    assert len(decimated.time_series.time_s) < len(full.time_series.time_s)
+    assert decimated.time_series.time_s[0] == full.time_series.time_s[0]
+    assert decimated.time_series.time_s[-1] == full.time_series.time_s[-1] == 60.0
+
+
+def test_long_horizon_determinism_same_seed_gives_same_final_state() -> None:
+    """Determinism check for a long-horizon (multi-day, mostly-parked)
+    scenario, exercising the aging step and the extended-parking dt tier —
+    not the literal multi-year duration the milestone's original scope
+    named, deliberately shrunk (short drive + a multi-day parked tail,
+    rather than years) to keep this in the default test suite: a true
+    multi-year run is still bottlenecked by the battery's own R1*C1 Euler-
+    stability cap on dt (see CLAUDE.md's deferred-work note on
+    `_stabilize_dt_s`), which the extended-parking tier's larger target dt
+    gets clipped down to every step regardless of how long the vehicle has
+    been parked -- see this milestone's note in CLAUDE.md on that finding.
+    """
+
+    def target_speed_mps(t: float) -> float:
+        return 15.0 if t < 60.0 else 0.0
+
+    profile = _make_profile()
+    scenario = _make_scenario(profile, seed=13)
+
+    result_a = run_scenario(
+        profile, scenario, duration_s=3.0 * 86400.0, target_speed_mps=target_speed_mps, record_interval_s=3600.0
+    )
+    result_b = run_scenario(
+        profile, scenario, duration_s=3.0 * 86400.0, target_speed_mps=target_speed_mps, record_interval_s=3600.0
+    )
+
+    assert result_a.final_state == result_b.final_state
+    assert result_a.final_state.battery_soh < 1.0
+    assert result_a.final_state.parked_duration_s > EXTENDED_PARKING_SETTLING_S

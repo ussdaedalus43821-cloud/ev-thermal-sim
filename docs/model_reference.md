@@ -125,3 +125,57 @@ stated), and — per the research's own noted caveat — this profile models
 the *later*, full-featured configuration; research states early Niro
 models actually lacked DC-fast-charge preconditioning, a temporal nuance
 this static profile doesn't represent.
+
+## Aging model confidence and limits
+
+All six profiles' seven `calendar_aging_*`/`cycle_aging_*`/
+`resistance_growth_per_soh_loss` `BatterySpec` fields (Milestone E1) are
+identical across every vehicle, `confidence: low`, and derived, not
+researched — none of them come from `docs/research/profiles_v1.md`. See
+`aging.py`'s module docstring ("Coefficient provenance") for the full
+derivation; this section is the short version for readers of this document.
+
+**What was calibrated** (fit to exactly reproduce real anchor points, not
+sourced from a single literature value):
+- `calendar_aging_rate_per_s` and `calendar_aging_activation_temp_k` were
+  solved from two fleet anchors, holding `calendar_aging_soc_sensitivity`
+  fixed at an assumed 1.0:
+  - Nissan Leaf, hot climate (Guam-like): 40°C, 80% SOC, constant, 5 years
+    → 70% SOH.
+  - Tesla Model 3, mild climate (Seattle-like): 20°C, 60% SOC, constant, 10
+    years → 90% SOH.
+- `cycle_aging_rate_per_ah` was solved from one throughput anchor (82% SOH
+  at 100,000 kWh pack throughput at 25°C), assuming a 370V reference pack
+  voltage and 1C reference C-rate to convert kWh to amp-hours.
+
+**What was assumed, not calibrated** (no anchor constrains these):
+- `calendar_aging_soc_sensitivity = 1.0` — a fixed, round-number choice.
+- `cycle_aging_c_rate_sensitivity = 1.0` (linear scaling with C-rate) — the
+  simplest defensible assumption.
+- `cycle_aging_activation_temp_k` — set to half of
+  `calendar_aging_activation_temp_k`, since the single cycle-aging anchor
+  sits exactly at `reference_temp_k`, where the Arrhenius term evaluates to
+  1.0 regardless of this coefficient's value.
+- `resistance_growth_per_soh_loss = 1.0` — a placeholder ballpark (roughly
+  doubling resistance by SOH=0), not sourced from teardown/fleet data.
+
+**Validated temperature envelope:** the two calendar-aging anchors span
+roughly 20-40°C ambient. **SOH trajectories inside 20-40°C are calibrated;
+outside this range they are extrapolated.** A Phoenix summer (highs near
+50°C) or a Scandinavian winter (near -10°C) will produce plausible-looking
+but unvalidated SOH numbers — the model's shape (faster aging when hotter)
+is directionally sound, but its magnitude outside the anchor envelope has
+no data behind it. `calendar_aging_activation_temp_k`'s calibrated value
+(~7460K) is also notably lower than typical published Li-ion calendar-aging
+activation energies expressed the same way (~20,000K+) — this is expected
+for a two-point empirical fit, not an error, but it means this coefficient
+must never be "corrected" toward a literature value without re-solving
+against the same two anchors, or the anchor fit breaks.
+
+**Shared across all six vehicles by design:** real cell chemistry (LMO for
+the Leaf, NCA for the Model 3/Bolt, NMC for the Niro, Samsung cells for the
+i3) ages differently in reality, but every profile here uses the same aging
+coefficients deliberately, so that thermal architecture is the sole
+independent variable in any cross-vehicle SOH comparison this simulator
+produces — see `aging.py`'s docstring for the full reasoning. Per-vehicle
+chemistry-specific aging coefficients are deferred (see CLAUDE.md).
