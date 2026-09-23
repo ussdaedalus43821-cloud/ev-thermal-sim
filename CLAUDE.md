@@ -259,15 +259,24 @@ not just *what* happened.
     legitimate sum across loops (real total energy rejected), not a scalar
     standing in for per-loop values, so it stayed a single float, per
     Milestone B's original note.
-  - **Milestone D (next):** refrigerant-loop abstraction. The schema
-    has no way to represent an active refrigerant loop (the BMW i3's DX
-    system, or a battery chiller circuit) as anything other than a
-    `CoolingLoop` (glycol-shaped) or the node-level ambient path. The i3's
-    profile currently approximates DX cooling by giving its battery an
-    unrealistically low `resistance_to_ambient_k_per_w` (see that field's
-    own note in `bmw_i3.yaml` and `docs/model_reference.md`) — a stand-in,
-    not a real model of refrigerant thermodynamics. Do not use i3-vs-Leaf
-    battery comparisons for publication until this lands.
+  - **Milestone D (scheduled but not next):** refrigerant-loop
+    abstraction. The schema has no way to represent an active
+    refrigerant loop (the BMW i3's DX system, or a battery chiller
+    circuit) as anything other than a `CoolingLoop` (glycol-shaped) or
+    the node-level ambient path. The i3's profile currently
+    approximates DX cooling by giving its battery an unrealistically
+    low `resistance_to_ambient_k_per_w` (see that field's own note in
+    `bmw_i3.yaml` and `docs/model_reference.md`) — a stand-in, not a
+    real model of refrigerant thermodynamics. Do not use i3-vs-Leaf
+    battery comparisons for publication until this lands. Deliberately
+    deferred behind calendar/cycle aging + long-horizon sim mode
+    (Milestone E, next): D closes a known approximation affecting one
+    profile's battery-thermal accuracy, whereas aging + long-horizon
+    capability is missing *entirely* and is where this project's actual
+    teaching goal lives (the whole point is showing how heat management
+    decisions compound over a vehicle's life — impossible to demonstrate
+    at all without it). Not abandoned, just correctly ordered behind
+    the bigger gap.
   `thermal.py` itself needed no changes for Milestones B or C — confirmed
   during Milestone A's planning, and again true after both B and C actually
   landed, that `step_thermal_network`/`node_time_constant_s` already
