@@ -119,6 +119,11 @@ battery:
       confidence: low
       source: "estimated from owner reports and manual warnings"
       note: "55C — same 'hardly possible to derate, set high threshold' guidance as max_temp_k; exact figure not stated"
+    resistance_to_ambient_k_per_w:
+      value: 2.0
+      confidence: low
+      source: "placeholder — estimated from physical plausibility, not sourced"
+      note: "weak secondary path alongside the dominant active coolant path (battery is indirect-liquid-cooled) — magnitude not chased, just present so the node isn't fully adiabatic."
   capacity_nominal_ah:
     value: 239.9
     confidence: high
@@ -247,6 +252,11 @@ motors:
         confidence: low
         source: "estimated from owner reports and manual warnings"
         note: "160C: research states derating is 'hardly possible even under highly dynamic driving' (docs/research/profiles_v1.md — Audi e-tron); set close to but below the 180C rotor limit, exact onset not stated"
+      resistance_to_ambient_k_per_w:
+        value: 2.0
+        confidence: low
+        source: "placeholder — estimated from physical plausibility, not sourced"
+        note: "weak secondary path alongside the dominant active coolant path (rotor-internal + stator-jacket cooled) — magnitude not chased, just present so the node isn't fully adiabatic."
     winding_resistance_ref_ohm:
       value: 0.05
       confidence: low
@@ -318,6 +328,11 @@ inverter:
       value: 398.15
       confidence: low
       source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+    resistance_to_ambient_k_per_w:
+      value: 2.0
+      confidence: low
+      source: "placeholder — estimated from physical plausibility, not sourced"
+      note: "weak secondary path alongside the dominant active coolant path (inverter is liquid-cooled) — magnitude not chased, just present so the node isn't fully adiabatic."
   peak_current_a:
     value: 500.0
     confidence: low

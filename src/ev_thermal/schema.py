@@ -77,6 +77,21 @@ class ThermalNode(BaseModel):
     derate_temp_k: Sourced[float] = Field(
         ..., description="Temperature at which power derating begins, in kelvin."
     )
+    resistance_to_ambient_k_per_w: Sourced[float] | None = Field(
+        default=None,
+        description=(
+            "Thermal resistance from this node directly to ambient air, in K/W — "
+            "e.g. passive convective cooling off a battery pack's case, independent "
+            "of any coolant loop. None means no ambient path at all (fully "
+            "adiabatic), which is only physically correct for a genuinely isolated "
+            "node; every real component loses at least some heat to ambient, so "
+            "None should be treated as a modeling gap to fill, not a real answer. "
+            "A property of the node's own physical environment (a pack sitting in "
+            "air vs. submerged in coolant), not of the network's structure — "
+            "compare `ThermalNetwork.ambient_coupling`, which is deprecated in "
+            "favor of this field."
+        ),
+    )
 
 
 class ThermalNetwork(BaseModel):
@@ -98,7 +113,12 @@ class ThermalNetwork(BaseModel):
     )
     ambient_coupling: dict[str, Sourced[float]] = Field(
         default_factory=dict,
-        description="Node name -> conductance to ambient air, in W/K, for nodes exposed to ambient.",
+        description=(
+            "DEPRECATED: not used; node-level ThermalNode.resistance_to_ambient_k_per_w "
+            "supersedes this. Kept for now to avoid breaking serialized state; "
+            "scheduled for removal once fork-replay tests confirm nothing depends "
+            "on it. Node name -> conductance to ambient air, in W/K."
+        ),
     )
 
 

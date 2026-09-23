@@ -13,6 +13,14 @@ a fixed conductance to a single scalar `coolant_temp_k`, gated on/off by
 `coolant_flow_l_per_min`: zero (or negative) flow disables the coolant path
 entirely (pump off), any positive flow fully enables it. There is no
 flow-rate-dependent heat-exchanger effectiveness yet.
+
+Ambient coupling uses each `ThermalNode`'s own `resistance_to_ambient_k_per_w`
+(added in the ambient-coupling milestone) as a fixed conductance to the same
+`ambient_temp_k` every caller already passes in — a node with `None` there
+has no ambient path at all, which is correct only for a genuinely adiabatic
+node. This is a node-level property (the node's own physical environment),
+unlike the deprecated `ThermalNetwork.ambient_coupling` dict it supersedes,
+which was network-level and never actually populated by any caller.
 """
 
 from __future__ import annotations
@@ -38,6 +46,8 @@ def _node_total_conductance_w_per_k(
     node = network.nodes[node_name]
     if coolant_flow_l_per_min > 0.0:
         total_w_per_k += 1.0 / node.resistance_to_coolant_k_per_w.value
+    if node.resistance_to_ambient_k_per_w is not None:
+        total_w_per_k += 1.0 / node.resistance_to_ambient_k_per_w.value
     ambient_conductance = network.ambient_coupling.get(node_name)
     if ambient_conductance is not None:
         total_w_per_k += ambient_conductance.value
@@ -94,6 +104,9 @@ def step_thermal_network(
         if coolant_flow_l_per_min > 0.0:
             coolant_conductance_w_per_k = 1.0 / node.resistance_to_coolant_k_per_w.value
             net_flux_w[node_name] += coolant_conductance_w_per_k * (coolant_temp_k - temps_k[node_name])
+        if node.resistance_to_ambient_k_per_w is not None:
+            ambient_node_conductance_w_per_k = 1.0 / node.resistance_to_ambient_k_per_w.value
+            net_flux_w[node_name] += ambient_node_conductance_w_per_k * (ambient_temp_k - temps_k[node_name])
         ambient_conductance = network.ambient_coupling.get(node_name)
         if ambient_conductance is not None:
             net_flux_w[node_name] += ambient_conductance.value * (ambient_temp_k - temps_k[node_name])

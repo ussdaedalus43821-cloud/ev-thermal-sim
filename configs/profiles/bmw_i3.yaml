@@ -118,6 +118,11 @@ battery:
       confidence: low
       source: "default, not manufacturer-specific (docs/research/profiles_v1.md's derating-curve caveat)"
       note: "45C default — research gives the hard operating-range ceiling (60C) but no separate derate-onset threshold below it"
+    resistance_to_ambient_k_per_w:
+      value: 0.33
+      confidence: low
+      source: "placeholder — estimated from physical plausibility, not sourced"
+      note: "targets a soak time constant tau=R*C on the order of 'a few hours to a day' (0.33 K/W * 207000 J/K = 68310s ~= 19h), reproducing 'pack soaks toward ambient over a day' for a battery with no glycol coolant loop (see cooling_mechanism: direct expansion refrigerant, not connected to any CoolingLoop below). The shape (hours, not seconds) is what matters here, not the absolute R value — see CLAUDE.md's ambient-coupling milestone note."
   capacity_nominal_ah:
     value: 61.8
     confidence: high
@@ -246,6 +251,11 @@ motors:
         value: 413.15
         confidence: low
         source: "default, not manufacturer-specific (docs/research/profiles_v1.md's derating-curve caveat)"
+      resistance_to_ambient_k_per_w:
+        value: 2.0
+        confidence: low
+        source: "placeholder — estimated from physical plausibility, not sourced"
+        note: "weak secondary path alongside the dominant active coolant path (motor is water-jacket cooled) — magnitude not chased, just present so the node isn't fully adiabatic."
     winding_resistance_ref_ohm:
       value: 0.05
       confidence: low
@@ -317,6 +327,11 @@ inverter:
       value: 398.15
       confidence: low
       source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+    resistance_to_ambient_k_per_w:
+      value: 2.0
+      confidence: low
+      source: "placeholder — estimated from physical plausibility, not sourced"
+      note: "weak secondary path alongside the dominant active coolant path (inverter is liquid-cooled) — magnitude not chased, just present so the node isn't fully adiabatic."
   peak_current_a:
     value: 500.0
     confidence: low

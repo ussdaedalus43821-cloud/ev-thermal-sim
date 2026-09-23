@@ -36,14 +36,14 @@ def _sourced(value: float) -> Sourced[float]:
     return Sourced[float](value=value, confidence=Confidence.LOW, source="test-fixture")
 
 
-def _make_scenario(profile: ManufacturerProfile, seed: int = 42) -> Scenario:
+def _make_scenario(profile: ManufacturerProfile, seed: int = 42, ambient_temp_k: float = 298.15) -> Scenario:
     """A minimal, deliberately-generic Scenario wrapper around a loaded profile —
     exercises run_scenario end to end, not the profile's own researched climate/
     usage assumptions (this profile milestone doesn't populate those).
     """
     climate = Climate(
         location_name="Test City",
-        mean_annual_temp_k=_sourced(298.15),
+        mean_annual_temp_k=_sourced(ambient_temp_k),
         seasonal_amplitude_k=_sourced(10.0),
         daily_amplitude_k=_sourced(5.0),
         altitude_m=_sourced(100.0),
@@ -197,3 +197,42 @@ def test_all_six_profiles_produce_different_peak_temps_under_identical_scenario(
     assert len(set(peak_battery_temps_k.values())) > 1, (
         f"all six profiles produced identical peak battery temps: {peak_battery_temps_k}"
     )
+
+
+def test_leaf_battery_soaks_toward_ambient_over_hours_not_seconds(
+    profiles: dict[str, ManufacturerProfile],
+) -> None:
+    """Ambient-coupling milestone regression guard: with no torque demand (a
+    parked, no-load soak) and a cold ambient, the Leaf's passively-air-cooled
+    battery (resistance_to_ambient_k_per_w targets a multi-hour time constant,
+    see nissan_leaf.yaml) should drift toward ambient gradually -- 'a pack
+    soaks over a day in the sun,' not a temperature swing per simulation step.
+    This exercises the full run_scenario stack, not thermal.py's isolated-node
+    unit tests (see test_node_level_ambient_resistance_cools_with_time_
+    constant_tau_equals_rc in test_thermal.py for the analytical version) --
+    the battery here is still also weakly coupled to the shared coolant node
+    (serves-authoritative topology is Milestone B, not this one), so this is
+    a qualitative order-of-magnitude check, not an exact RC-decay match.
+    """
+    profile = profiles["nissan_leaf"]
+    battery_name = profile.battery.thermal_node.name
+    initial_temp_k = profile.battery.thermal_node.initial_temp_k
+    cold_ambient_k = 273.15  # 0C, well below the 25C initial battery temp
+
+    scenario = _make_scenario(profile, ambient_temp_k=cold_ambient_k)
+    result = run_scenario(profile, scenario, duration_s=86_400.0, target_speed_mps=lambda _t: 0.0)
+
+    battery_temps_k = result.time_series.node_temps_k[battery_name]
+    battery_times_s = result.time_series.time_s
+
+    one_hour_temp_k = next(temp for t, temp in zip(battery_times_s, battery_temps_k, strict=True) if t >= 3600.0)
+    one_hour_drop_k = initial_temp_k - one_hour_temp_k
+    assert 0.0 < one_hour_drop_k < 5.0, f"expected a gentle first-hour drift, got {one_hour_drop_k:.2f}K"
+
+    final_temp_k = battery_temps_k[-1]
+    total_drop_k = initial_temp_k - final_temp_k
+    assert total_drop_k > 5.0, f"expected meaningful drift toward ambient over 24h, got {total_drop_k:.2f}K"
+    assert final_temp_k > cold_ambient_k, "should not overshoot past ambient"
+
+    # monotonically cooling toward ambient, no oscillation
+    assert all(later <= earlier for earlier, later in zip(battery_temps_k, battery_temps_k[1:], strict=False))

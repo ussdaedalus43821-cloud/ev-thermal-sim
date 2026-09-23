@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 import pytest
 
 from ev_thermal.schema import Confidence, Sourced, ThermalNetwork, ThermalNode
@@ -17,6 +19,7 @@ def _single_node_network(
     capacitance_j_per_k: float,
     resistance_to_coolant_k_per_w: float,
     ambient_conductance_w_per_k: float | None = None,
+    resistance_to_ambient_k_per_w: float | None = None,
 ) -> ThermalNetwork:
     node = ThermalNode(
         name="node",
@@ -25,6 +28,9 @@ def _single_node_network(
         initial_temp_k=298.15,
         max_temp_k=_sourced(400.0),
         derate_temp_k=_sourced(350.0),
+        resistance_to_ambient_k_per_w=(
+            _sourced(resistance_to_ambient_k_per_w) if resistance_to_ambient_k_per_w is not None else None
+        ),
     )
     ambient_coupling = {}
     if ambient_conductance_w_per_k is not None:
@@ -97,6 +103,73 @@ def test_no_heat_input_warms_toward_ambient_not_coolant() -> None:
         previous_temp_k = temps_k["node"]
 
     assert abs(temps_k["node"] - ambient_temp_k) / (ambient_temp_k - initial_temp_k) < 0.01
+
+
+def test_node_level_ambient_resistance_cools_with_time_constant_tau_equals_rc() -> None:
+    """A node with only ThermalNode.resistance_to_ambient_k_per_w set (no coolant
+    edge, no network-level ambient_coupling) must cool toward ambient with time
+    constant tau = R*C, matching the analytical exponential-decay solution
+    within 5% — this is the node-level ambient path added in the
+    ambient-coupling milestone, distinct from the deprecated network-level
+    ambient_coupling dict exercised by the previous test.
+    """
+    capacitance_j_per_k = 1000.0
+    resistance_to_ambient_k_per_w = 1.0
+    ambient_temp_k = 290.0
+    initial_temp_k = 310.0
+    decoy_coolant_temp_k = 200.0  # far from ambient; flow=0 must exclude this entirely
+
+    network = _single_node_network(
+        capacitance_j_per_k=capacitance_j_per_k,
+        resistance_to_coolant_k_per_w=0.02,
+        resistance_to_ambient_k_per_w=resistance_to_ambient_k_per_w,
+    )
+    expected_tau_s = resistance_to_ambient_k_per_w * capacitance_j_per_k
+    assert node_time_constant_s(network, "node", coolant_flow_l_per_min=0.0) == pytest.approx(expected_tau_s)
+
+    dt_s = expected_tau_s / 2000.0
+    elapsed_s = expected_tau_s  # one full time constant
+    steps = round(elapsed_s / dt_s)
+    temps_k = {"node": initial_temp_k}
+    for _ in range(steps):
+        temps_k = step_thermal_network(
+            network,
+            temps_k,
+            heat_inputs_w={},
+            ambient_temp_k=ambient_temp_k,
+            coolant_temp_k=decoy_coolant_temp_k,
+            coolant_flow_l_per_min=0.0,
+            dt_s=dt_s,
+        )
+
+    expected_excess_k = (initial_temp_k - ambient_temp_k) * math.exp(-1.0)  # decay over exactly one tau
+    actual_excess_k = temps_k["node"] - ambient_temp_k
+    assert abs(actual_excess_k - expected_excess_k) / expected_excess_k < 0.05
+
+
+def test_none_ambient_resistance_leaves_node_adiabatic() -> None:
+    """A node with resistance_to_ambient_k_per_w left at its None default, no
+    coolant edge, and no network-level ambient_coupling has no sink at all and
+    must stay at its initial temperature -- the "no ambient path" default is
+    only correct for this genuinely adiabatic case.
+    """
+    network = _single_node_network(
+        capacitance_j_per_k=1000.0,
+        resistance_to_coolant_k_per_w=0.02,
+    )
+    assert network.nodes["node"].resistance_to_ambient_k_per_w is None
+    assert node_time_constant_s(network, "node", coolant_flow_l_per_min=0.0) is None
+
+    temps_k = step_thermal_network(
+        network,
+        {"node": 310.0},
+        heat_inputs_w={},
+        ambient_temp_k=290.0,
+        coolant_temp_k=200.0,
+        coolant_flow_l_per_min=0.0,
+        dt_s=3600.0,
+    )
+    assert temps_k["node"] == 310.0
 
 
 def test_stability_check_raises_when_dt_exceeds_time_constant() -> None:
