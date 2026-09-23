@@ -1,4 +1,5 @@
-"""Streamlit entry point: single-run interactive explorer for the demo profile.
+"""Streamlit entry point: single-run interactive explorer, with a vehicle
+selector over the six real reference profiles.
 
 Presentation only — imports `run_scenario` from `sim.py` and renders its
 output. The only "logic" here is display-unit conversion (K<->C, m/s<->km/h,
@@ -6,16 +7,17 @@ percent-grade<->radians), which CLAUDE.md's architecture rules explicitly
 scope to `dashboard/` the same way as °C/kWh/miles conversions; there are no
 simulation equations, thresholds, or physics constants in this file.
 
-The in-memory `ManufacturerProfile`/`Scenario` builders below are a straight
-copy of examples/first_run.py's placeholder demo profile (that script isn't
-part of the installable package, so it can't be imported here) — same
-TODO(spec-sourcing)/TODO(tuning) numbers, same "don't invent parameters"
-waiver CLAUDE.md grants that script. Profile loading from YAML is a later
-milestone; this dashboard always runs the one hardcoded demo vehicle.
+The vehicle profile itself now comes from `profile_loader.load_profile`
+against the real `configs/profiles/*.yaml` data (see
+docs/research/profiles_v1.md) — no more in-memory placeholder profile. The
+Scenario wrapped around it (climate/usage/charging profile) is still a
+UI-only placeholder, since profile data and scenario data are independent
+concerns; only the vehicle profile is user-selectable here.
 
-Comparative multi-vehicle views, Monte Carlo result plots, fork comparison,
-and causal-trace exploration beyond the flat feed below are out of scope for
-this milestone.
+Side-by-side multi-vehicle overlay views, Monte Carlo result plots, fork
+comparison, and causal-trace exploration beyond the flat feed below are out
+of scope for this milestone — this dashboard runs one selected vehicle at a
+time.
 """
 
 from __future__ import annotations
@@ -27,31 +29,32 @@ import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
 
+from ev_thermal.profile_loader import PROFILES_DIR, load_profile
 from ev_thermal.schema import (
-    AuxLoads,
-    BatterySpec,
     CausalEvent,
     ChargingProfile,
     Climate,
     Confidence,
-    ControlStrategy,
-    CoolingLoop,
     DTPolicy,
-    InverterSpec,
     ManufacturerProfile,
-    MotorSpec,
     RunResult,
     Scenario,
     Sourced,
-    ThermalArchitecture,
-    ThermalNetwork,
-    ThermalNode,
     UsageProfile,
-    VehicleDynamics,
 )
 from ev_thermal.sim import COOLANT_NODE_NAME, run_scenario
 
-CRUISE_SPEED_MPS = 13.4  # ~30 mph — UI demo-profile default, matches examples/first_run.py
+CRUISE_SPEED_MPS = 13.4  # ~30 mph — UI demo drive-cycle default
+
+VEHICLE_PROFILES = {
+    "Nissan Leaf": "nissan_leaf",
+    "Tesla Model 3": "tesla_model3",
+    "Chevrolet Bolt": "chevrolet_bolt",
+    "Audi e-tron": "audi_etron",
+    "BMW i3": "bmw_i3",
+    "Kia Niro EV": "kia_niro_ev",
+}
+"""Display name -> configs/profiles/<stem>.yaml, per docs/research/profiles_v1.md."""
 
 SEVERITY_COLOR = {
     "critical": "#e74c3c",  # fault
@@ -116,161 +119,8 @@ COMPONENT_COLOR = {
 }
 
 
-# --- placeholder in-memory profile (copied from examples/first_run.py) ---
-
-
 def _sourced(value: float, source: str = "placeholder") -> Sourced[float]:
     return Sourced[float](value=value, confidence=Confidence.LOW, source=source)
-
-
-def _thermal_node(name: str, capacitance_j_per_k: float, resistance_to_coolant_k_per_w: float) -> ThermalNode:
-    return ThermalNode(
-        name=name,
-        capacitance_j_per_k=_sourced(capacitance_j_per_k),
-        resistance_to_coolant_k_per_w=_sourced(resistance_to_coolant_k_per_w),
-        initial_temp_k=298.15,
-        max_temp_k=_sourced(333.15 if name == "battery_pack" else 423.15),
-        derate_temp_k=_sourced(318.15 if name == "battery_pack" else 398.15),
-    )
-
-
-def build_profile() -> ManufacturerProfile:
-    vehicle_dynamics = VehicleDynamics(
-        curb_mass_kg=_sourced(1800.0),
-        drag_coefficient=_sourced(0.28),
-        frontal_area_m2=_sourced(2.3),
-        rolling_resistance_coefficient=_sourced(0.01),
-        wheel_radius_m=_sourced(0.33),
-        gear_ratio=_sourced(9.0),
-        driveline_efficiency=_sourced(0.95),
-        tire_road_friction_coefficient=_sourced(0.9),
-    )
-
-    battery = BatterySpec(
-        chemistry="NMC",
-        capacity_kwh_nominal=_sourced(62.0),
-        capacity_kwh_usable=_sourced(58.0),
-        nominal_voltage_v=_sourced(350.0),
-        internal_resistance_ohm=_sourced(0.05),
-        mass_kg=_sourced(450.0),
-        specific_heat_j_per_kg_k=_sourced(900.0),
-        max_charge_c_rate=_sourced(1.5),
-        max_discharge_c_rate=_sourced(3.0),
-        thermal_node=_thermal_node("battery_pack", 400_000.0, 0.02),
-        capacity_nominal_ah=_sourced(180.0),
-        reference_temp_k=_sourced(298.15),
-        ocv_curve_v=[
-            (_sourced(0.0), _sourced(300.0)),
-            (_sourced(0.1), _sourced(330.0)),
-            (_sourced(0.5), _sourced(348.0)),
-            (_sourced(0.9), _sourced(365.0)),
-            (_sourced(1.0), _sourced(395.0)),
-        ],
-        docv_dt_v_per_k=_sourced(0.0),
-        r0_curve_ohm=[
-            (_sourced(0.0), _sourced(0.09)),
-            (_sourced(0.5), _sourced(0.05)),
-            (_sourced(1.0), _sourced(0.10)),
-        ],
-        r0_arrhenius_activation_temp_k=_sourced(3000.0),
-        r1_ohm=_sourced(0.015),
-        c1_farad=_sourced(3000.0),
-        min_terminal_voltage_v=_sourced(290.0),
-        max_terminal_voltage_v=_sourced(410.0),
-        min_operating_temp_k=_sourced(253.15),
-        cold_derate_threshold_temp_k=_sourced(283.15),
-        cold_derate_activation_temp_k=_sourced(1000.0),
-        soc_floor=_sourced(0.05),
-        soc_floor_full_available_soc=_sourced(0.1),
-    )
-
-    motor = MotorSpec(
-        motor_type="PMSM",
-        peak_power_kw=_sourced(150.0),
-        continuous_power_kw=_sourced(75.0),
-        peak_torque_nm=_sourced(310.0),
-        efficiency_peak=_sourced(0.96),
-        mass_kg=_sourced(70.0),
-        max_winding_temp_k=_sourced(453.15),
-        thermal_node=_thermal_node("motor", 30_000.0, 0.03),
-        winding_resistance_ref_ohm=_sourced(0.05),
-        winding_resistance_ref_temp_k=_sourced(298.15),
-        torque_constant_nm_per_a=_sourced(1.0),
-        iron_loss_coefficient_w_per_rad_per_s=_sourced(0.4),
-        mechanical_loss_coefficient_w_per_rad3_per_s3=_sourced(3e-6),
-        regen_extra_loss_fraction=_sourced(0.15),
-    )
-
-    inverter = InverterSpec(
-        topology="SiC three-phase",
-        peak_power_kw=_sourced(150.0),
-        efficiency_peak=_sourced(0.98),
-        switching_frequency_hz=_sourced(10_000.0),
-        max_junction_temp_k=_sourced(423.15),
-        mass_kg=_sourced(15.0),
-        thermal_node=_thermal_node("inverter", 3_000.0, 0.05),
-        peak_current_a=_sourced(500.0),
-        r_ds_on_ref_ohm=_sourced(0.002),
-        r_ds_on_ref_temp_k=_sourced(298.15),
-        r_ds_on_temp_coefficient_per_k=_sourced(0.005),
-        switching_energy_coefficient_j_per_v=_sourced(0.00003),
-    )
-
-    cooling_loop = CoolingLoop(
-        name="powertrain_loop",
-        coolant_type="50/50 water-glycol",
-        loop_volume_l=_sourced(6.0),
-        pump_max_flow_l_per_min=_sourced(20.0),
-        pump_power_w=_sourced(80.0),
-        radiator_ua_w_per_k=_sourced(400.0),
-        fan_power_w=_sourced(150.0),
-        chiller_present=False,
-        serves=["motor", "inverter", "battery_pack"],
-        coolant_specific_heat_j_per_kg_k=_sourced(3600.0),
-        coolant_density_kg_per_m3=_sourced(1050.0),
-        thermostat_temp_k=_sourced(308.15),
-        thermostat_full_open_temp_k=_sourced(313.15),
-        radiator_frontal_area_m2=_sourced(0.25),
-        fan_max_air_velocity_mps=_sourced(6.0),
-    )
-
-    thermal_architecture = ThermalArchitecture(
-        cooling_loops=[cooling_loop],
-        thermal_network=ThermalNetwork(
-            nodes={"battery_pack": battery.thermal_node}, edges=[], ambient_coupling={}
-        ),
-        shared_loop=True,
-        heat_pump_present=False,
-        battery_preconditioning=False,
-    )
-
-    control_strategy = ControlStrategy(
-        derate_curve=[(_sourced(313.15), _sourced(1.0)), (_sourced(333.15), _sourced(0.2))],
-        pump_control_policy="see controller.py",
-        fan_control_policy="see controller.py",
-        target_battery_temp_range_k=Sourced[tuple[float, float]](
-            value=(288.15, 308.15), confidence=Confidence.LOW, source="placeholder"
-        ),
-    )
-
-    aux_loads = AuxLoads(
-        hvac_power_w=_sourced(1000.0),
-        cabin_heater_type="resistive PTC",
-        accessory_load_w=_sourced(200.0),
-        dc_dc_converter_efficiency=_sourced(0.9),
-    )
-
-    return ManufacturerProfile(
-        name="Demo EV",
-        model_year_range=(2024, 2024),
-        vehicle_dynamics=vehicle_dynamics,
-        battery=battery,
-        motors=[motor],
-        inverter=inverter,
-        thermal_architecture=thermal_architecture,
-        control_strategy=control_strategy,
-        aux_loads=aux_loads,
-    )
 
 
 def build_scenario(profile: ManufacturerProfile, ambient_temp_k: float) -> Scenario:
@@ -355,6 +205,7 @@ left_col, center_col, right_col = st.columns([1, 2, 1])
 
 with left_col:
     st.subheader("Controls")
+    vehicle_name = st.selectbox("Vehicle", options=list(VEHICLE_PROFILES.keys()))
     ambient_temp_c = st.slider("Ambient temp (°C)", min_value=0, max_value=50, value=25)
     driver_aggression = st.slider("Driver aggression", min_value=0.7, max_value=1.3, value=1.0, step=0.05)
     trip_duration_s = st.select_slider("Trip duration (s)", options=[60, 300, 600, 1800], value=600)
@@ -375,7 +226,7 @@ with left_col:
 run_output: tuple[RunResult, ManufacturerProfile] | None = None
 if run_clicked:
     with st.spinner("Running simulation..."):
-        run_profile = build_profile()
+        run_profile = load_profile(PROFILES_DIR / f"{VEHICLE_PROFILES[vehicle_name]}.yaml")
         scenario = build_scenario(run_profile, ambient_temp_k=c_to_k(ambient_temp_c))
         run_result = run_scenario(
             run_profile,

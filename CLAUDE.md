@@ -167,6 +167,21 @@ not just *what* happened.
   reading the schema's own (more general) topology description. Multi-loop
   (e.g. separate battery vs. powertrain loops) and dual-motor orchestration
   are deferred; when built, they replace this hardcoding, not extend it.
+  **Confirmed still true as of the spec-integration milestone, where it
+  now has a real, visible consequence, not just a theoretical one:**
+  `CoolingLoop.serves` is currently ignored by sim.py — all components
+  connect to `cooling_loops[0]` regardless of topology. The Nissan Leaf
+  profile's `serves: ["motor", "inverter"]` (battery deliberately excluded
+  — passive air cooling, no active loop, per docs/research/profiles_v1.md)
+  correctly encodes "no active battery cooling" as *data*, but sim.py's
+  hardcoded topology will still connect the battery to whatever
+  `cooling_loops[0]` is regardless. Leaf's air-cooled pack will not behave
+  differently from a liquid-cooled one (e.g. Model 3's) until this is
+  fixed — the single biggest thermal-management lesson this project can
+  teach is currently not actually simulated correctly. Deliberately not
+  fixed in the spec-integration milestone (explicitly out of scope, kept
+  narrow on purpose) — topology-aware cooling is its own next milestone,
+  with its own plan review, not a quiet extension of this one.
 - **`available_torque_nm`/`available_current_a`/`available_discharge_current_a`
   converted to a common "torque currency" in controller.py ignores
   motor/inverter conversion losses — and so does the resulting

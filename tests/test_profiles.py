@@ -170,3 +170,30 @@ def test_profile_runs_60s_default_scenario_without_raising(stem: str, profiles: 
         *result.time_series.commanded_torque_nm,
     ]:
         assert math.isfinite(value)
+
+
+def test_all_six_profiles_produce_different_peak_temps_under_identical_scenario(
+    profiles: dict[str, ManufacturerProfile],
+) -> None:
+    """Regression guard for the spec-integration milestone: if every profile
+    produced the same trace under the same scenario, that would mean profile
+    data isn't actually threading through to the physics layer (e.g. sim.py
+    silently falling back to some shared default) rather than being read from
+    each profile's own fields.
+    """
+    peak_motor_temps_k: dict[str, float] = {}
+    peak_battery_temps_k: dict[str, float] = {}
+    for stem, profile in profiles.items():
+        scenario = _make_scenario(profile)
+        result = run_scenario(profile, scenario, duration_s=60.0, target_speed_mps=lambda _t: 15.0)
+        motor_name = profile.motors[0].thermal_node.name
+        battery_name = profile.battery.thermal_node.name
+        peak_motor_temps_k[stem] = max(result.time_series.node_temps_k[motor_name])
+        peak_battery_temps_k[stem] = max(result.time_series.node_temps_k[battery_name])
+
+    assert len(set(peak_motor_temps_k.values())) > 1, (
+        f"all six profiles produced identical peak motor temps: {peak_motor_temps_k}"
+    )
+    assert len(set(peak_battery_temps_k.values())) > 1, (
+        f"all six profiles produced identical peak battery temps: {peak_battery_temps_k}"
+    )
