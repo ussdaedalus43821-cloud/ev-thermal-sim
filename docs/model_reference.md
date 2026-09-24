@@ -179,3 +179,30 @@ coefficients deliberately, so that thermal architecture is the sole
 independent variable in any cross-vehicle SOH comparison this simulator
 produces — see `aging.py`'s docstring for the full reasoning. Per-vehicle
 chemistry-specific aging coefficients are deferred (see CLAUDE.md).
+
+**Entropic heat is omitted from every run's thermal signature, including
+fast-charge (Milestone E2e).** `BatterySpec.docv_dt_v_per_k` is `0.0` for
+all six profiles — not a measured "entropic heat is negligible" finding,
+simply unsourced: no real `dOCV/dT` curve exists for any of the six
+profiles yet. `battery.py`'s entropic heat term (`I*T*dOCV/dT`) is
+therefore inert everywhere, which feeds into aging indirectly, since
+omitted heat means a slightly-understated `cell_temp_k` feeding the
+Arrhenius calendar/cycle terms above.
+
+This matters most exactly where current is highest — fast charging — since
+entropic heat scales linearly with `I` while irreversible (ohmic, `I^2*R`)
+heat scales quadratically. That's real physics, not vehicle-specific data:
+it means entropic heat's *relative* contribution to total heat generation
+shrinks as C-rate rises, which is why omitting it is more defensible at
+fast-charge rates than it would be at low-rate trickle charging — even
+though the *absolute* magnitude of the omitted term is largest right when
+current is highest. That qualitative direction is as far as this can be
+taken honestly: the actual magnitude of the resulting SOH-loss bias is
+**unknown, flagged** — not estimated — because no real `dOCV/dT` data exists
+for any of the six profiles to ground a number, and typical published
+values vary enough in both sign and magnitude across chemistries and SOC
+regions (often negative at low-mid SOC, sometimes near zero or positive
+near full charge for common Li-ion cathodes) that guessing one here would
+be inventing data this project's own conventions explicitly avoid. Source
+real `docv/dT` curves in the spec-sourcing milestone, same as every other
+`TODO(spec-sourcing)` battery coefficient.

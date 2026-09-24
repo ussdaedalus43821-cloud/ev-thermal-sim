@@ -920,3 +920,92 @@ not just *what* happened.
     diagnostic sequence (day-by-day decomposition, isolate-then-combine
     fixes, check whether the "reference" or Tier-2 is actually the less
     accurate side before assuming Tier-2 is wrong) is where to start.
+  - **Milestone E2e (design decisions ratified via `docs/DESIGN_QUESTIONS.md`
+    Q-0001 through Q-0005, not yet implemented):** fast-charge
+    characterization, the last piece of Milestone E2's own sequence.
+    **Charge-mode step logic (Q-0001): a separate `advance_charging_step`
+    function beside `advance_one_step`, plus a parallel
+    `characterize_fast_charge_session` beside `characterize_trip`** — NOT a
+    mode flag threaded through `advance_one_step`, and NOT a branch inside
+    `battery.step_battery`. Approved conditionally: heat-generation physics
+    must not diverge between the charge and discharge paths (divergent
+    charge/discharge heat models is "the exact failure mode that kills
+    comparative sims"). This holds by construction: `advance_charging_step`
+    calls `battery.compute_battery_electrical_step` directly — the exact
+    same function `advance_one_step` already calls for discharge, which
+    already computes `irreversible_heat_w`/`entropic_heat_w` identically
+    for both current directions (proven, not new: already exercised today
+    via regen braking's negative `battery_current_request_a`) — and the
+    same `step_thermal_network` over the same combined network, with
+    motor/inverter heat inputs at zero rather than a separate thermal path.
+    **Charge power profile (Q-0002) — REFRAMED, the one decision that
+    changes what E2e is.** Rejected: constant power + the existing voltage-
+    limit expression's natural taper alone. That models the *battery's*
+    physics but not the *BMS's* — real DC fast charging above ~80% SOC or
+    below a temperature floor is limited by an explicit BMS-enforced
+    `I_max(SOC, T_cell)` curve, which IS the thermal-protection mechanism,
+    not a detail of it — it's specifically why a passively-cooled pack in a
+    hot climate throttles hard and an actively-cooled, preconditioned one
+    doesn't. Shipping E2e without it means E2e doesn't unlock the
+    comparison it's on the roadmap for. Also rejected regardless: a
+    standalone `FastChargeCurve` schema type — a static SOC-only curve is
+    temperature-blind, backwards for a thermal simulator.
+    **Ratified: constant power request PLUS a sourced `I_max(SOC, T_cell)`
+    limit; the taper is implicit in that limit, not a separate mechanism.**
+    Proposed shape (full design still to be finalized in the implementation
+    plan, not locked here): a new SOC-indexed curve on `BatterySpec` (same
+    `list[tuple[Sourced[float], Sourced[float]]]` shape as `ocv_curve_v`/
+    `r0_curve_ohm`) giving the BMS's SOC-based fast-charge current ceiling —
+    genuinely curved, not `max_charge_c_rate`'s flat cutoff — multiplied by
+    the EXISTING temperature-based `_hot_derate_scale` (reusing
+    `derate_temp_k`/`max_temp_k`, not inventing a second temperature curve),
+    matching this codebase's established pattern of independent
+    multiplicative derate factors rather than a true 2D lookup table.
+    Scope call: the BMS limit is Milestone E2e itself, not deferred to a
+    later E2e-2 — E2e is "the Leaf-in-Guam story," not just charge-mode
+    plumbing. **Dependency this surfaces for Q-0001:**
+    `advance_charging_step` has a third responsibility beyond "absorb
+    current" and "run the thermal solve" — it must also apply this limit;
+    the implementation plan must reflect that.
+    **New `BatterySpec`/`ChargingProfile` fields (Q-0002/Q-0003):** the
+    `I_max(SOC, T_cell)` curve above, plus `ChargingProfile.
+    dc_charge_power_kw: Sourced[float]` (named without "fast" — redundant
+    given "dc" already implies it), populated as a placeholder across all
+    six profiles like every other placeholder-stage field. **Flagged, not
+    blocking:** whether `dc_charge_power_kw` belongs on `ChargingProfile`
+    at all, or should split between a charger abstraction and a per-vehicle
+    max-acceptance-rate field — real effective charge rate is
+    `min(charger.max_kw, vehicle.max_acceptance_kw)`, and `ChargingProfile`
+    is currently the vehicle-usage-context abstraction, not a standalone
+    charger model. Not addressed in E2e; revisit whoever adds a second
+    charger type.
+    **Preconditioning (Q-0004): deferred entirely. The initial-pack-temp-
+    offset placeholder was explicitly considered and rejected, not just
+    deprioritized.** That placeholder models preconditioning's *effect*
+    without its *mechanism*, and the mechanism has a real energy cost that
+    feeds back into SOC and range — exactly what this simulator exists to
+    get right. A temp-offset placeholder hides that coupling, and
+    downstream code/analyses would start depending on its presence, making
+    it expensive to unwind once the real feature (preconditioning as
+    thermal load + SOC draw + arrival-temp effect, itself contingent on a
+    route/navigation concept this simulator doesn't have) actually lands as
+    its own later milestone. If a "what if preconditioned?" answer is
+    needed before then (e.g. for the mistake-library entry), it should be a
+    one-off analysis script re-running the sim with a warmer initial pack
+    temperature — an experiment, not a schema field. Every E2e fast-charge
+    characterization is therefore equally pessimistic across all six
+    profiles (no preconditioning benefit for anyone) — a defensible worst-
+    case baseline, but the Leaf-vs-Model3 fast-charge comparison will not
+    show its real differentiator until preconditioning's own milestone
+    lands. This is the single biggest remaining gap in the fast-charge
+    story, named as such deliberately, not buried.
+    **Entropic heat (Q-0005): accepted as inert for E2e, same as
+    everywhere else — but flagged with an actual concrete note, not a vague
+    caveat.** See `docs/model_reference.md`'s "Aging model confidence and
+    limits" section for the full note: ohmic heat scales with `I^2` while
+    entropic heat scales linearly with `I`, so entropic heat's relative
+    contribution shrinks at the high C-rates fast charging involves — real
+    physics, defensible without vehicle-specific data — but the resulting
+    SOH-loss bias magnitude is explicitly marked unknown/flagged, not
+    estimated, since no real `dOCV/dT` data exists for any profile to
+    ground a number.
