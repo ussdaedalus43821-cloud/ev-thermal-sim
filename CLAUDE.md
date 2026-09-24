@@ -820,25 +820,90 @@ not just *what* happened.
     `@pytest.mark.slow`, excluded from the default `pytest` run via
     `pyproject.toml`'s `addopts`): `max(5% relative, 0.1% absolute)` on
     cumulative SOH loss between a Tier-2 run and a continuous full-fidelity
-    Tier-1 reference run over the same 60-day window and IDENTICAL day-type
-    schedule/ambient lookups (the reference is built by chaining one
-    `run_scenario` call per day via `initial_state`, each day's ambient
-    pinned constant the same way `characterize_trip` already pins it for
-    one trip — same SOC-snapping approximation applied to the reference too,
-    via direct `SimState` patching, so the comparison isolates Tier-2's
-    approximation quality rather than being contaminated by `sim.py` having
-    no charger model at all). Result: tier1_loss=0.4601%, tier2_loss=0.4506%,
-    tolerance=0.1000% (the absolute floor binds here, since 5% of 0.46% is
-    tighter) — passes, and the loss magnitude sits well above the floor, so
-    this is a real discriminating test, not a trivial pass. The validation
-    scenario (`tests/test_sim._make_scenario`'s defaults: 25C mean climate,
-    50%-80% SOC oscillation) is a deliberate INTERMEDIATE scenario, not
-    tuned to reproduce either calibration anchor — extrapolated to ~2.8%/
-    year, which lands between the Seattle anchor's ~1%/year and the Guam
-    anchor's ~6%/year, consistent with sitting climatically and SOC-wise
-    between the two, not a sign of calibration drift.
-    E2c-0 unblocked this: before that fix, a 90-day continuous reference run
-    exceeded a 120s bounded timeout, so no window affordable pre-fix could
-    have produced a loss above the tolerance floor — the validation would
-    have passed trivially regardless of whether Tier-2's approximation was
-    any good.
+    Tier-1 reference run, same 60-day window and IDENTICAL day-type
+    schedule/ambient lookups for both. Initial version (validated only
+    against the synthetic test fixture, single once-per-day reference call)
+    passed; superseded by Milestone E2d below, which found and fixed two
+    real reference-generator fidelity gaps once run against real profiles.
+    E2c-0 unblocked this validation existing at all: before that fix, a
+    90-day continuous reference run exceeded a 120s bounded timeout, so no
+    window affordable pre-fix could have produced a loss above the
+    tolerance floor — the validation would have passed trivially regardless
+    of whether Tier-2's approximation was any good.
+  - **Milestone E2d (done): residual validation gap — real-profile
+    coverage.** E2d was originally scoped (before the E2e fast-charge split
+    existed) as "validation harness + tests," with the substantive
+    requirement stated separately in the original Tier-2 plan: validate
+    "for at least two profiles with meaningfully different thermal
+    architectures... so the validation isn't accidentally only checking the
+    case where ambient-coupling barely matters." E2c's harness delivered
+    the harness and tests, but validated only against the synthetic
+    `test_sim.py` fixture — never against any of the six real profiles.
+    That gap is what E2d closed: `test_tier2_matches_tier1_reference_
+    within_tolerance` is now `@pytest.mark.parametrize`d over the real
+    Nissan Leaf (no battery coolant loop, ambient-only coupling) and Tesla
+    Model 3 (battery in a multi-loop topology) profiles, chosen because
+    they bracket the architectural extremes Tier-2 could plausibly be
+    sensitive to — a real-profile-specific bug is most likely to surface at
+    one of these two ends, not in the four intermediate topologies. Both
+    profiles share the same placeholder aging coefficients (deliberately —
+    chemistry is a controlled variable, per `aging.py`'s own docstring);
+    this test validates topology sensitivity, not a chemistry claim.
+    **Running against real profiles surfaced two genuine reference-
+    generator fidelity gaps, not Tier-2 bugs** — both caught by direct
+    diagnostic investigation before either was accepted, per this project's
+    "surface deviations, verify before deciding" discipline:
+    1. **SOC top-up was scoped to trip days only, but `aux_current_a` draws
+       unconditionally every step regardless of driving state** (HVAC/
+       accessories don't stop when parked, and `sim.py` has no charger
+       model). A parked day with no top-up drained SOC continuously for the
+       full 86400s, hitting `soc_floor` (0.05) on some stretches — confirmed
+       by direct inspection. Since calendar aging has a real SOC-sensitivity
+       term, this made the reference age slower than intended, for a reason
+       unrelated to Tier-2's approximation quality. Fixed by re-patching SOC
+       to `typical_end_soc` every `_PARKED_STEP_S` (hourly) interval, not
+       just once per day — the within-day decline between patches still
+       biased the LIVE calendar-aging integral (computed every step inside
+       `advance_one_step`) even though the end-of-day snapshot looked fine.
+    2. **Ambient was pinned constant for an entire 86400s day**, reusing
+       `characterize_trip`'s own convention (appropriate for a 20-60 minute
+       trip, too coarse stretched over 24h). Pinning at `TRIP_HOUR_OF_DAY`
+       (08:00) systematically undersampled the daily cycle — 08:00 sits well
+       below the daily mean given `DIURNAL_PEAK_HOUR=15.0` — producing a
+       stable ~2K reference-vs-Tier-2 temperature bias, worst on the Leaf
+       (no coolant path to damp it out) and barely visible on the Model 3
+       (active coolant likely dominates over the ambient path). **Tier-2's
+       `relax_parked_temp_k` was already doing the more physically correct
+       thing** (hourly ambient variation during parked stretches) — the
+       reference was the less accurate side of the comparison here, not
+       Tier-2. Fixed by sub-stepping the reference's parked portions hourly
+       too, matching `relax_parked_temp_k`'s own `step_s` granularity
+       exactly (the trip portion itself still uses one constant ambient at
+       `TRIP_HOUR_OF_DAY`, where that approximation is legitimately small).
+    Diagnostic sequence, in case a similar discrepancy needs re-diagnosing
+    later: day-by-day SOH-loss decomposition showed tier2 consistently
+    ~1.6-1.7x tier1 on EVERY day including pure parked ones with no trip at
+    all — ruling out trip-phase-averaging (which would only show up on trip
+    days) and pointing at something present on every day, which is what led
+    to the SOC-integration-granularity diagnosis. The ambient fix was
+    verified in isolation first (closed the ~2K temp gap to <0.5K, confirmed
+    both fixes were independently necessary) before being combined with the
+    SOC fix. **Both fixes together produce a near-exact match**: Leaf
+    tier1_loss=0.4255%, tier2_loss=0.4221% (diff=0.0034%); Model3
+    tier1_loss=0.4344%, tier2_loss=0.4078% (diff=0.0266%) — both comfortably
+    inside the 0.1% absolute floor. Runtime: both profiles together, 60 days
+    each, ~22s under `pytest -m slow`.
+    **The SOC fix independently reproduces this file's own earlier estimate
+    almost exactly**: before the hourly-SOC fix (ambient fix alone), the
+    reference showed calendar aging running ~60-70% below Tier-2's rate —
+    matching the SOC-snapping deferred-work note's own prediction ("over-
+    estimates overnight calendar aging by roughly 50-70%") independently, via
+    a completely different code path. That's a second, unplanned form of
+    cross-validation this milestone produced.
+    **The validation harness is sensitive enough to detect a systematic ~2K
+    bias and a ~60-70% aging-rate discrepancy over a 60-day window** — proof
+    it discriminates real effects, not just that it happens to pass. If it
+    ever reports a similar discrepancy in the future, this entry's
+    diagnostic sequence (day-by-day decomposition, isolate-then-combine
+    fixes, check whether the "reference" or Tier-2 is actually the less
+    accurate side before assuming Tier-2 is wrong) is where to start.

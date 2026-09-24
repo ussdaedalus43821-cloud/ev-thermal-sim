@@ -25,10 +25,26 @@ from ev_thermal.long_horizon import (
     shuffle_day_type_schedule,
     simulate_long_horizon,
 )
-from ev_thermal.schema import ManufacturerProfile, Scenario, SimState, TripType
+from ev_thermal.profile_loader import PROFILES_DIR, load_profile
+from ev_thermal.schema import Climate, ManufacturerProfile, Scenario, SimState, TripType
 from ev_thermal.sim import run_scenario
-from tests.test_long_horizon import _make_day_type_mix, _make_long_horizon_profile
+from tests.test_long_horizon import _make_day_type_mix
 from tests.test_sim import _make_scenario
+
+_PARKED_STEP_S = 3600.0
+"""Reference-generator sub-stepping granularity during parked stretches --
+matches relax_parked_temp_k's own step_s exactly, for the reasons in
+_generate_tier1_reference_soh's docstring."""
+
+
+def _pinned_climate(base_climate: Climate, ambient_k: float) -> Climate:
+    return base_climate.model_copy(
+        update={
+            "mean_annual_temp_k": base_climate.mean_annual_temp_k.model_copy(update={"value": ambient_k}),
+            "seasonal_amplitude_k": base_climate.seasonal_amplitude_k.model_copy(update={"value": 0.0}),
+            "daily_amplitude_k": base_climate.daily_amplitude_k.model_copy(update={"value": 0.0}),
+        }
+    )
 
 
 def _generate_tier1_reference_soh(
@@ -37,65 +53,123 @@ def _generate_tier1_reference_soh(
     schedule: list[TripType | None],
     start_day_of_year: float,
 ) -> list[float]:
-    """Full-fidelity ground truth: one `run_scenario` call per day (86400s),
-    chained via `initial_state`, each day's ambient pinned constant to
-    `ambient_temp_k(climate, day_of_year, TRIP_HOUR_OF_DAY)` -- the same
-    per-day-constant-ambient approximation `characterize_trip` already uses,
-    extended day-by-day instead of once per archetype+bucket.
+    """Full-fidelity ground truth, chained via `initial_state` across many
+    `run_scenario` calls. Two granularity choices below were NOT arbitrary --
+    both were found necessary by direct empirical testing (a naive once-per-
+    day version passed with the synthetic test fixture but failed against
+    real profiles by a wide margin; each fix was verified in isolation before
+    being combined here):
 
-    Applies the SAME instantaneous SOC top-up `simulate_long_horizon` uses
-    after every trip day (patching `state.battery_soc` directly, the same
-    `SimState`-patching pattern `characterize_trip` already uses for initial
-    pack temp). `sim.py` has no charger model at all, so without this, the
-    reference's SOC would simply deplete toward zero with no recharging,
-    while Tier-2 holds it near `typical_end_soc` -- a real discrepancy
-    between the two, but about charging modeling, not about the aging-
-    extrapolation math this validation exists to check. Leaving it in would
-    contaminate the comparison with a confound unrelated to what's tested.
+    1. **Ambient is sub-stepped hourly during parked stretches**, not pinned
+       constant for the whole day. A trip's own portion still uses ONE
+       constant ambient at `TRIP_HOUR_OF_DAY` (matching `characterize_trip`'s
+       convention, appropriate for a 20-60 minute call) -- but extending that
+       same pin across a full 24h parked day is a much coarser approximation,
+       and it turned out to matter: pinning parked-day ambient at its 08:00
+       value undersamples the daily cycle (08:00 sits well below the daily
+       mean, given `DIURNAL_PEAK_HOUR=15.0`), producing a systematic ~2K
+       reference-vs-Tier-2 temperature bias -- confirmed by direct comparison
+       against the real Nissan Leaf profile (no coolant path to the battery
+       at all, so nothing damps this out) before this fix, and confirmed
+       collapsing to <0.5K after it. `relax_parked_temp_k` already varies
+       ambient hourly during parked periods; the reference needs to match or
+       exceed that granularity to be a fair ground truth, not the reverse.
+
+    2. **SOC is re-patched to `typical_end_soc` every `_PARKED_STEP_S`
+       interval, not once per day.** `sim.py` has no charger model, but
+       `aux_current_a` draws unconditionally every step regardless of driving
+       state -- so between SOC patches, the reference's SOC genuinely
+       declines from continuous aux draw, and `compute_aging_step`'s calendar
+       term (calculated live, every step, inside `advance_one_step`) sees
+       that declining trajectory. Tier-2's `parked_calendar_aging` uses a
+       single CONSTANT soc for an entire parked stretch (Tier-2 does not
+       model parked-period SOC depletion at all -- see CLAUDE.md's SOC-
+       snapping deferred-work note). A once-per-day patch only fixes the
+       END-of-day snapshot; the within-day decline still biases the live
+       calendar-aging integral low, since `calendar_aging_soc_sensitivity`
+       makes lower SOC age slower. Patching hourly instead keeps the
+       reference's SOC close to constant throughout, matching what Tier-2
+       already assumes -- this is not a new approximation, it's applying the
+       SAME already-accepted SOC-snapping simplification (see CLAUDE.md) at
+       the granularity needed for it to actually hold throughout a parked
+       stretch, not just at its boundary. Without this, the reference
+       exhibited a real ~60-70% calendar-aging-rate excess relative to
+       Tier-2 -- matching CLAUDE.md's own independent estimate of this
+       approximation's effect almost exactly, which is itself a form of
+       cross-validation for that estimate.
 
     Returns the per-day `battery_soh` trace, one value per schedule entry.
     """
+    typical_end_soc = scenario_template.charging_profile.typical_end_soc.value
     state: SimState | None = None
     soh_trace: list[float] = []
     for day_index, trip_type in enumerate(schedule):
-        day_of_year = start_day_of_year + day_index + TRIP_HOUR_OF_DAY / 24.0
-        day_ambient_k = ambient_temp_k(scenario_template.climate, day_of_year, TRIP_HOUR_OF_DAY)
-        climate = scenario_template.climate.model_copy(
-            update={
-                "mean_annual_temp_k": scenario_template.climate.mean_annual_temp_k.model_copy(
-                    update={"value": day_ambient_k}
-                ),
-                "seasonal_amplitude_k": scenario_template.climate.seasonal_amplitude_k.model_copy(
-                    update={"value": 0.0}
-                ),
-                "daily_amplitude_k": scenario_template.climate.daily_amplitude_k.model_copy(update={"value": 0.0}),
-            }
-        )
-        scenario = scenario_template.model_copy(update={"manufacturer_profile": profile, "climate": climate})
-        speed_fn = (
-            _speed_from_waypoints(_ARCHETYPES[trip_type].waypoints) if trip_type is not None else (lambda _t: 0.0)
-        )
-        result = run_scenario(
-            profile,
-            scenario,
-            duration_s=86400.0,
-            target_speed_mps=speed_fn,
-            initial_state=state,
-            record_interval_s=3600.0,
-        )
-        state = result.final_state
+        elapsed_s = 0.0
         if trip_type is not None:
-            state = state.model_copy(
-                update={"battery_soc": scenario_template.charging_profile.typical_end_soc.value}
+            trip_day_of_year = start_day_of_year + day_index + TRIP_HOUR_OF_DAY / 24.0
+            trip_ambient_k = ambient_temp_k(scenario_template.climate, trip_day_of_year, TRIP_HOUR_OF_DAY)
+            climate = _pinned_climate(scenario_template.climate, trip_ambient_k)
+            scenario = scenario_template.model_copy(update={"manufacturer_profile": profile, "climate": climate})
+            trip_duration_s = _ARCHETYPES[trip_type].duration_s
+            result = run_scenario(
+                profile,
+                scenario,
+                duration_s=trip_duration_s,
+                target_speed_mps=_speed_from_waypoints(_ARCHETYPES[trip_type].waypoints),
+                initial_state=state,
+                record_interval_s=3600.0,
             )
+            state = result.final_state.model_copy(update={"battery_soc": typical_end_soc})
+            elapsed_s = trip_duration_s
+
+        while elapsed_s < 86400.0:
+            step_dt_s = min(_PARKED_STEP_S, 86400.0 - elapsed_s)
+            hour_of_day = (elapsed_s % 86400.0) / 3600.0
+            day_of_year = start_day_of_year + day_index + elapsed_s / 86400.0
+            step_ambient_k = ambient_temp_k(scenario_template.climate, day_of_year, hour_of_day)
+            climate = _pinned_climate(scenario_template.climate, step_ambient_k)
+            scenario = scenario_template.model_copy(update={"manufacturer_profile": profile, "climate": climate})
+            result = run_scenario(
+                profile,
+                scenario,
+                duration_s=step_dt_s,
+                target_speed_mps=lambda _t: 0.0,
+                initial_state=state,
+                record_interval_s=3600.0,
+            )
+            state = result.final_state.model_copy(update={"battery_soc": typical_end_soc})
+            elapsed_s += step_dt_s
+
+        assert state is not None  # every day runs at least one parked sub-step (elapsed_s starts < 86400)
         soh_trace.append(state.battery_soh)
     return soh_trace
 
 
 @pytest.mark.slow
-def test_tier2_matches_tier1_reference_within_tolerance() -> None:
+@pytest.mark.parametrize(
+    "profile_yaml",
+    ["nissan_leaf.yaml", "tesla_model3.yaml"],
+    ids=["leaf", "model3"],
+)
+def test_tier2_matches_tier1_reference_within_tolerance(profile_yaml: str) -> None:
+    """Parameterized over two real profiles, not the synthetic test fixture --
+    Leaf (no battery coolant loop, ambient-only coupling) and Model 3 (battery
+    in a multi-loop topology) chosen because they bracket the architectural
+    extremes Tier-2 could plausibly be sensitive to. If a real-profile-specific
+    bug exists, it's most likely to surface at one of these two ends rather
+    than in the four intermediate topologies. Do not remove either case as
+    "redundant" without re-reading this reasoning.
+
+    Both YAMLs currently carry the same shared placeholder aging coefficients
+    (per aging.py's "chemistry is a controlled variable" decision, so any SOH
+    divergence between vehicles is attributable to thermal architecture, not
+    chemistry) -- that's expected and correct here, not an oversight. This
+    test validates Tier-2's fidelity to Tier-1's math for each vehicle's own
+    thermal behavior, not a claim that the two profiles should age
+    identically or differently from each other.
+    """
     n_days = 60
-    profile = _make_long_horizon_profile()
+    profile = load_profile(PROFILES_DIR / profile_yaml)
     scenario = _make_scenario(profile)
     day_type_mix = _make_day_type_mix()
     seed = 123

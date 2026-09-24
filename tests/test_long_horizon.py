@@ -10,6 +10,7 @@ profile, except where noted.
 from __future__ import annotations
 
 import math
+from typing import TypeVar
 
 import numpy as np
 import pytest
@@ -35,9 +36,11 @@ from ev_thermal.long_horizon import (
 from ev_thermal.schema import AnnualDayTypeMix, Confidence, ManufacturerProfile, Sourced, TripType
 from tests.test_sim import _make_profile, _make_scenario
 
+_T = TypeVar("_T")
 
-def _sourced(value):
-    return Sourced[type(value)](value=value, confidence=Confidence.LOW, source="test-fixture")
+
+def _sourced(value: _T) -> Sourced[_T]:
+    return Sourced[_T](value=value, confidence=Confidence.LOW, source="test-fixture")
 
 
 def _make_long_horizon_profile() -> ManufacturerProfile:
@@ -464,10 +467,18 @@ def test_simulate_long_horizon_deterministic_under_fixed_seed() -> None:
     profile = _make_long_horizon_profile()
     scenario = _make_scenario(profile)
     characterizations = characterize_all_trips(profile, scenario)
-    kwargs = dict(
-        profile=profile, trip_characterizations=characterizations, day_type_mix=_make_day_type_mix(),
-        climate=scenario.climate, charging_profile=scenario.charging_profile, duration_years=1, seed=99,
-    )
-    a = simulate_long_horizon(**kwargs)
-    b = simulate_long_horizon(**kwargs)
-    assert [c.battery_soh for c in a.checkpoints] == [c.battery_soh for c in b.checkpoints]
+    day_type_mix = _make_day_type_mix()
+
+    def run() -> list[float]:
+        result = simulate_long_horizon(
+            profile=profile,
+            trip_characterizations=characterizations,
+            day_type_mix=day_type_mix,
+            climate=scenario.climate,
+            charging_profile=scenario.charging_profile,
+            duration_years=1,
+            seed=99,
+        )
+        return [c.battery_soh for c in result.checkpoints]
+
+    assert run() == run()
