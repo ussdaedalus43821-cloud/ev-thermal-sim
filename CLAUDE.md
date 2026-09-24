@@ -60,6 +60,19 @@ not just *what* happened.
 - No speculative abstractions: build what the current task needs, not what
   a future task might need.
 
+## Design protocol
+
+- Read `docs/DESIGN_QUESTIONS.md` at the start of every session.
+- Before non-trivial changes, check whether the task's ambiguities are
+  already logged there.
+- If a decision is needed and isn't already answered, do NOT decide
+  silently — append it to `docs/DESIGN_QUESTIONS.md` as a new `Q-NNNN`
+  entry, following the format in that file's header.
+- When a question is answered/ratified, fold the resolution into this
+  file's "Known deferred work" log below (as already practiced), and
+  remove or mark resolved the corresponding entry in
+  `docs/DESIGN_QUESTIONS.md`.
+
 ## Known deferred work
 
 - **Derating migrated to controller.py; component modules kept their own
