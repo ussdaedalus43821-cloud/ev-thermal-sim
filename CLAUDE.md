@@ -1009,3 +1009,116 @@ not just *what* happened.
     SOH-loss bias magnitude is explicitly marked unknown/flagged, not
     estimated, since no real `dOCV/dT` data exists for any profile to
     ground a number.
+    **Implementation plan (ratified, not yet coded):**
+    - **`battery.available_charge_current_a` gains a new ceiling term,
+      integrated into its existing `min(...)`** — not a new clamp applied
+      elsewhere. New `BatterySpec.charge_current_limit_curve:
+      list[tuple[Sourced[float], Sourced[float]]]` (SOC -> a 0-1 scale
+      factor on `max_charge_c_rate`, same shape/interpolation convention as
+      `ocv_curve_v`/`r0_curve_ohm`, reusing the existing `_interpolate`
+      helper): `soc_charge_limit_a = _interpolate(spec.charge_current_
+      limit_curve, soc) * c_rate_limit_a`, then `return min(c_rate_limit_a,
+      voltage_limit_a, soc_charge_limit_a) * thermal_scale`. Deliberately
+      named without "fast_charge" — this is a general BMS charge-current
+      ceiling that applies to every charge path, including regen (a real
+      BMS limits charge current at high SOC regardless of source, which is
+      why EVs show reduced-regen warnings near full charge); scoping the
+      name to fast-charge-only would mislead a future reader into thinking
+      it's unreachable outside E2e. Behavioral check performed before
+      committing to this: no existing test asserts a regen/charge current
+      magnitude at SOC >= 60% — the two direct charge-direction unit tests
+      and the controller regen sign-check all run at `soc=0.5`, below the
+      curve's plateau threshold, confirmed by reading each test body
+      directly, not assumed. Full suite (default + slow) still gets
+      re-run after implementation as final confirmation.
+      Field docstring must state, explicitly, two things:
+      1. **Separable approximation**: SOC and temperature contributions
+         multiply (`soc_charge_limit_a` times the existing `hot_scale`/
+         `cold_scale`, not a joint 2D table). Real BMS limits can be
+         non-separable, particularly where the taper knee shifts with pack
+         temperature. Revisit if sourced curves become available.
+      2. **Identical across all six profiles by design, same reason as
+         `aging.py`'s shared coefficients**: any Leaf-vs-Model3 fast-charge
+         difference must emerge from thermal architecture (Leaf's
+         `hot_scale` dropping sharply from no active battery cooling, so
+         its *effective* charge ceiling throttles hard even though the
+         *curve* is identical) rather than from a profile-specific curve
+         shape. Giving the Leaf a steeper curve later would double-count
+         the throttle effect its own thermal design already produces and
+         break the causal attribution this comparison exists to
+         demonstrate.
+      Placeholder curve, `TODO(spec-sourcing)` like every other coefficient,
+      one fixed set of numbers, not a range: `(soc=0.0, scale=1.0)`,
+      `(0.6, 1.0)`, `(0.95, 0.2)`, `(1.0, 0.2)` — full ceiling to 60% SOC,
+      linear taper 60%->95% down to 20% of `max_charge_c_rate`, constant 20%
+      ceiling 95%->100%.
+    - **New `ChargingProfile.dc_charge_power_kw: Sourced[float]`** ("dc" 
+      already implies fast charging; "fast" was redundant) — "Charger-rated
+      power during a DC fast-charge session, in kW — distinct from
+      `charge_power_kw`, which is the predominant (typically slower)
+      charger type's power." Populated as a placeholder across all six
+      profiles. Flagged, not addressed in E2e: whether charge rate belongs
+      on `ChargingProfile` at all, or should split between a charger
+      abstraction and a per-vehicle max-acceptance-rate field, since real
+      effective charge rate is `min(charger.max_kw, vehicle.max_
+      acceptance_kw)` — revisit whoever adds a second charger type.
+    - **`sim.advance_charging_step`**, peer to `advance_one_step`, reusing
+      `SimStepRecord`/`SimState` unchanged (driving-specific fields --
+      `speed_mps`, `requested_torque_nm`, etc. -- just stay 0.0/unchanged,
+      same as they already do whenever `_is_driving` is false). Pipeline:
+      (1) `charge_current_request_a = -charge_power_request_w /
+      state.battery_voltage_v` (negative = charging, constant-power
+      request, same conversion convention `advance_one_step` already uses
+      elsewhere); (2) `battery.compute_battery_electrical_step` — the SAME
+      call `advance_one_step` makes, unchanged, which already routes
+      through the newly-extended `available_charge_current_a` with no
+      further code needed for the BMS limit to apply; (3) `aging.
+      compute_aging_step` — charging ages the battery too (cycle aging
+      from real throughput, calendar aging from real temp/soc), same call
+      as driving; (4) `controller.step_controller` called with
+      `driver_torque_request_nm=0.0`, `speed_rad_per_s=0.0` for cooling
+      duty only — its torque-arbitration output is unused, only pump/fan
+      duty matters, reusing existing thermostat-driven logic rather than
+      writing a second cooling-duty function; (5) `step_cooling` per loop,
+      then one combined `step_thermal_network` solve over the SAME network
+      `advance_one_step` builds, with motor/inverter heat inputs at zero;
+      (6) no vehicle-speed advance (`speed_mps` stays 0.0 always), no
+      odometer change. dt: reuse `scenario.dt_policy.min_dt_s` throughout,
+      stability-checked via the existing `_stabilize_dt_s` (reused
+      unchanged) but WITHOUT `_choose_target_dt_s`'s tier-selection logic —
+      charging has only one regime (actively charging), not a driving-vs-
+      parked choice to make.
+    - **`sim.run_charging_session`**, peer to `run_scenario`, looping
+      `advance_charging_step` for a FIXED `duration_s` (not an open-ended
+      "until target SOC reached" condition) — matches every other
+      archetype's fixed-duration convention; if the placeholder taper
+      curve means a session doesn't reach a realistic end SOC in that fixed
+      duration, that's itself diagnostic information worth surfacing in
+      characterization output, not something to silently paper over with
+      an open-ended stopping condition.
+    - **`long_horizon.characterize_fast_charge_session`**, peer to
+      `characterize_trip`, calling `run_charging_session` at one constant
+      pinned ambient bucket (same convention as `characterize_trip`),
+      producing the SAME `TripCharacterization` shape so `simulate_long_
+      horizon`/`apply_trip_start_offset`/`_interpolate_characterization`
+      need zero changes to consume it (`_archetype_assumed_start_temp_k`'s
+      existing `else` branch already returns plain `ambient_bucket_temp_k`
+      for any type that isn't `COLD_START_COMMUTE`/`HOT_SOAK_COMMUTE`,
+      which already correctly covers `FAST_CHARGE_SESSION` with no code
+      change). `characterize_all_trips` gets one added call for this
+      function, merged into the same returned dict — `FAST_CHARGE_SESSION`
+      is NOT added to `_ARCHETYPES`/`characterize_trip`'s dispatch table,
+      since it needs its own charging-mode pipeline, not the driving one.
+      Two phases (`ramp`, `taper`), boundary at the SOC curve's 60% knee —
+      since phase boundaries for every other archetype are fixed TIME
+      values but this one is SOC-triggered, `characterize_fast_charge_
+      session` scans the run's time series for when SOC crosses 0.6 and
+      converts that to a time boundary, then feeds it into the existing,
+      unchanged `_phase_aging` (which only takes time boundaries) — no new
+      phase-aggregation mechanism needed.
+      Session start/end SOC: reuses `charging_profile.typical_start_soc`/
+      `typical_end_soc` (no new field) — flagged as a real simplification,
+      not fully realistic (real fast-charge sessions often start from a
+      more depleted SOC than a "typical daily trip" start), accepted to
+      avoid inventing a field beyond what was explicitly scoped; revisit if
+      it produces an implausible session shape once real numbers are seen.
