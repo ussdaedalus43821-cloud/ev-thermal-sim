@@ -707,20 +707,42 @@ not just *what* happened.
     from "why did SOH drop faster in year 7," which a replay-based Tier-2
     design cannot currently answer. Revisit only if a long-horizon causal-
     trace feature is explicitly wanted; not a trivial retrofit.
-  - **Milestone E2c (planned, not yet implemented):** the Tier-2
-    extrapolation engine. Day-type sampling is a deterministic shuffle, not
-    i.i.d. random draws: the exact multiset implied by `AnnualDayTypeMix.
-    occurrences_per_year` (e.g. exactly 40 highway days if that's the
-    stated count, not ~40 in expectation) has its order shuffled via the
-    existing fork-safe `numpy.random.default_rng(seed)` convention. This
-    is deliberately NOT i.i.d. sampling — that would make validation
-    flaky (annual counts would only match in expectation) and conflates
-    "does Tier-2 approximate Tier-1's math" with "did two random usage
-    realizations happen to age similarly." i.i.d. sampling is a legitimate
-    future Monte Carlo concern, not adopted here.
-    Parked-period pack temperature uses a closed-form `dT/dt =
-    -(T-T_ambient(t))/tau` relaxation (hourly quadrature, not per-second
-    stepping) with `tau = battery.thermal_node.resistance_to_ambient_k_per_w
+  - **Milestone E2c (done):** the Tier-2 extrapolation engine
+    (`shuffle_day_type_schedule`, `relax_parked_temp_k`,
+    `parked_calendar_aging`, `apply_trip_start_offset`,
+    `_interpolate_characterization`, `characterize_all_trips`,
+    `simulate_long_horizon`, all in `long_horizon.py`). No new schema types
+    — everything needed (`LongHorizonCheckpoint`, `LongHorizonRunResult`,
+    `TripCharacterization`) already existed from Milestone E2a.
+    `characterize_all_trips(profile, scenario_template, n_buckets)` is a
+    separate, explicitly-called function (not built internally by
+    `simulate_long_horizon`, which requires it as a plain argument) —
+    deliberately, so the expensive Tier-1 half (looping `characterize_trip`
+    over 4 archetypes x 4 buckets) is cacheable/reusable across many
+    `simulate_long_horizon` calls with different `day_type_mix`/`seed`/
+    `duration_years`, which matters once Monte Carlo (500 samples) exists:
+    without this split, the natural failure mode is re-running all 16
+    Tier-1 characterizations inside a sampling loop, exactly the cost
+    two-tier exists to avoid.
+    Day-type sampling is a deterministic shuffle, not i.i.d. random draws:
+    the exact multiset implied by `AnnualDayTypeMix.occurrences_per_year`
+    (e.g. exactly 40 highway days if that's the stated count, not ~40 in
+    expectation) has its order shuffled via the existing fork-safe
+    `numpy.random.default_rng(seed)` convention, RNG stream advancing
+    continuously across years (not reseeded per year). Deliberately NOT
+    i.i.d. sampling — that would make validation flaky (annual counts
+    would only match in expectation) and conflates "does Tier-2
+    approximate Tier-1's math" with "did two random usage realizations
+    happen to age similarly." i.i.d. sampling is a legitimate future Monte
+    Carlo concern, not adopted here.
+    **Parked-period pack temperature is NOT a single global closed-form
+    solution against the sinusoidal ambient forcing term** (that would
+    need an Arrhenius-of-sinusoid integral derived for a placeholder-
+    coefficient model) — it's exact per-interval exponential relaxation,
+    `T[i+1] = Ta(t_i) + (T[i]-Ta(t_i))*exp(-dt/tau)`, treating ambient as
+    piecewise-constant within each `step_s` (default 3600s) interval. Exact
+    given that approximation, much simpler to implement/test than the full
+    closed form. `tau = battery.thermal_node.resistance_to_ambient_k_per_w
     .value * battery.thermal_node.capacitance_j_per_k.value` — the SAME
     node-level fields the ambient-coupling milestone (Milestone A, earlier
     in this file) added, no new lumped constant. If
@@ -731,22 +753,29 @@ not just *what* happened.
     trajectory, `LongHorizonCheckpoint` has no field for it, and physically
     they re-equilibrate to near-ambient within minutes (far smaller thermal
     mass than the pack), making multi-hour-to-day tracking moot.
-    **Trip-start chaining uses a linear offset correction, not the
-    characterized trip's phases as-is.** Naively replaying a
-    `TripCharacterization`'s phases regardless of the actual pack
-    temperature left by the preceding parked period would silently break
-    physical chaining at the trip-start boundary. Instead: every phase's
-    `mean_cell_temp_k`/`peak_cell_temp_k` is shifted by a constant
-    `(actual_chained_start_temp - archetype_assumed_start_temp)` at replay
-    time, justified by `thermal.py`'s linear (explicit-Euler) RC network —
-    a constant initial-condition offset propagates as a constant offset
-    through a linear system. This is an approximation, not exact: R0's
-    Arrhenius resistance term and cooling effectiveness both have real
-    temperature dependence, so error grows with offset magnitude. A more
-    exact alternative exists (characterize each trip type at several fixed
+    **Trip-start chaining uses a linear offset correction
+    (`apply_trip_start_offset`), not the characterized trip's phases as-is.**
+    Every phase's `mean_cell_temp_k`/`peak_cell_temp_k` is shifted by a
+    constant `(actual_chained_start_temp - archetype_assumed_start_temp)`
+    at replay time, justified by `thermal.py`'s linear (explicit-Euler) RC
+    network — a constant initial-condition offset propagates as a constant
+    offset through a linear system. Approximate, not exact: R0's Arrhenius
+    resistance term and cooling effectiveness both have real temperature
+    dependence, so error grows with offset magnitude. A more exact
+    alternative exists (characterize each trip type at several fixed
     pack-start offsets, interpolated, the same way ambient is bucketed) but
     multiplies characterization cost 4x — not adopted now; revisit only if
     validation shows offset error dominates.
+    Every trip occurrence's ambient lookup uses a fixed
+    `TRIP_HOUR_OF_DAY = 8.0` (08:00 local) — morning commute is the modal
+    trip time, and a fixed hour keeps validation deterministic. Intra-day
+    trip-time distribution is not modeled (a highway trip or a fast-charge
+    session at a different hour gets the same 08:00 lookup as a commute).
+    Revisit if trip-time-of-day variance is ever wanted. Day-0's initial
+    pack temperature separately uses `_START_OF_DAY_HOUR = 12.0` (noon) —
+    a better representative of "typical day" pack temp than 08:00 in most
+    climates, since it's closer to the daily mean; cleanly separated from
+    `TRIP_HOUR_OF_DAY` since the two answer different questions.
     `LongHorizonCheckpoint`s are recorded at DAILY cadence (~11,000 over a
     30-year run, well under 1MB total) — unlike `record_interval_s`
     decimation (which exists because per-second time series over decades
@@ -756,13 +785,60 @@ not just *what* happened.
     Maximizes fork-point granularity for a long-horizon run. Weekly/monthly
     dashboard views, if wanted later, are a downstream aggregation of the
     daily series, not a different Tier-2 output shape.
-    Validation harness: `max(5% relative, 0.1% absolute)` on cumulative SOH
-    loss between a Tier-2 run and a continuous full-fidelity Tier-1
-    reference run over the same window — the absolute floor exists because
-    5%-relative-alone is degenerate at short/low-magnitude horizons (a
-    7-day reference window's ~0.016% SOH loss sits below what 5% relative
-    can meaningfully discriminate, which is exactly why E2c-0 had to land
-    first: at any window affordable before that fix, the test would pass
-    trivially regardless of whether Tier-2's approximation is any good).
-    With E2c-0 landed, a real 30-90 day reference window is affordable
-    (benchmarked: ~30s extrapolated for 90 days, vs. >120s pre-fix).
+    **SOC is topped up instantaneously to `charging_profile.typical_end_soc`
+    at the end of every trip day, held constant through the following
+    parked period — a real approximation that needs its own deferred-work
+    flag, not just a note.** Real behavior is: SOC depletes during the
+    drive, sits at the depleted value until charging begins (often hours
+    later), then charges back up. Because calendar aging has a strong SOC-
+    sensitivity term (`calendar_aging_soc_sensitivity=1.0` means 80% SOC
+    ages ~1.5x baseline, 40% ages ~0.9x), treating the overnight parked
+    period as always-at-`typical_end_soc` overestimates overnight calendar
+    aging by roughly 50-70% in typical usage, since it sees the high end of
+    the SOC window rather than the average. **The two calibration anchors
+    (Leaf/Guam, Model3/Seattle — see `aging.py`'s "Coefficient provenance")
+    were both derived with this same snapping assumption already baked in
+    (constant SOC for the anchor's whole duration). Changing this
+    approximation now breaks the anchors — it requires re-calibrating the
+    coefficients, not just swapping in better SOC dynamics.** Revisit
+    alongside a full charger model, together, not separately.
+    **Shared test fixture `_make_profile()` (in `test_sim.py`) is
+    deliberately adiabatic** (no `resistance_to_ambient_k_per_w` on its
+    battery node) — correct for the short-horizon tests it was built for,
+    but produces genuine unbounded thermal runaway in any long-horizon
+    context (confirmed: 302K -> 2544K over a 5-year `simulate_long_horizon`
+    run against it as-is, vs. bounded 289-309K / 11% SOH loss over 5 years
+    against the real Nissan Leaf profile, which has ambient coupling). Kept
+    as-is rather than changed, since existing short-horizon tests depend on
+    its exact behavior and changing it risks silent test drift. Added
+    `_make_long_horizon_profile()` in `test_long_horizon.py` (the shared
+    fixture plus a placeholder ambient-coupling patch) for any test
+    requiring realistic long-horizon behavior — `_make_profile()` itself now
+    carries an explicit docstring warning. Do not naively reuse
+    `_make_profile()` for long-horizon work.
+    Validation harness (`test_long_horizon_validation.py`, marked
+    `@pytest.mark.slow`, excluded from the default `pytest` run via
+    `pyproject.toml`'s `addopts`): `max(5% relative, 0.1% absolute)` on
+    cumulative SOH loss between a Tier-2 run and a continuous full-fidelity
+    Tier-1 reference run over the same 60-day window and IDENTICAL day-type
+    schedule/ambient lookups (the reference is built by chaining one
+    `run_scenario` call per day via `initial_state`, each day's ambient
+    pinned constant the same way `characterize_trip` already pins it for
+    one trip — same SOC-snapping approximation applied to the reference too,
+    via direct `SimState` patching, so the comparison isolates Tier-2's
+    approximation quality rather than being contaminated by `sim.py` having
+    no charger model at all). Result: tier1_loss=0.4601%, tier2_loss=0.4506%,
+    tolerance=0.1000% (the absolute floor binds here, since 5% of 0.46% is
+    tighter) — passes, and the loss magnitude sits well above the floor, so
+    this is a real discriminating test, not a trivial pass. The validation
+    scenario (`tests/test_sim._make_scenario`'s defaults: 25C mean climate,
+    50%-80% SOC oscillation) is a deliberate INTERMEDIATE scenario, not
+    tuned to reproduce either calibration anchor — extrapolated to ~2.8%/
+    year, which lands between the Seattle anchor's ~1%/year and the Guam
+    anchor's ~6%/year, consistent with sitting climatically and SOC-wise
+    between the two, not a sign of calibration drift.
+    E2c-0 unblocked this: before that fix, a 90-day continuous reference run
+    exceeded a 120s bounded timeout, so no window affordable pre-fix could
+    have produced a loss above the tolerance floor — the validation would
+    have passed trivially regardless of whether Tier-2's approximation was
+    any good.

@@ -54,6 +54,15 @@ def _sourced(value: float) -> Sourced[float]:
 
 
 def _make_profile() -> ManufacturerProfile:
+    """WARNING: this fixture's battery is fully adiabatic (no
+    `resistance_to_ambient_k_per_w`). It is suitable for short-horizon tests
+    only. Any long-horizon or thermal-soak test must use
+    `tests.test_long_horizon._make_long_horizon_profile()` instead, or it will
+    produce unbounded temperature growth (confirmed: 302K -> 2544K over a
+    5-year `simulate_long_horizon` run against this fixture as-is, vs. bounded
+    289-309K against the real Nissan Leaf profile, which has ambient
+    coupling). See CLAUDE.md's Milestone E2c note.
+    """
     battery_spec = _make_battery_spec()
     thermal_architecture = ThermalArchitecture(
         cooling_loops=[_make_cooling_loop()],

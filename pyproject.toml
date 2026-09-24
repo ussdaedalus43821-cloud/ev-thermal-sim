@@ -49,3 +49,5 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["slow: full-fidelity multi-day reference runs, excluded by default (run with `pytest -m slow`)"]
+addopts = "-m 'not slow'"

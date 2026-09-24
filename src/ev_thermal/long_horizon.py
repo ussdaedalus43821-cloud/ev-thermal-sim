@@ -32,8 +32,16 @@ import math
 from collections.abc import Callable
 from dataclasses import dataclass
 
+import numpy as np
+
+from ev_thermal.aging import compute_aging_step
 from ev_thermal.schema import (
+    AnnualDayTypeMix,
+    BatterySpec,
+    ChargingProfile,
     Climate,
+    LongHorizonCheckpoint,
+    LongHorizonRunResult,
     ManufacturerProfile,
     Scenario,
     TripCharacterization,
@@ -331,3 +339,337 @@ def characterize_trip(
         final_soc=result.final_state.battery_soc,
         final_node_temps_k=result.final_state.node_temps_k,
     )
+
+
+def characterize_all_trips(
+    profile: ManufacturerProfile,
+    scenario_template: Scenario,
+    n_buckets: int = N_AMBIENT_BUCKETS,
+) -> dict[TripType, list[TripCharacterization]]:
+    """Runs `characterize_trip` once per implemented `TripType` x ambient bucket,
+    for `profile` under `scenario_template`'s climate. The expensive half of the
+    two-tier split -- call once, reuse the result across many
+    `simulate_long_horizon` calls (different day_type_mix, duration_years, or
+    seed) rather than re-running Tier-1 physics per call. Excludes
+    `TripType.FAST_CHARGE_SESSION` (see `characterize_trip`).
+    """
+    buckets = ambient_bucket_temps_k(scenario_template.climate, n_buckets)
+    return {
+        trip_type: [characterize_trip(profile, scenario_template, trip_type, bucket) for bucket in buckets]
+        for trip_type in _ARCHETYPES
+    }
+
+
+DAYS_PER_YEAR = 365
+
+TRIP_HOUR_OF_DAY = 8.0
+"""All trip occurrences use a fixed 08:00 local ambient lookup for ambient-
+bucket-interpolation purposes -- morning commute is the modal trip time, and
+a fixed hour keeps validation deterministic. Intra-day trip-time distribution
+is not modeled (a highway trip or a fast-charge session at a different hour
+gets the same 08:00 lookup as a commute). Revisit if trip-time-of-day
+variance is ever wanted. See CLAUDE.md's Milestone E2c note."""
+
+_START_OF_DAY_HOUR = 12.0
+"""Hour used only for Tier-2 day-0's initial pack-temperature lookup (not for
+daily trip occurrences, see TRIP_HOUR_OF_DAY) -- noon, a simple, documented
+choice; the day-of-year choice (see _default_start_day_of_year) is what
+actually matters for landing day-0 near the climate's annual mean."""
+
+
+def _default_start_day_of_year() -> float:
+    """Day of year where Climate's annual cosine crosses its mean (ambient ==
+    mean_annual_temp_k, ignoring the smaller diurnal term) -- a phase-derived
+    'typical day' default for a long-horizon run's day 0, per Milestone E2's
+    initial-conditions decision (day-0 pack temp = ambient at this day).
+    """
+    return ANNUAL_PEAK_DAY_OF_YEAR + 365.25 / 4.0
+
+
+def shuffle_day_type_schedule(
+    day_type_mix: list[AnnualDayTypeMix], n_days: int, rng: np.random.Generator
+) -> list[TripType | None]:
+    """Builds the exact multiset of trip-type occurrences implied by
+    `day_type_mix` (not sampled -- if a TripType has occurrences_per_year=40,
+    exactly 40 days per year are that type, not ~40 in expectation), pads the
+    remainder of each year with `None` (parked days), and shuffles day ORDER
+    within each year via `rng`.
+
+    Deterministic under a fixed `rng` state; the RNG stream advances
+    continuously across years (not reseeded per year), matching
+    `SimState.rng_state`'s existing fork-safe convention.
+    """
+    year_template: list[TripType | None] = []
+    for entry in day_type_mix:
+        year_template.extend([entry.trip_type] * entry.occurrences_per_year.value)
+    if len(year_template) > DAYS_PER_YEAR:
+        raise ValueError(
+            f"day_type_mix occurrences_per_year sum to {len(year_template)}, "
+            f"more than {DAYS_PER_YEAR} days in a year"
+        )
+    year_template.extend([None] * (DAYS_PER_YEAR - len(year_template)))
+
+    schedule: list[TripType | None] = []
+    n_years = (n_days + DAYS_PER_YEAR - 1) // DAYS_PER_YEAR
+    for _ in range(n_years):
+        year = list(year_template)
+        rng.shuffle(year)
+        schedule.extend(year)
+    return schedule[:n_days]
+
+
+def relax_parked_temp_k(
+    start_temp_k: float,
+    tau_s: float | None,
+    ambient_fn: Callable[[float], float],
+    start_t_s: float,
+    duration_s: float,
+    step_s: float = 3600.0,
+) -> list[tuple[float, float]]:
+    """Exact per-interval exponential relaxation toward ambient, treating ambient
+    as piecewise-constant within each `step_s` interval -- NOT a single closed-
+    form solution against the full sinusoidal forcing term, which would need an
+    Arrhenius-of-sinusoid integral derived for a placeholder-coefficient model.
+    `T[i+1] = Ta(t_i) + (T[i] - Ta(t_i)) * exp(-dt/tau_s)` is exact within each
+    interval given that approximation.
+
+    `tau_s=None` means the node has no ambient path
+    (`BatterySpec.thermal_node.resistance_to_ambient_k_per_w` is `None`) -- pack
+    temp holds constant, matching that field's documented adiabatic semantics.
+
+    Returns `[(elapsed_t_s, pack_temp_k), ...]` at each step boundary, including
+    the starting point, for calendar-aging quadrature (`parked_calendar_aging`).
+    """
+    samples: list[tuple[float, float]] = [(start_t_s, start_temp_k)]
+    if duration_s <= 0.0:
+        return samples
+    temp_k = start_temp_k
+    elapsed_s = 0.0
+    while elapsed_s < duration_s:
+        dt = min(step_s, duration_s - elapsed_s)
+        if tau_s is not None:
+            ambient = ambient_fn(start_t_s + elapsed_s)
+            temp_k = ambient + (temp_k - ambient) * math.exp(-dt / tau_s)
+        elapsed_s += dt
+        samples.append((start_t_s + elapsed_s, temp_k))
+    return samples
+
+
+def parked_calendar_aging(spec: BatterySpec, soc: float, temp_samples: list[tuple[float, float]]) -> float:
+    """Sums calendar_delta (`aging.compute_aging_step`, `applied_current_a=0.0`
+    so `cycle_delta` is exactly zero) across consecutive `temp_samples`
+    intervals from `relax_parked_temp_k`, using each interval's start-of-
+    interval temperature (left Riemann, matching `_phase_aging`'s convention).
+    `soc` is held constant across the whole parked period -- no charger model
+    exists yet (see CLAUDE.md's dt-policy "or charging" gap).
+    """
+    total = 0.0
+    for (t0, temp0), (t1, _temp1) in zip(temp_samples, temp_samples[1:], strict=False):
+        result = compute_aging_step(
+            spec, soh=1.0, cell_temp_k=temp0, soc=soc, applied_current_a=0.0, dt_s=t1 - t0
+        )
+        total += result.calendar_delta
+    return total
+
+
+def _archetype_assumed_start_temp_k(
+    trip_type: TripType, ambient_bucket_temp_k_value: float, spec: BatterySpec
+) -> float:
+    if trip_type is TripType.COLD_START_COMMUTE:
+        return ambient_bucket_temp_k_value - spec.cold_soak_offset_k.value
+    if trip_type is TripType.HOT_SOAK_COMMUTE:
+        return ambient_bucket_temp_k_value + spec.hot_soak_offset_k.value
+    return ambient_bucket_temp_k_value
+
+
+def apply_trip_start_offset(
+    characterization: TripCharacterization, actual_start_temp_k: float, spec: BatterySpec
+) -> TripCharacterization:
+    """Shifts every phase's mean/peak cell temp by a constant
+    `(actual_start_temp_k - archetype_assumed_start_temp_k)`, so a trip
+    occurrence chains from the pack temp the preceding parked period actually
+    left behind, rather than always replaying the characterization's own fixed
+    starting condition.
+
+    Approximate, not exact: `thermal.py`'s RC network is linear (explicit
+    Euler), so a constant initial-condition offset propagates as a constant
+    offset through it -- but R0's Arrhenius term and cooling effectiveness both
+    have real temperature dependence, so error grows with offset magnitude. A
+    more exact alternative (characterizing each trip type at several fixed
+    pack-start offsets, interpolated like ambient buckets) exists but
+    multiplies characterization cost 4x -- not adopted; revisit only if
+    validation shows offset error dominates (see CLAUDE.md).
+
+    Only the battery node's `final_node_temps_k` entry is shifted (motor/
+    inverter aren't affected by the battery's own soak history, and Tier-2
+    doesn't track them between trips anyway -- see CLAUDE.md).
+    """
+    assumed_start_temp_k = _archetype_assumed_start_temp_k(
+        characterization.trip_type, characterization.ambient_bucket_temp_k, spec
+    )
+    offset_k = actual_start_temp_k - assumed_start_temp_k
+    shifted_phases = [
+        phase.model_copy(
+            update={
+                "mean_cell_temp_k": phase.mean_cell_temp_k + offset_k,
+                "peak_cell_temp_k": phase.peak_cell_temp_k + offset_k,
+            }
+        )
+        for phase in characterization.phases
+    ]
+    battery_node_name = spec.thermal_node.name
+    shifted_final_temps_k = dict(characterization.final_node_temps_k)
+    shifted_final_temps_k[battery_node_name] = shifted_final_temps_k[battery_node_name] + offset_k
+    return characterization.model_copy(update={"phases": shifted_phases, "final_node_temps_k": shifted_final_temps_k})
+
+
+def _interpolate_characterization(
+    characterizations: list[TripCharacterization], ambient_temp_k_value: float
+) -> TripCharacterization:
+    """Linearly interpolates between the two ambient-bucketed `TripCharacterization`s
+    nearest `ambient_temp_k_value` (`characterizations` must be sorted ascending
+    by `ambient_bucket_temp_k`, as `ambient_bucket_temps_k` already returns them).
+    Clamps to the nearest edge bucket if outside the characterized range -- a
+    defensive fallback, not a silent-extrapolation policy; shouldn't trigger
+    given the bucket grid spans the climate's own full annual+diurnal range.
+    """
+    if ambient_temp_k_value <= characterizations[0].ambient_bucket_temp_k:
+        return characterizations[0]
+    if ambient_temp_k_value >= characterizations[-1].ambient_bucket_temp_k:
+        return characterizations[-1]
+    for lo, hi in zip(characterizations, characterizations[1:], strict=False):
+        if not (lo.ambient_bucket_temp_k <= ambient_temp_k_value <= hi.ambient_bucket_temp_k):
+            continue
+        span = hi.ambient_bucket_temp_k - lo.ambient_bucket_temp_k
+        fraction = 0.0 if span == 0.0 else (ambient_temp_k_value - lo.ambient_bucket_temp_k) / span
+        phases = [
+            TripPhaseAging(
+                phase_name=lo_phase.phase_name,
+                duration_s=lo_phase.duration_s + fraction * (hi_phase.duration_s - lo_phase.duration_s),
+                mean_cell_temp_k=lo_phase.mean_cell_temp_k
+                + fraction * (hi_phase.mean_cell_temp_k - lo_phase.mean_cell_temp_k),
+                peak_cell_temp_k=lo_phase.peak_cell_temp_k
+                + fraction * (hi_phase.peak_cell_temp_k - lo_phase.peak_cell_temp_k),
+                mean_soc=lo_phase.mean_soc + fraction * (hi_phase.mean_soc - lo_phase.mean_soc),
+                mean_c_rate=lo_phase.mean_c_rate + fraction * (hi_phase.mean_c_rate - lo_phase.mean_c_rate),
+                throughput_ah=lo_phase.throughput_ah + fraction * (hi_phase.throughput_ah - lo_phase.throughput_ah),
+            )
+            for lo_phase, hi_phase in zip(lo.phases, hi.phases, strict=True)
+        ]
+        final_node_temps_k = {
+            name: temp + fraction * (hi.final_node_temps_k[name] - temp) for name, temp in lo.final_node_temps_k.items()
+        }
+        return TripCharacterization(
+            trip_type=lo.trip_type,
+            ambient_bucket_temp_k=ambient_temp_k_value,
+            phases=phases,
+            odometer_km_delta=lo.odometer_km_delta + fraction * (hi.odometer_km_delta - lo.odometer_km_delta),
+            final_soc=lo.final_soc + fraction * (hi.final_soc - lo.final_soc),
+            final_node_temps_k=final_node_temps_k,
+        )
+    raise AssertionError("unreachable: ambient_temp_k_value within [lo, hi] but no bracketing pair matched")
+
+
+def simulate_long_horizon(
+    profile: ManufacturerProfile,
+    trip_characterizations: dict[TripType, list[TripCharacterization]],
+    day_type_mix: list[AnnualDayTypeMix],
+    climate: Climate,
+    charging_profile: ChargingProfile,
+    duration_years: int,
+    seed: int,
+    start_day_of_year: float | None = None,
+) -> LongHorizonRunResult:
+    """Tier-2: extrapolates `trip_characterizations` (from `characterize_all_trips`,
+    called once and reused -- see that function's docstring) across a
+    `duration_years` horizon via day-type weighting.
+
+    Does not run per-second physics. Per simulated day, either replays an
+    ambient-interpolated, offset-corrected `TripCharacterization` (see
+    `apply_trip_start_offset`) for that day's driving, or relaxes the pack
+    toward ambient for the whole day (`relax_parked_temp_k`). Battery-only:
+    motor/inverter are not tracked between trips (no aging model consumes
+    their trajectory, and they re-equilibrate to near-ambient within minutes
+    of any real parked period -- see CLAUDE.md).
+
+    SOC is topped up instantaneously to `charging_profile.typical_end_soc`
+    after every trip day (Tier-2 doesn't model charge-session physics at
+    phase level) and held constant through parked periods (no charger model
+    exists yet).
+    """
+    spec = profile.battery
+    battery_node_name = spec.thermal_node.name
+    tau_s = (
+        None
+        if spec.thermal_node.resistance_to_ambient_k_per_w is None
+        else spec.thermal_node.resistance_to_ambient_k_per_w.value * spec.thermal_node.capacitance_j_per_k.value
+    )
+
+    day0 = start_day_of_year if start_day_of_year is not None else _default_start_day_of_year()
+    pack_temp_k = ambient_temp_k(climate, day0, _START_OF_DAY_HOUR)
+    soc = charging_profile.typical_start_soc.value
+    soh = 1.0
+    odometer_km = 0.0
+    calendar_loss_cumulative = 0.0
+    cycle_loss_cumulative = 0.0
+
+    def ambient_fn(elapsed_s: float) -> float:
+        day_of_year = day0 + elapsed_s / 86400.0
+        hour_of_day = (elapsed_s % 86400.0) / 3600.0
+        return ambient_temp_k(climate, day_of_year, hour_of_day)
+
+    rng = np.random.default_rng(seed)
+    schedule = shuffle_day_type_schedule(day_type_mix, duration_years * DAYS_PER_YEAR, rng)
+
+    checkpoints: list[LongHorizonCheckpoint] = []
+    for day_index, trip_type in enumerate(schedule):
+        day_start_s = day_index * 86400.0
+        if trip_type is not None:
+            day_ambient_k = ambient_fn(day_start_s + TRIP_HOUR_OF_DAY * 3600.0)
+            characterization = _interpolate_characterization(trip_characterizations[trip_type], day_ambient_k)
+            characterization = apply_trip_start_offset(characterization, pack_temp_k, spec)
+
+            for phase in characterization.phases:
+                current_a = phase.mean_c_rate * spec.capacity_nominal_ah.value
+                result = compute_aging_step(
+                    spec,
+                    soh=soh,
+                    cell_temp_k=phase.mean_cell_temp_k,
+                    soc=phase.mean_soc,
+                    applied_current_a=current_a,
+                    dt_s=phase.duration_s,
+                )
+                soh = result.new_soh
+                calendar_loss_cumulative += result.calendar_delta
+                cycle_loss_cumulative += result.cycle_delta
+
+            odometer_km += characterization.odometer_km_delta
+            soc = charging_profile.typical_end_soc.value
+            pack_temp_k = characterization.final_node_temps_k[battery_node_name]
+            trip_duration_s = sum(phase.duration_s for phase in characterization.phases)
+            parked_duration_s = max(0.0, 86400.0 - trip_duration_s)
+            parked_start_s = day_start_s + trip_duration_s
+        else:
+            parked_duration_s = 86400.0
+            parked_start_s = day_start_s
+
+        temp_samples = relax_parked_temp_k(pack_temp_k, tau_s, ambient_fn, parked_start_s, parked_duration_s)
+        parked_loss = parked_calendar_aging(spec, soc, temp_samples)
+        calendar_loss_cumulative += parked_loss
+        soh = max(0.0, soh - parked_loss)
+        pack_temp_k = temp_samples[-1][1]
+
+        checkpoints.append(
+            LongHorizonCheckpoint(
+                day_index=day_index,
+                battery_soh=soh,
+                calendar_soh_loss_cumulative=calendar_loss_cumulative,
+                cycle_soh_loss_cumulative=cycle_loss_cumulative,
+                battery_soc=soc,
+                pack_cell_temp_k=pack_temp_k,
+                odometer_km=odometer_km,
+            )
+        )
+
+    all_characterizations = [c for per_type in trip_characterizations.values() for c in per_type]
+    return LongHorizonRunResult(checkpoints=checkpoints, trip_characterizations=all_characterizations)
