@@ -579,3 +579,26 @@ not just *what* happened.
   `heat_pump_present`/`heat_pump_type` alone can't express. Wiring actual
   waste-heat recovery into the combined thermal network (`sim.py`'s
   `_combined_thermal_network`) is a future milestone, not this one.
+- **Milestone E2 (long-horizon aging extrapolation, two-tier architecture)
+  is in progress, split into explicitly ordered sub-milestones per this
+  file's established pattern — none should be attempted out of order.**
+  E2's premise: full-fidelity per-second simulation cannot support a real
+  20-30-year horizon at Monte Carlo (500 samples) or fork-branching scale
+  (E1's own dt-tier work only reached ~42s/step in practice, capped by the
+  battery's placeholder R1*C1, not by the tier policy itself — see E1's
+  entry below). Tier 1 characterizes a small set of representative trips at
+  full fidelity; Tier 2 extrapolates their aging-rate signatures across the
+  full horizon via day-type weighting, without re-running per-second physics
+  for every occurrence.
+  - **Milestone E2a (done):** schema only. Added `TripType` (a closed 5-
+    member enum: `COLD_START_COMMUTE`, `HOT_SOAK_COMMUTE`, `HIGHWAY`,
+    `CITY_STOP_AND_GO`, `FAST_CHARGE_SESSION` — deliberately excludes a
+    "parked" member, since parked time is continuous background state
+    between trip occurrences, not a discrete trip archetype), `TripPhaseAging`,
+    `TripCharacterization`, `AnnualDayTypeMix`, `UsageProfile.day_type_mix`
+    (defaults to empty, every existing profile/fixture unaffected),
+    `LongHorizonCheckpoint`, `LongHorizonRunResult`. All new types on the
+    aging/long-horizon side are plain (unwrapped) fields, not `Sourced` —
+    they're simulation-computed *outputs*, matching this file's existing
+    convention for `EnergyTotals`/`SimTimeSeries`/`AgingStepResult`, not
+    empirically-uncertain inputs.

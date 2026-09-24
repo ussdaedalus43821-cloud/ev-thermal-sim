@@ -14,6 +14,7 @@ import pytest
 from pydantic import ValidationError
 
 from ev_thermal.schema import (
+    AnnualDayTypeMix,
     AuxLoads,
     BatterySpec,
     CausalEvent,
@@ -26,6 +27,8 @@ from ev_thermal.schema import (
     ForkPoint,
     HeatPumpType,
     InverterSpec,
+    LongHorizonCheckpoint,
+    LongHorizonRunResult,
     ManufacturerProfile,
     MCConfig,
     MistakeCase,
@@ -38,6 +41,9 @@ from ev_thermal.schema import (
     ThermalArchitecture,
     ThermalNetwork,
     ThermalNode,
+    TripCharacterization,
+    TripPhaseAging,
+    TripType,
     UsageProfile,
     VehicleDynamics,
 )
@@ -237,6 +243,52 @@ def make_usage_profile() -> UsageProfile:
         trip_km_std=sourced(10.0),
         driving_style="normal",
         garage_parked=False,
+    )
+
+
+def make_trip_phase_aging(phase_name: str = "cruise") -> TripPhaseAging:
+    return TripPhaseAging(
+        phase_name=phase_name,
+        duration_s=600.0,
+        mean_cell_temp_k=305.0,
+        peak_cell_temp_k=310.0,
+        mean_soc=0.6,
+        mean_c_rate=0.8,
+        throughput_ah=12.0,
+    )
+
+
+def make_trip_characterization() -> TripCharacterization:
+    return TripCharacterization(
+        trip_type=TripType.HOT_SOAK_COMMUTE,
+        ambient_bucket_temp_k=313.15,
+        phases=[make_trip_phase_aging("warm_up"), make_trip_phase_aging("cruise")],
+        odometer_km_delta=18.0,
+        final_soc=0.45,
+        final_node_temps_k={"battery_pack": 308.0, "motor": 320.0},
+    )
+
+
+def make_annual_day_type_mix(trip_type: TripType = TripType.HIGHWAY) -> AnnualDayTypeMix:
+    return AnnualDayTypeMix(trip_type=trip_type, occurrences_per_year=sourced(40))
+
+
+def make_long_horizon_checkpoint() -> LongHorizonCheckpoint:
+    return LongHorizonCheckpoint(
+        day_index=730,
+        battery_soh=0.92,
+        calendar_soh_loss_cumulative=0.05,
+        cycle_soh_loss_cumulative=0.03,
+        battery_soc=0.55,
+        pack_cell_temp_k=301.0,
+        odometer_km=36_000.0,
+    )
+
+
+def make_long_horizon_run_result() -> LongHorizonRunResult:
+    return LongHorizonRunResult(
+        checkpoints=[make_long_horizon_checkpoint()],
+        trip_characterizations=[make_trip_characterization()],
     )
 
 
@@ -608,6 +660,68 @@ def test_causal_event_round_trip_and_caused_by_chain() -> None:
     )
     restored = CausalEvent.model_validate_json(downstream.model_dump_json())
     assert restored.caused_by == [upstream.event_id]
+
+
+# --- Milestone E2a: TripType / long-horizon aging schema ---
+
+
+def test_usage_profile_defaults_day_type_mix_to_empty_list() -> None:
+    assert make_usage_profile().day_type_mix == []
+
+
+def test_usage_profile_round_trip_with_day_type_mix() -> None:
+    profile = make_usage_profile().model_copy(
+        update={
+            "day_type_mix": [
+                make_annual_day_type_mix(TripType.COLD_START_COMMUTE),
+                make_annual_day_type_mix(TripType.FAST_CHARGE_SESSION),
+            ]
+        }
+    )
+    restored = UsageProfile.model_validate_json(profile.model_dump_json())
+    assert restored == profile
+    assert [entry.trip_type for entry in restored.day_type_mix] == [
+        TripType.COLD_START_COMMUTE,
+        TripType.FAST_CHARGE_SESSION,
+    ]
+
+
+def test_annual_day_type_mix_round_trip() -> None:
+    mix = make_annual_day_type_mix()
+    restored = AnnualDayTypeMix.model_validate_json(mix.model_dump_json())
+    assert restored == mix
+    assert restored.trip_type is TripType.HIGHWAY
+    assert restored.occurrences_per_year.value == 40
+
+
+def test_trip_phase_aging_round_trip() -> None:
+    phase = make_trip_phase_aging()
+    restored = TripPhaseAging.model_validate_json(phase.model_dump_json())
+    assert restored == phase
+
+
+def test_trip_characterization_round_trip() -> None:
+    characterization = make_trip_characterization()
+    restored = TripCharacterization.model_validate_json(characterization.model_dump_json())
+    assert restored == characterization
+    assert restored.trip_type is TripType.HOT_SOAK_COMMUTE
+    assert [phase.phase_name for phase in restored.phases] == ["warm_up", "cruise"]
+    assert restored.final_node_temps_k["battery_pack"] == 308.0
+
+
+def test_long_horizon_checkpoint_round_trip() -> None:
+    checkpoint = make_long_horizon_checkpoint()
+    restored = LongHorizonCheckpoint.model_validate_json(checkpoint.model_dump_json())
+    assert restored == checkpoint
+    assert restored.calendar_soh_loss_cumulative + restored.cycle_soh_loss_cumulative == pytest.approx(0.08)
+
+
+def test_long_horizon_run_result_round_trip() -> None:
+    result = make_long_horizon_run_result()
+    restored = LongHorizonRunResult.model_validate_json(result.model_dump_json())
+    assert restored == result
+    assert len(restored.checkpoints) == 1
+    assert len(restored.trip_characterizations) == 1
 
 
 # --- MCConfig ---

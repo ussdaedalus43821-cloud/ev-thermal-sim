@@ -607,6 +607,103 @@ class Climate(BaseModel):
     )
 
 
+class TripType(StrEnum):
+    """The representative-trip taxonomy for Milestone E2's long-horizon aging
+    extrapolation. A closed set — unlike `UsageProfile.driving_style`'s free
+    text — because the day-type-mix weighting and the dashboard's per-type
+    SOH-loss attribution both need to group/filter on this directly, same
+    rationale as `HeatPumpType`.
+
+    Deliberately excludes a "parked/soak" member: parked time is not a
+    discrete trip occurrence, it's the continuous background state between
+    occurrences of these five, modeled by long_horizon.py's own ambient-
+    relaxation model rather than characterized via a Tier-1 run.
+    """
+
+    COLD_START_COMMUTE = "cold_start_commute"
+    HOT_SOAK_COMMUTE = "hot_soak_commute"
+    HIGHWAY = "highway"
+    CITY_STOP_AND_GO = "city_stop_and_go"
+    FAST_CHARGE_SESSION = "fast_charge_session"
+
+
+class TripPhaseAging(BaseModel):
+    """One named phase within a representative trip's aging-relevant signature.
+
+    Coarser than a full per-step trace, deliberately: aging.py's
+    compute_aging_step is a closed-form function of (cell_temp_k, soc,
+    applied_current_a, dt) only, so a Tier-2 long-horizon run can reconstruct
+    a trip occurrence's calendar_delta/cycle_delta from these per-phase
+    averages/peaks without replaying the trip's full driver/controller/
+    thermal physics. Phase-level (not whole-trip-averaged) because both
+    calendar aging's Arrhenius term and cycle aging's C-rate power law are
+    convex in their inputs — averaging temperature/current across an entire
+    trip before applying those nonlinearities understates aging versus a
+    trip with a brief hot/high-current phase and a long idle tail.
+    """
+
+    phase_name: str = Field(..., description="e.g. 'warm_up', 'cruise', 'fast_charge_ramp'.")
+    duration_s: float
+    mean_cell_temp_k: float = Field(
+        ..., description="Battery pack ThermalNode temperature, averaged over this phase."
+    )
+    peak_cell_temp_k: float
+    mean_soc: float = Field(..., description="0-1.")
+    mean_c_rate: float = Field(
+        ..., description="abs(current_a) / capacity_nominal_ah, averaged over this phase."
+    )
+    throughput_ah: float = Field(
+        ..., description="Amp-hours of charge moved (either direction) during this phase."
+    )
+
+
+class TripCharacterization(BaseModel):
+    """Output of a Tier-1 (full-fidelity `run_scenario`) characterization run for
+    one `TripType` at one ambient-temperature bucket, for one specific
+    `ManufacturerProfile`.
+
+    NOT reusable across profiles or climates — must be recomputed per
+    profile x trip_type x ambient bucket, same as every other profile-
+    specific quantity in this project. `ambient_bucket_temp_k` is the
+    constant ambient the Tier-1 run was executed under; Tier-2 interpolates
+    between a TripType's bucketed characterizations against the actual
+    simulated day's ambient temperature.
+    """
+
+    trip_type: TripType
+    ambient_bucket_temp_k: float = Field(
+        ..., description="Constant ambient temperature this characterization run used, in kelvin."
+    )
+    phases: list[TripPhaseAging] = Field(..., description="Ordered phases; see TripPhaseAging.")
+    odometer_km_delta: float = Field(..., description="Distance covered during this trip, in km.")
+    final_soc: float = Field(
+        ..., description="Battery SOC at trip end, 0-1 — the starting SOC for whatever follows."
+    )
+    final_node_temps_k: dict[str, float] = Field(
+        ...,
+        description=(
+            "ThermalNode name -> temperature at trip end, in kelvin — thermal "
+            "continuity into the next occurrence or parked period."
+        ),
+    )
+
+
+class AnnualDayTypeMix(BaseModel):
+    """How many times per year one `TripType` occurs, for Tier-2 long-horizon
+    extrapolation. Days not covered by any entry in `UsageProfile.day_type_mix`
+    are parked/soak days.
+    """
+
+    trip_type: TripType
+    occurrences_per_year: Sourced[int] = Field(
+        ...,
+        description=(
+            "How many days per year this trip type occurs — a usage "
+            "assumption, same Sourced status as UsageProfile's other fields."
+        ),
+    )
+
+
 class UsageProfile(BaseModel):
     """How the vehicle is driven over its lifetime."""
 
@@ -622,6 +719,18 @@ class UsageProfile(BaseModel):
     )
     garage_parked: bool = Field(
         ..., description="Whether the vehicle is typically parked in a garage (affects thermal soak)."
+    )
+    day_type_mix: list[AnnualDayTypeMix] = Field(
+        default_factory=list,
+        description=(
+            "Annual occurrence counts per TripType, for Milestone E2's Tier-2 "
+            "long-horizon extrapolation. Empty (default) means long-horizon "
+            "extrapolation isn't configured for this profile — every existing "
+            "profile YAML and test fixture is unaffected. When non-empty, "
+            "validated against annual_mileage_km at long-horizon entry (not by "
+            "this type itself), same pattern as profile_loader.py's own "
+            "load-time validation."
+        ),
     )
 
 
@@ -1124,6 +1233,45 @@ class RunResult(BaseModel):
     time_series: SimTimeSeries
     causal_events: list[CausalEvent] = Field(default_factory=list)
     energy_totals: EnergyTotals
+
+
+class LongHorizonCheckpoint(BaseModel):
+    """One point in a Tier-2 long-horizon run's SOH trajectory — coarser than
+    `SimState` (one lumped pack-temperature proxy, no driver/controller/motor/
+    inverter state) because Tier-2 doesn't run per-second physics between
+    checkpoints.
+    """
+
+    day_index: int = Field(..., description="Days elapsed since day 0 of the long-horizon run.")
+    battery_soh: float = Field(..., description="0-1.")
+    calendar_soh_loss_cumulative: float = Field(
+        ...,
+        description=(
+            "Cumulative SOH lost to calendar aging alone, since day 0. Kept "
+            "separate from cycle_soh_loss_cumulative so degradation can be "
+            "attributed to age-at-temperature vs. usage, not collapsed into "
+            "a single number."
+        ),
+    )
+    cycle_soh_loss_cumulative: float = Field(
+        ..., description="Cumulative SOH lost to cycle (throughput) aging alone, since day 0."
+    )
+    battery_soc: float = Field(..., description="0-1, at end of this day.")
+    pack_cell_temp_k: float = Field(..., description="Lumped battery pack temperature at end of this day.")
+    odometer_km: float
+
+
+class LongHorizonRunResult(BaseModel):
+    """Output of Milestone E2's Tier-2 long-horizon extrapolation engine."""
+
+    checkpoints: list[LongHorizonCheckpoint]
+    trip_characterizations: list[TripCharacterization] = Field(
+        ...,
+        description=(
+            "The Tier-1 characterization runs this extrapolation was built "
+            "from — kept for provenance/debugging, not replayed."
+        ),
+    )
 
 
 class MCConfig(BaseModel):
