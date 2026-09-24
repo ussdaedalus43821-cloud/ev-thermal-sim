@@ -113,6 +113,8 @@ def make_battery_spec() -> BatterySpec:
         cycle_aging_activation_temp_k=sourced(3728.7),
         cycle_aging_c_rate_sensitivity=sourced(1.0),
         resistance_growth_per_soh_loss=sourced(1.0),
+        cold_soak_offset_k=sourced(3.0),
+        hot_soak_offset_k=sourced(8.0),
     )
 
 
@@ -592,6 +594,7 @@ def make_sim_step_record() -> SimStepRecord:
         battery_loss_w=10.0,
         aux_power_w=1200.0,
         active_limit_event_types=["MOTOR_LIMIT_TRIGGERED"],
+        applied_current_a=140.0,
     )
 
 
@@ -601,6 +604,7 @@ def test_sim_step_record_round_trip_with_requested_torque() -> None:
     assert restored == record
     assert restored.requested_torque_nm == 150.0
     assert restored.requested_torque_nm != restored.commanded_torque_nm
+    assert restored.applied_current_a == 140.0
 
 
 def test_sim_time_series_round_trip_with_requested_torque() -> None:
@@ -611,6 +615,7 @@ def test_sim_time_series_round_trip_with_requested_torque() -> None:
         commanded_torque_nm=[150.0, 120.0],
         motor_electrical_power_w=[0.0, 650.0],
         soc=[0.6, 0.6],
+        battery_current_a=[0.0, 140.0],
         node_temps_k={"battery_pack": [298.15, 298.2]},
         pump_duty=[{"battery_loop": 0.2}, {"battery_loop": 0.4}],
         fan_duty=[{"battery_loop": 0.1}, {"battery_loop": 0.3}],
@@ -620,6 +625,7 @@ def test_sim_time_series_round_trip_with_requested_torque() -> None:
     restored = SimTimeSeries.model_validate_json(series.model_dump_json())
     assert restored == series
     assert restored.requested_torque_nm == [200.0, 150.0]
+    assert restored.battery_current_a == [0.0, 140.0]
 
 
 # --- ForkPoint / CausalEvent ---

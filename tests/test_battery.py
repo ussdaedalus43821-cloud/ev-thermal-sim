@@ -94,6 +94,8 @@ def _make_battery_spec() -> BatterySpec:
         cycle_aging_activation_temp_k=_sourced(3728.7),
         cycle_aging_c_rate_sensitivity=_sourced(1.0),
         resistance_growth_per_soh_loss=_sourced(1.0),
+        cold_soak_offset_k=_sourced(3.0),
+        hot_soak_offset_k=_sourced(8.0),
     )
 
 

@@ -393,6 +393,31 @@ class BatterySpec(BaseModel):
             "* (1 - soh)). Placeholder, not sourced from real teardown/fleet data."
         ),
     )
+    cold_soak_offset_k: Sourced[float] = Field(
+        ...,
+        description=(
+            "Milestone E2b: how far below ambient the pack sits at the start of a "
+            "COLD_START_COMMUTE characterization run, in K, after an overnight cold "
+            "soak. Deliberately small — the pack has real thermal mass and isn't as "
+            "exposed as e.g. a windshield, so most of a cold-start's 'cold' comes from "
+            "the ambient temperature itself, not this offset. Climate-invariant "
+            "placeholder shared across all six profiles; see long_horizon.py."
+        ),
+    )
+    hot_soak_offset_k: Sourced[float] = Field(
+        ...,
+        description=(
+            "Milestone E2b: how far above ambient the pack sits at the start of a "
+            "HOT_SOAK_COMMUTE characterization run, in K, after a daytime solar/body-"
+            "heating soak. Deliberately much smaller than cabin air's well-documented "
+            "20K+ excess in direct sun — the pack is thermally massive and at least "
+            "partly shielded in all six reference vehicles. Climate-invariant: "
+            "physically this should scale with Climate.solar_irradiance_w_per_m2 (a "
+            "pack in Niger at noon vs. Seattle at noon see very different solar "
+            "loading), but that refinement is deferred until real soak data exists to "
+            "calibrate against. See long_horizon.py."
+        ),
+    )
 
 
 class MotorSpec(BaseModel):
@@ -1163,6 +1188,13 @@ class SimTimeSeries(BaseModel):
     commanded_torque_nm: list[float] = Field(default_factory=list)
     motor_electrical_power_w: list[float] = Field(default_factory=list)
     soc: list[float] = Field(default_factory=list)
+    battery_current_a: list[float] = Field(
+        default_factory=list,
+        description=(
+            "Milestone E2b: SimStepRecord.applied_current_a history, for "
+            "long_horizon.py's characterization runner (mean-C-rate extraction)."
+        ),
+    )
     node_temps_k: dict[str, list[float]] = Field(
         default_factory=dict, description="ThermalNode name -> temperature history, in kelvin."
     )
@@ -1223,6 +1255,16 @@ class SimStepRecord(BaseModel):
     aux_power_w: float
     active_limit_event_types: list[str] = Field(
         default_factory=list, description="controller.py's CausalEvent.event_types active this step."
+    )
+    applied_current_a: float = Field(
+        ...,
+        description=(
+            "Milestone E2b: BatteryElectricalResult.applied_current_a passed through "
+            "for long_horizon.py's characterization runner (mean-C-rate extraction "
+            "needs current, which wasn't exposed outside battery.py's own step before "
+            "this). Positive is discharge, negative is charge, same convention as "
+            "battery_electrical_power_w."
+        ),
     )
 
 

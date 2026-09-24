@@ -669,6 +669,7 @@ def advance_one_step(
         battery_loss_w=battery_electrical.irreversible_heat_w + battery_electrical.entropic_heat_w,
         aux_power_w=aux_power_w,
         active_limit_event_types=[event.event_type for event in controller_result.causal_events],
+        applied_current_a=battery_electrical.applied_current_a,
     )
 
 
@@ -721,6 +722,7 @@ def run_scenario(
         commanded_torque_nm=[0.0],
         motor_electrical_power_w=[0.0],
         soc=[state.battery_soc],
+        battery_current_a=[0.0],
         node_temps_k={name: [temp] for name, temp in state.node_temps_k.items()},
         pump_duty=[dict(zero_duty_by_loop)],
         fan_duty=[dict(zero_duty_by_loop)],
@@ -774,6 +776,7 @@ def run_scenario(
             time_series.commanded_torque_nm.append(record.commanded_torque_nm)
             time_series.motor_electrical_power_w.append(record.motor_electrical_power_w)
             time_series.soc.append(state.battery_soc)
+            time_series.battery_current_a.append(record.applied_current_a)
             for name, temp in state.node_temps_k.items():
                 time_series.node_temps_k.setdefault(name, []).append(temp)
             time_series.pump_duty.append(record.pump_duty)

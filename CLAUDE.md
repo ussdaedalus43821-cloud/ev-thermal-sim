@@ -602,3 +602,68 @@ not just *what* happened.
     they're simulation-computed *outputs*, matching this file's existing
     convention for `EnergyTotals`/`SimTimeSeries`/`AgingStepResult`, not
     empirically-uncertain inputs.
+  - **Milestone E2b (done):** Tier-1 representative-trip characterization,
+    in new module `long_horizon.py`. `ambient_temp_k` (two superposed
+    cosines — annual + diurnal — fed only by `mean_annual_temp_k`,
+    `seasonal_amplitude_k`, `daily_amplitude_k`; `altitude_m` and
+    `solar_irradiance_w_per_m2` are NOT used by it) and
+    `ambient_bucket_temps_k` (4 buckets per profile+climate, evenly spaced
+    across that climate's own full annual+diurnal range — per-climate-
+    derived, not a fixed grid, so a simulated day's actual ambient never
+    needs extrapolation on the ambient axis specifically, a separate
+    concern from `aging.py`'s own 20-40°C calibrated coefficient envelope).
+    `characterize_trip` runs `sim.run_scenario` UNMODIFIED at one constant
+    ambient bucket under an archetype-specific piecewise-linear speed trace,
+    then compresses the result into per-phase (not whole-trip-averaged, to
+    avoid understating aging under Jensen's-inequality-style convexity in
+    both the calendar Arrhenius term and the cycle C-rate power law)
+    aging-relevant summaries via `_phase_aging` (time-weighted, not
+    sample-count-weighted, since adaptive dt makes sample spacing real
+    physics, not a decimation artifact). Four archetypes implemented;
+    `FAST_CHARGE_SESSION` raises `NotImplementedError` (see its own entry
+    below).
+    Two new `BatterySpec` fields, `cold_soak_offset_k`/`hot_soak_offset_k`
+    (3.0K / 8.0K, both `confidence: low`, `source: "placeholder — to be
+    sourced from real-world soak data"`, populated identically across all
+    six profiles), set `COLD_START_COMMUTE`/`HOT_SOAK_COMMUTE`'s initial
+    battery-node temperature as an offset from the characterization's own
+    ambient bucket — deliberately small relative to cabin air's well-
+    documented 20K+ solar-soak excess, since the pack is thermally massive
+    and at least partly shielded in all six reference vehicles.
+    **Deferred work this surfaced:**
+    - `ambient_temp_k`'s annual-cosine phase (`ANNUAL_PEAK_DAY_OF_YEAR =
+      200`, ~July 19) and diurnal-cosine phase (`DIURNAL_PEAK_HOUR = 15.0`,
+      3pm local) are hardcoded Northern-Hemisphere constants — `Climate` has
+      no hemisphere/timezone field, and `location_name` is free text (every
+      real usage in this codebase is a generic string like `"Dashboard
+      Run"`, not geocodable). Southern Hemisphere / inverted-seasonal
+      climates are unsupported until `Climate` gains a hemisphere field.
+    - `hot_soak_offset_k` is climate-invariant, but physically it should
+      scale with `Climate.solar_irradiance_w_per_m2` (a pack in Niger at
+      noon vs. Seattle at noon see very different solar loading). Deferred
+      until real soak data exists to calibrate a solar-load-scaled version
+      against.
+    - `TripType.FAST_CHARGE_SESSION` characterization is deferred to
+      Milestone E2e. It needs a real charge-mode addition to `sim.py`'s
+      step loop (battery absorbing current rather than supplying it),
+      which is a sim-loop change deserving its own plan review, not a
+      bolt-on to `long_horizon.py`'s characterization runner. Sequenced
+      behind E2b-E2d deliberately, not abandoned — fast-charge is central
+      to this project's teaching story (it's what makes Leaf-in-Guam bad).
+    - The commute trace's `cruise_and_stops` phase ([280s, 1140s])
+      compresses steady cruise with three stoplight accel/decel bursts into
+      one time-weighted average, understating the peak-C-rate contribution
+      to cycle aging (same Jensen's-inequality concern as trip-level
+      averaging, one level down). Accepted for E2b since the commute trace
+      is low-power and the ramps are gentle, making the effect small at
+      today's placeholder aging coefficients. Revisit only if real cycle-
+      aging coefficients make it significant — do not sub-split into
+      per-stoplight phases pre-emptively, since that would triple this
+      archetype's characterization cost for a marginal accuracy win.
+    - A climate whose annual mean falls outside the aging model's
+      calibrated 20-40°C envelope (e.g. a high-altitude cold climate) has
+      its long-horizon run begin its very first days outside that envelope,
+      since Tier-2's day-0 pack temp is climate-derived ambient (see
+      Milestone E2's own initial-conditions decision, not yet implemented
+      as of E2b). Not a blocker — revisit if such a climate becomes a
+      primary comparison target.

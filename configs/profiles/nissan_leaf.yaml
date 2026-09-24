@@ -221,6 +221,14 @@ battery:
     value: 1.0
     confidence: low
     source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  cold_soak_offset_k:
+    value: 3.0
+    confidence: low
+    source: "placeholder — to be sourced from real-world soak data"
+  hot_soak_offset_k:
+    value: 8.0
+    confidence: low
+    source: "placeholder — to be sourced from real-world soak data"
 
 motors:
   - motor_type: "not specified in research"
