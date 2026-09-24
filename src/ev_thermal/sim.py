@@ -404,7 +404,6 @@ def initialize_sim_state(profile: ManufacturerProfile, scenario: Scenario, seed:
         battery_v_rc_v=0.0,
         driver_integral_error_state=0.0,
         battery_throughput_ah=0.0,
-        event_ids=[],
         battery_voltage_v=profile.battery.nominal_voltage_v.value,
         parked_duration_s=0.0,
     )
@@ -626,7 +625,6 @@ def advance_one_step(
 
     # 8-9. assemble new state
     new_odometer_km = state.odometer_km + (state.speed_mps + new_speed_mps) / 2.0 * dt_s / 1000.0
-    new_event_ids = [event.event_id for event in causal_events]
     new_parked_duration_s = (
         0.0 if _is_driving(state.speed_mps, target_speed_mps) else state.parked_duration_s + dt_s
     )
@@ -647,7 +645,6 @@ def advance_one_step(
         battery_v_rc_v=battery_electrical.v_rc_v,
         driver_integral_error_state=driver_result.integral_error_state,
         battery_throughput_ah=state.battery_throughput_ah + abs(battery_electrical.applied_current_a) * dt_s / 3600.0,
-        event_ids=[*state.event_ids, *new_event_ids],
         battery_voltage_v=battery_electrical.terminal_voltage_v,
         parked_duration_s=new_parked_duration_s,
     )

@@ -543,12 +543,19 @@ def test_sim_state_round_trip_with_rng_state() -> None:
         battery_v_rc_v=0.4,
         driver_integral_error_state=1.2,
         battery_throughput_ah=15.0,
-        event_ids=["evt-0001"],
         battery_voltage_v=350.0,
     )
     restored = SimState.model_validate_json(state.model_dump_json())
     assert restored == state
     assert restored.rng_state["bit_generator"] == "PCG64"
+
+
+def test_sim_state_has_no_event_ids_field() -> None:
+    # Milestone E2c-0: SimState.event_ids caused an O(n^2) per-step copy and was
+    # removed (see CLAUDE.md). RunResult.causal_events + SimState.fork_lineage
+    # already reconstruct full causal history across a fork chain -- don't re-add
+    # a cumulative event-id list to SimState as a shortcut for "what just happened."
+    assert "event_ids" not in SimState.model_fields
 
 
 def make_sim_state() -> SimState:
@@ -571,7 +578,6 @@ def make_sim_state() -> SimState:
         battery_v_rc_v=0.1,
         driver_integral_error_state=0.0,
         battery_throughput_ah=0.0,
-        event_ids=[],
         battery_voltage_v=350.0,
     )
 

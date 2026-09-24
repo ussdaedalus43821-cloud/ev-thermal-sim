@@ -885,9 +885,6 @@ class SimState(BaseModel):
     battery_throughput_ah: float = Field(
         ..., description="Cumulative |current|*dt charge throughput, in amp-hours (aging-model input, unused so far)."
     )
-    event_ids: list[str] = Field(
-        default_factory=list, description="event_ids of every CausalEvent logged up to this state."
-    )
     battery_voltage_v: float = Field(
         ...,
         description=(

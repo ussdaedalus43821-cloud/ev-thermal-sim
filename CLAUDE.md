@@ -667,3 +667,102 @@ not just *what* happened.
       Milestone E2's own initial-conditions decision, not yet implemented
       as of E2b). Not a blocker — revisit if such a climate becomes a
       primary comparison target.
+  - **Milestone E2c-0 (done):** fixed a genuine O(n²) performance bug
+    surfaced while scoping E2c's validation harness, found via direct
+    benchmarking (not estimation) against the real Nissan Leaf profile: a
+    continuous multi-day `run_scenario` call's steps/wall-second throughput
+    was measured collapsing from ~15,100 (1 day) to ~2,975 (7 days) before
+    this fix, and a 90-day run exceeded a 120s bounded timeout. Root cause:
+    `sim.advance_one_step` built `SimState.event_ids` as
+    `[*state.event_ids, *new_event_ids]` every step — copying the ENTIRE
+    cumulative event-id history into a new list every step, making a full
+    run O(steps²). This directly contradicted `CausalEvent`'s own docstring
+    ("referenced by ID rather than embedded in SimState, and stored in an
+    external append-only log, so that forking a SimState stays cheap even
+    across a 20-30 year, many-fork simulation history") — the intended
+    design already said not to do this.
+    **Fix was a deletion, not new infrastructure**: `SimState.event_ids`
+    was removed entirely (not replaced with a bounded tail — that would
+    mean inventing an unjustified magic N, and there's no identified use
+    case for one). `RunResult.causal_events` already correctly plays the
+    "external append-only log" role the docstring describes — it's built
+    via `.extend()` every step (O(1) amortized) and is already consumed
+    today by `dashboard/app.py`'s `_dedupe_consecutive_events`. Full causal
+    history across a fork chain is reconstructed via the ALREADY-EXISTING
+    `SimState.fork_lineage` (small, bounded by number of forks taken, not
+    number of steps/events) plus each segment's own `RunResult.
+    causal_events` — a caller stitches these together across a fork chain
+    itself, since they already hold the parent run's `RunResult`. No new
+    type, no `run_scenario` signature change. Re-benchmarked post-fix:
+    throughput now holds flat at ~17,000-18,000 steps/wall-second from 1
+    to 14 days (vs. the pre-fix collapse), confirming genuinely linear
+    scaling — a 90-day reference run is now feasible in well under a
+    minute, unblocking Milestone E2c's validation harness.
+    `LongHorizonRunResult` deliberately carries no causal-event log of its
+    own: Tier 2 replays pre-characterized `TripPhaseAging` signatures
+    rather than deriving new events via `advance_one_step`, so there is no
+    per-day/per-occurrence causal chain to attach — `characterize_trip`'s
+    own internal `RunResult.causal_events` describes "what happened during
+    the characterization run for this archetype," a different question
+    from "why did SOH drop faster in year 7," which a replay-based Tier-2
+    design cannot currently answer. Revisit only if a long-horizon causal-
+    trace feature is explicitly wanted; not a trivial retrofit.
+  - **Milestone E2c (planned, not yet implemented):** the Tier-2
+    extrapolation engine. Day-type sampling is a deterministic shuffle, not
+    i.i.d. random draws: the exact multiset implied by `AnnualDayTypeMix.
+    occurrences_per_year` (e.g. exactly 40 highway days if that's the
+    stated count, not ~40 in expectation) has its order shuffled via the
+    existing fork-safe `numpy.random.default_rng(seed)` convention. This
+    is deliberately NOT i.i.d. sampling — that would make validation
+    flaky (annual counts would only match in expectation) and conflates
+    "does Tier-2 approximate Tier-1's math" with "did two random usage
+    realizations happen to age similarly." i.i.d. sampling is a legitimate
+    future Monte Carlo concern, not adopted here.
+    Parked-period pack temperature uses a closed-form `dT/dt =
+    -(T-T_ambient(t))/tau` relaxation (hourly quadrature, not per-second
+    stepping) with `tau = battery.thermal_node.resistance_to_ambient_k_per_w
+    .value * battery.thermal_node.capacitance_j_per_k.value` — the SAME
+    node-level fields the ambient-coupling milestone (Milestone A, earlier
+    in this file) added, no new lumped constant. If
+    `resistance_to_ambient_k_per_w` is `None` (adiabatic, schema-valid for
+    an edited counterfactual), pack temp holds constant rather than
+    dividing by zero. Motor/inverter are NOT tracked during parked periods
+    — `aging.py` has no motor/inverter aging model to consume their
+    trajectory, `LongHorizonCheckpoint` has no field for it, and physically
+    they re-equilibrate to near-ambient within minutes (far smaller thermal
+    mass than the pack), making multi-hour-to-day tracking moot.
+    **Trip-start chaining uses a linear offset correction, not the
+    characterized trip's phases as-is.** Naively replaying a
+    `TripCharacterization`'s phases regardless of the actual pack
+    temperature left by the preceding parked period would silently break
+    physical chaining at the trip-start boundary. Instead: every phase's
+    `mean_cell_temp_k`/`peak_cell_temp_k` is shifted by a constant
+    `(actual_chained_start_temp - archetype_assumed_start_temp)` at replay
+    time, justified by `thermal.py`'s linear (explicit-Euler) RC network —
+    a constant initial-condition offset propagates as a constant offset
+    through a linear system. This is an approximation, not exact: R0's
+    Arrhenius resistance term and cooling effectiveness both have real
+    temperature dependence, so error grows with offset magnitude. A more
+    exact alternative exists (characterize each trip type at several fixed
+    pack-start offsets, interpolated, the same way ambient is bucketed) but
+    multiplies characterization cost 4x — not adopted now; revisit only if
+    validation shows offset error dominates.
+    `LongHorizonCheckpoint`s are recorded at DAILY cadence (~11,000 over a
+    30-year run, well under 1MB total) — unlike `record_interval_s`
+    decimation (which exists because per-second time series over decades
+    is genuinely large), memory is not a real constraint at daily
+    granularity, so the finest cadence requiring zero extra aggregation
+    logic (Tier-2 already advances day-by-day) is also the right one.
+    Maximizes fork-point granularity for a long-horizon run. Weekly/monthly
+    dashboard views, if wanted later, are a downstream aggregation of the
+    daily series, not a different Tier-2 output shape.
+    Validation harness: `max(5% relative, 0.1% absolute)` on cumulative SOH
+    loss between a Tier-2 run and a continuous full-fidelity Tier-1
+    reference run over the same window — the absolute floor exists because
+    5%-relative-alone is degenerate at short/low-magnitude horizons (a
+    7-day reference window's ~0.016% SOH loss sits below what 5% relative
+    can meaningfully discriminate, which is exactly why E2c-0 had to land
+    first: at any window affordable before that fix, the test would pass
+    trivially regardless of whether Tier-2's approximation is any good).
+    With E2c-0 landed, a real 30-90 day reference window is affordable
+    (benchmarked: ~30s extrapolated for 90 days, vs. >120s pre-fix).
