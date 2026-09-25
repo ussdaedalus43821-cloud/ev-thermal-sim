@@ -44,11 +44,19 @@ def test_calendar_aging_matches_model3_seattle_anchor_within_one_percent() -> No
 
 
 def test_cycle_aging_matches_throughput_anchor_within_one_percent() -> None:
+    """EFC-normalized version of the throughput anchor (see `docs/DESIGN_QUESTIONS.md`
+    Q-0006/Q-0007): 100,000 kWh / 75 kWh assumed reference capacity = 1,333.33 EFC.
+    Deliberately independent of the test fixture's own `capacity_nominal_ah`
+    (180 Ah, unrelated to the 75 kWh reference) -- holding C-rate at 1.0 makes
+    EFC accrual `dt_s / 3600` regardless of the spec's actual capacity, since
+    `throughput_efc = (applied_current_a / capacity_ah) * dt_s / 3600 == C_rate
+    * dt_s / 3600`.
+    """
     spec = _make_battery_spec()
     capacity_ah = spec.capacity_nominal_ah.value
-    target_throughput_ah = 270_270.0  # 100,000 kWh at the calibration's assumed 370V reference
+    target_efc = 100_000.0 / 75.0  # anchor's 100,000 kWh / assumed 75 kWh reference capacity
     applied_current_a = capacity_ah  # C-rate = 1.0, matching the calibration's reference C-rate
-    dt_s = target_throughput_ah * 3600.0 / applied_current_a
+    dt_s = target_efc * 3600.0
 
     result = compute_aging_step(
         spec,
@@ -59,7 +67,7 @@ def test_cycle_aging_matches_throughput_anchor_within_one_percent() -> None:
         dt_s=dt_s,
     )
     assert abs(result.new_soh - 0.82) < 0.01
-    assert result.calendar_delta > 0.0  # calendar aging still accrues over ~63 days of elapsed time
+    assert result.calendar_delta > 0.0  # calendar aging still accrues over ~55.6 days of elapsed time
 
 
 def test_combined_aging_delta_equals_calendar_plus_cycle() -> None:

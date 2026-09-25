@@ -359,20 +359,34 @@ class BatterySpec(BaseModel):
             "ages faster. See aging.py's docstring."
         ),
     )
-    cycle_aging_rate_per_ah: Sourced[float] = Field(
+    cycle_aging_rate_per_efc: Sourced[float] = Field(
         ...,
         description=(
             "TODO(spec-sourcing): empirical cycle-aging base rate, fraction of "
-            "SOH lost per amp-hour of throughput at reference_temp_k and 1C. "
-            "See aging.py's module docstring, 'Coefficient provenance' — this "
-            "coefficient is a placeholder assumption, not a calibrated fit."
+            "SOH lost per equivalent full cycle (EFC) of throughput at "
+            "reference_temp_k and 1C, where one EFC = capacity_nominal_ah worth "
+            "of amp-hour throughput — i.e. throughput is normalized by "
+            "capacity_nominal_ah (the pack's fixed, UNAGED nominal capacity, "
+            "never the current SOH-scaled capacity: normalizing by current "
+            "capacity would introduce an uncalibrated positive-feedback loop, "
+            "SOH -> EFC rate -> SOH, that this simulator does not model or "
+            "validate anywhere else). This makes the resulting SOH trajectory a "
+            "bounded approximation, most accurate at SOH >= 0.7; below that, "
+            "using the fixed nominal (rather than shrinking) capacity as the "
+            "EFC denominator understates each EFC's true throughput relative to "
+            "the pack's actual present capacity. See aging.py's module "
+            "docstring, 'Coefficient provenance' — this coefficient is a "
+            "placeholder assumption, not a calibrated fit, and was renamed and "
+            "re-derived from a prior cycle_aging_rate_per_ah (Ah-normalized, "
+            "capacity-confounded) form; see docs/DESIGN_QUESTIONS.md Q-0006/"
+            "Q-0007 for the re-derivation record."
         ),
     )
     cycle_aging_activation_temp_k: Sourced[float] = Field(
         ...,
         description=(
             "TODO(spec-sourcing): empirical pseudo-activation temperature (Ea/R) "
-            "scaling cycle_aging_rate_per_ah away from reference_temp_k, same "
+            "scaling cycle_aging_rate_per_efc away from reference_temp_k, same "
             "functional form as calendar_aging_activation_temp_k. Unconstrained by "
             "any calibration anchor — see aging.py's docstring."
         ),

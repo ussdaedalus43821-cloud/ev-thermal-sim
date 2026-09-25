@@ -109,7 +109,7 @@ def make_battery_spec() -> BatterySpec:
         calendar_aging_rate_per_s=sourced(4.4135e-10),
         calendar_aging_activation_temp_k=sourced(7457.4),
         calendar_aging_soc_sensitivity=sourced(1.0),
-        cycle_aging_rate_per_ah=sourced(6.660e-7),
+        cycle_aging_rate_per_efc=sourced(1.350e-4),
         cycle_aging_activation_temp_k=sourced(3728.7),
         cycle_aging_c_rate_sensitivity=sourced(1.0),
         resistance_growth_per_soh_loss=sourced(1.0),

@@ -1223,3 +1223,132 @@ not just *what* happened.
       more depleted SOC than a "typical daily trip" start), accepted to
       avoid inventing a field beyond what was explicitly scoped; revisit if
       it produces an implausible session shape once real numbers are seen.
+- **Milestone E2e's first real output (Leaf-in-Guam vs. Model-3-in-Seattle,
+  90-day SOH trajectories) surfaced two findings that needed investigation
+  before being trusted, both now resolved by direct code execution, not
+  speculation — and a framing correction to how this comparison is
+  described.**
+  1. **The cycle-aging "inversion" (Leaf aging slower than expected relative
+     to Model 3 on the cycle term) is NOT a bug.** Hand-traced by calling
+     `aging.compute_aging_step` directly with matched C-rate and
+     temperature but each profile's own `capacity_nominal_ah`: `cycle_delta`
+     scaled EXACTLY linearly with pack capacity (ratio 3.017, matching the
+     Leaf/Model 3 capacity ratio to three decimal places), because
+     `throughput_ah` in `compute_aging_step` is an absolute amp-hour
+     quantity, never normalized by pack capacity. This is a genuine,
+     previously-undocumented modeling gap, not an Arrhenius sign error or a
+     calibration bug: cycle aging's absolute-throughput formulation makes
+     pack size — not just thermal architecture — a live confounding
+     variable in any cross-vehicle cycle-aging comparison. It does not
+     affect calendar aging, which has no capacity or current term. See
+     `aging.py`'s module docstring ("Shared coefficients across all six
+     reference vehicles") for the full hand-traced evidence, including the
+     partial-offset case (Leaf 5K hotter than Model 3 dropped the ratio to
+     2.480 — real, but nowhere near enough to overcome the ~3x capacity
+     gap). **Fixed (2026-09-24), in its own dedicated milestone, sequenced
+     before Monte Carlo/fork/mistake-library per explicit instruction — not
+     folded into anything else.** Documenting the false "100% attributable
+     to thermal behavior" claim without fixing it was rejected as
+     insufficient: the claim needed to become true, not just have its
+     falseness noted. Two design questions were opened and ratified before
+     any code changed — `docs/DESIGN_QUESTIONS.md` Q-0006 (normalize by
+     nominal or current/SOH-scaled capacity? **Resolved: nominal**
+     — `capacity_nominal_ah`, never the current SOH-scaled capacity,
+     specifically to avoid introducing an uncalibrated positive-feedback
+     mechanism, SOH -> EFC rate -> SOH, that nothing else in `aging.py`
+     models or validates; this makes the resulting trajectory a bounded
+     approximation, most accurate at SOH >= 0.7) and Q-0007 (what anchor
+     does the re-derivation use, and in what units? **Resolved: the
+     existing single cycle-aging anchor, re-expressed via a third assumed
+     constant — a 75 kWh generic reference pack capacity, explicitly NOT
+     the six profiles' mean/median, alongside the existing 370V/1C
+     assumptions** — `100,000 kWh / 75 kWh = 1,333.33 EFC`, giving
+     `cycle_aging_rate_per_efc = 0.18 / 1,333.33 = 1.350e-4`).
+     Implementation: `cycle_aging_rate_per_ah` renamed to
+     `cycle_aging_rate_per_efc` across `schema.py`, `aging.py`, all six
+     profile YAMLs, and every test fixture; `compute_aging_step` now
+     normalizes throughput into equivalent full cycles
+     (`throughput_efc = throughput_ah / capacity_nominal_ah`) before
+     applying the rate constant. Full test suite (224 tests) and
+     `mypy --strict`/`ruff` pass; `test_long_horizon_validation.py -m slow`
+     (Tier-2-vs-Tier-1 real-profile validation, Leaf and Model 3) still
+     passes within its existing tolerance after the fix.
+  2. **The "modest" ratio versus the two calibration anchors (~6%/year-class
+     expectation) is NOT a calibration regression.** Both anchors were
+     reproduced EXACTLY by running `compute_aging_step` under their own
+     precise stated conditions (Leaf: 40°C/80% SOC/5yr → 0.7000 SOH exactly;
+     Model 3: 20°C/60% SOC/10yr → 0.9000 SOH exactly). The anchors are
+     idealized, single-condition, calendar-only benchmarks (constant
+     temperature, constant SOC, zero current, held for the full multi-year
+     duration) — they were never a claim about what a realistic mixed-usage
+     trajectory (varying ambient, varying SOC, real driving/charging
+     cycling) would show. Confirmed directly: the 90-day comparison's
+     calendar-only loss matched a hand-calculation at the run's own average
+     SOC (~0.65, since SOC oscillated ~0.5-0.8) far more closely than at the
+     Leaf anchor's constant 80% SOC condition — the "modest" ratio is
+     explained by comparing a realistic scenario against an idealized
+     anchor, not by a broken coefficient. Don't treat a smaller-than-anchor
+     ratio in a future run as evidence of a regression without first
+     checking whether that run's actual average conditions match an
+     anchor's stated conditions. `docs/model_reference.md`'s "Aging model
+     confidence and limits" section and `aging.py`'s module docstring both
+     now state this explicitly.
+  3. **The "flagship comparison" framing needs correcting, and is corrected
+     here rather than left implicit.** This 90-day Leaf-in-Guam vs.
+     Model-3-in-Seattle comparison demonstrates the *mechanism* (thermal
+     architecture producing different battery-temperature exposure, which
+     the aging model converts to different SOH loss) — it does NOT yet
+     demonstrate the full *compounding divergence* this project exists to
+     teach, because two things are both required and neither is modeled
+     yet: arrival-temperature elevation from realistic climate/usage
+     patterns (fast-charge preconditioning is explicitly deferred — Q-0004
+     above), and multi-year accumulation (90 days is far short of the
+     20-30-year horizon this project's premise is built on, and Milestone
+     E2's own Tier-1/Tier-2 architecture exists specifically to make that
+     horizon tractable — see Milestone E2's own entries above). Both are on
+     the roadmap: the preconditioning milestone, and running this same
+     comparison at a genuine multi-year horizon once both the
+     capacity-normalization question (finding 1) and the preconditioning
+     gap are addressed. Do not present a short-horizon comparison run under
+     today's model as "the compounding divergence" claim until then — it is
+     evidence toward it, not a demonstration of it.
+  **Corrected 90-day Leaf-in-Guam vs. Model-3-in-Seattle comparison, run
+  after the EFC-normalization fix, reported alongside the pre-fix numbers
+  under IDENTICAL scenario conditions (same script, only the aging formula
+  toggled) — the corrected numbers replace the pre-fix ones in this
+  project's record; the pre-fix ones are kept here only as the direct
+  before/after evidence that the fix moved things in the expected
+  direction:**
+  | | Leaf/Guam total | Leaf/Guam cycle | Model3/Seattle total | Model3/Seattle cycle | cycle ratio (Leaf/Model3) |
+  |---|---|---|---|---|---|
+  | Pre-fix (Ah-direct) | 0.6295% | 0.0111% | 0.1243% | 0.0017% | 6.51 |
+  | **Corrected (EFC)** | **0.6520%** | **0.0336%** | **0.1243%** | **0.0017%** | **19.63** |
+
+  **Expected-direction check (per explicit instruction: "If it doesn't
+  move in that direction, stop and surface") passed** — Leaf's cycle loss
+  now exceeds Model 3's by a much wider margin than before the fix
+  (19.63x vs. 6.51x), consistent with the smaller, hotter pack accruing
+  more equivalent full cycles per unit of driving. Calendar loss and the
+  Model 3's own cycle loss are unchanged (EFC normalization only touches
+  cycle aging, and Model 3's `capacity_nominal_ah` — the EFC denominator —
+  is close enough to the new 202.7 Ah reference constant that its own
+  cycle numbers barely move).
+  **Transparency note:** this comparison's exact scenario parameters
+  (climate amplitudes, day-type mix, charging profile) had to be
+  reconstructed from scratch for this re-run — the original script that
+  produced the earlier-reported "1.24x ratio, inverted cycle component"
+  numbers was not preserved. This reconstruction is a good-faith
+  equivalent (same climates, same profiles, same anchor-consistent
+  day-type mix pattern), not a byte-identical replay, and its own pre-fix
+  numbers (total ratio 5.06x, cycle ratio 6.51x — already Leaf > Model3
+  under this specific reconstruction) don't reproduce the earlier
+  "inverted" finding exactly. That's expected and doesn't weaken the
+  fix's justification: the capacity confound was proven analytically and
+  via a controlled hand-trace (finding 1 above) independent of any one
+  scenario's specific current/temperature mix, which can push the
+  pre-fix ratio above or below 1 depending on how much C-rate and
+  temperature differences happen to offset the capacity effect in that
+  specific run. The fix removes the confound either way.
+  **Monte Carlo, fork branching, and the mistake library's hold is now
+  lifted** — findings 1, 2, and 3 are all resolved, finding 1's fix is
+  implemented and tested, and the corrected comparison has been reviewed.

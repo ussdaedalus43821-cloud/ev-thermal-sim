@@ -201,3 +201,143 @@ Format:
   data exists for any of the six profiles to ground a number. See CLAUDE.md's
   Known deferred work, Milestone E2e entry, and `docs/model_reference.md`
   directly for the full note.
+
+## Q-0006 — EFC normalization: nominal or current (SOH-scaled) capacity?
+
+- Date: 2026-09-24
+- Context: Milestone E2e's first real Leaf-vs-Model3 comparison surfaced a
+  genuine modeling gap in `aging.py`: `compute_aging_step`'s cycle-aging
+  term uses `throughput_ah = abs(applied_current_a) * dt_s / 3600.0`, an
+  absolute amp-hour quantity never normalized by pack capacity. Hand-traced
+  proof: holding C-rate and temperature equal, `cycle_delta` scales EXACTLY
+  linearly with `capacity_nominal_ah` (Leaf/Model3 ratio 3.017, matching
+  their capacity ratio to three decimal places) — meaning pack size, not
+  just thermal architecture, is a live confound in any cross-vehicle
+  cycle-aging comparison. The fix is to normalize throughput into
+  "equivalent full cycles" (EFC): `throughput_efc = throughput_ah /
+  capacity_ah`. The open question is which capacity to divide by —
+  `BatterySpec.capacity_nominal_ah` (the fixed, unaged reference value,
+  same field `compute_aging_step` already takes `spec` — the UNAGED spec —
+  from) or the pack's current, SOH-scaled effective capacity (which
+  `apply_soh_to_battery_spec` computes, but `compute_aging_step` is never
+  called with an already-aged spec — see its own docstring: "`spec` must
+  be the pack's UNAGED spec... aging rate coefficients don't themselves
+  change with SOH").
+- Options considered:
+  1. **Nominal capacity** (`capacity_nominal_ah`, fixed for the life of the
+     spec). Simpler: EFC count is a straightforward linear rescaling of the
+     existing `throughput_ah` term, no new dependency introduced into
+     `compute_aging_step` (which today only ever sees the unaged spec — see
+     Context above), and no feedback loop between SOH and its own aging
+     rate to reason about or validate. Slightly physically imprecise at low
+     SOH (a degraded pack's true 1.0 EFC is less absolute Ah than a fresh
+     pack's, since capacity itself has shrunk) — a fresh pack and an 80%-
+     degraded pack throughput-matched in raw Ah would count as a smaller
+     EFC fraction for the degraded pack under this option, when arguably it
+     should count as a larger one. (Claude's recommendation.)
+  2. **Current (SOH-scaled) capacity.** More physically precise at low SOH
+     — an EFC is defined relative to the pack's actual present capacity in
+     the real-world convention. Requires `compute_aging_step` to take an
+     additional current-SOH-aware capacity input (today it only receives
+     the unaged `spec`), and introduces a genuine feedback loop: a pack's
+     own past aging changes the denominator of its own future aging rate,
+     which is real (accelerating degradation is a known real phenomenon)
+     but adds an unverified feedback mechanism into a term this project has
+     otherwise deliberately kept as one-way (calendar/cycle rates read
+     `soh`/`soc`/`cell_temp_k` but do not read the aging model's own prior
+     output as an input to itself elsewhere in `aging.py`).
+- Blocking: yes
+- Claude's recommendation: **Option 1 (nominal capacity).** Reasoning
+  restated per the instruction that raised this question: cleaner anchor
+  re-derivation (one variable changes, not two), no unverified feedback
+  loop, and the difference between the two options is small at the SOH
+  levels this simulator currently targets (E1/E2 runs generally examine
+  SOH trajectories well above the range — deep into a pack's degraded
+  life — where nominal-vs-current capacity would diverge meaningfully).
+  State this choice explicitly in `aging.py`'s docstring rather than
+  leaving it implicit, and revisit if a future milestone specifically
+  targets low-SOH (near-end-of-life) runs as a real use case, where the
+  approximation error would matter more.
+- **Resolution (2026-09-24): Option 1 (nominal capacity), approved with the
+  reasoning corrected.** The deciding factor is NOT simplicity — it's that
+  current-capacity normalization would introduce an uncalibrated
+  positive-feedback mechanism (SOH -> EFC rate -> SOH) this project cannot
+  currently validate. `cycle_aging_rate_per_efc`'s field docstring in
+  `schema.py` states this explicitly: normalized by `capacity_nominal_ah`
+  (never the current SOH-scaled capacity), the feedback mechanism named as
+  the reason, and the resulting trajectory flagged as a bounded
+  approximation valid at SOH >= 0.7. See CLAUDE.md's Known deferred work
+  for the implementation record.
+
+## Q-0007 — Re-derivation source for `cycle_aging_rate_per_efc`
+
+- Date: 2026-09-24
+- Context: Fixing Q-0006 means renaming `cycle_aging_rate_per_ah` to
+  `cycle_aging_rate_per_efc` and re-deriving its value against whatever
+  anchor `cycle_aging_rate_per_ah` was originally fit against, expressed in
+  EFC terms instead of Ah terms. Investigated directly (not assumed) by
+  re-reading `aging.py`'s own "Coefficient provenance" docstring section:
+  the single cycle-aging anchor is **"82% SOH at 100,000 kWh pack
+  throughput at 25°C / 298.15K,"** converted to amp-hours via an ASSUMED
+  reference pack voltage of 370V (not tied to any specific one of the six
+  profiles — "a rough average across the six reference profiles") and an
+  assumed reference C-rate of 1.0, giving ~270,270 Ah. This anchor is
+  **energy-throughput-shaped (kWh), not amp-hour-shaped and not EFC-shaped
+  in its original form** — it makes no reference to any specific pack's
+  capacity at all, generic ("a fleet" pack throughput number), which is
+  exactly why converting it to Ah already required inventing an assumed
+  reference voltage rather than reading one off a real spec.
+- Options considered:
+  1. **Treat it as needing a THIRD assumed reference constant: a reference
+     pack capacity**, to convert the existing 100,000 kWh -> 270,270 Ah
+     anchor into an EFC count: `EFC = throughput_ah / reference_capacity_ah`.
+     This is not a "rename-and-rescale" — the anchor was never EFC-shaped,
+     so a genuinely new assumption is needed on top of the existing 370V
+     and 1C ones, the same kind of "simplest defensible assumption, not
+     fit" the existing docstring already uses for the other two unconstrained
+     cycle-aging coefficients. A natural choice: use the same 370V reference
+     alongside an assumed reference pack size (candidates: the mean or
+     median `capacity_nominal_ah` across the six reference profiles, or a
+     round generic number like 75 kWh / ~200Ah, roughly mid-pack across the
+     six). (Claude's recommendation, pending which specific reference
+     capacity value the user wants — see below.)
+  2. **Reinterpret the anchor as already being "per representative pack"**
+     and skip a separate reference-capacity assumption by reusing the same
+     370V-and-implied-capacity figure some other way. Considered and set
+     aside: no version of the existing anchor actually ties itself to a
+     capacity value today (only voltage and C-rate were assumed), so this
+     option doesn't avoid inventing a new number, it just tries to hide
+     that a new number is being invented.
+- Blocking: yes
+- Claude's finding, not yet a recommendation on the exact number: the
+  anchor was Ah-shaped (after an existing voltage-based conversion from its
+  true original kWh form), NOT EFC-shaped, so **this re-derivation needs a
+  new, explicitly-assumed reference pack capacity — a third free parameter
+  alongside the existing 370V/1C assumptions — with its own stated
+  reasoning documented in `aging.py`'s docstring, the same way the existing
+  two assumptions are each individually justified there.** Needs the user's
+  input on which reference capacity to assume (mean of the six profiles,
+  a round generic number, or another convention) before the re-derivation
+  in step 3 of the implementation plan can proceed.
+- **Resolution (2026-09-24): Option 1, reference capacity = 75 kWh
+  (~202.7 Ah at the existing 370V assumption), explicitly generic, NOT the
+  mean (~153.5 Ah) or median (~175.7 Ah) of the six reference profiles' own
+  `capacity_nominal_ah` values.** Reasoning: a mean/median would carry a
+  hidden "this represents our fleet" claim that capacity, unlike voltage,
+  doesn't support the same way — the existing 370V assumption is already a
+  rough average across the six profiles and is treated as a shared,
+  profile-agnostic constant; capacity varies far more (~4x) across the six
+  profiles than voltage does, so averaging it would silently bake in a
+  "typical pack size" assumption this project's aging-coefficient
+  methodology explicitly avoids elsewhere (see `aging.py`'s "Shared
+  coefficients" section). Conversion: `100,000 kWh / 75 kWh = 1,333.33 EFC`
+  at 25°C/1C -> 82% SOH; the 370V assumption cancels out of this ratio
+  entirely, since both the throughput and the reference capacity were
+  converted through it. `cycle_aging_rate_per_efc = 0.18 / 1,333.33 =
+  1.350e-4` (hand-verified before implementation, then confirmed against
+  the code via `test_cycle_aging_matches_throughput_anchor_within_one_
+  percent` in `tests/test_aging.py`). Documented as a third stated
+  assumption alongside the existing 370V/1C pair, same register, in
+  `aging.py`'s "Coefficient provenance" section. See CLAUDE.md's Known
+  deferred work for the full implementation record and the corrected
+  Leaf/Model3 comparison numbers.

@@ -226,10 +226,10 @@ battery:
     value: 1.0
     confidence: low
     source: "assumed (fixed choice, not fit) — see aging.py's module docstring 'Coefficient provenance'; not vehicle-specific"
-  cycle_aging_rate_per_ah:
-    value: 6.660e-7
+  cycle_aging_rate_per_efc:
+    value: 1.350e-4
     confidence: low
-    source: "calibrated against one fleet anchor (82% SOH at 100,000 kWh throughput at 25C) assuming 370V reference pack voltage and 1C reference C-rate — see aging.py's module docstring 'Coefficient provenance'; not vehicle-specific"
+    source: "calibrated against one fleet anchor (82% SOH at 100,000 kWh throughput at 25C), re-expressed in equivalent full cycles (EFC) via an assumed 75kWh reference pack capacity (~202.7Ah at the existing 370V assumption) and 1C reference C-rate — EFC = 100,000kWh / 75kWh = 1,333.33 — see aging.py's module docstring 'Coefficient provenance' / 'EFC normalization', and docs/DESIGN_QUESTIONS.md Q-0006/Q-0007; not vehicle-specific"
   cycle_aging_activation_temp_k:
     value: 3728.7
     confidence: low

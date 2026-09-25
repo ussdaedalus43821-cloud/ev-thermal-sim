@@ -144,9 +144,13 @@ sourced from a single literature value):
     → 70% SOH.
   - Tesla Model 3, mild climate (Seattle-like): 20°C, 60% SOC, constant, 10
     years → 90% SOH.
-- `cycle_aging_rate_per_ah` was solved from one throughput anchor (82% SOH
+- `cycle_aging_rate_per_efc` was solved from one throughput anchor (82% SOH
   at 100,000 kWh pack throughput at 25°C), assuming a 370V reference pack
-  voltage and 1C reference C-rate to convert kWh to amp-hours.
+  voltage and 1C reference C-rate to convert kWh to amp-hours, plus (added
+  when this coefficient was renamed from `cycle_aging_rate_per_ah` and
+  re-derived — see the capacity-normalization note below) a 75kWh assumed
+  reference pack capacity to convert amp-hours into equivalent full cycles
+  (EFC): `100,000 kWh / 75 kWh = 1,333.33 EFC`.
 
 **What was assumed, not calibrated** (no anchor constrains these):
 - `calendar_aging_soc_sensitivity = 1.0` — a fixed, round-number choice.
@@ -177,8 +181,38 @@ the Leaf, NCA for the Model 3/Bolt, NMC for the Niro, Samsung cells for the
 i3) ages differently in reality, but every profile here uses the same aging
 coefficients deliberately, so that thermal architecture is the sole
 independent variable in any cross-vehicle SOH comparison this simulator
-produces — see `aging.py`'s docstring for the full reasoning. Per-vehicle
+produces — for calendar aging unconditionally, and for cycle aging once
+expressed in equivalent full cycles (EFC), per the fix described below —
+see `aging.py`'s docstring for the full reasoning. Per-vehicle
 chemistry-specific aging coefficients are deferred (see CLAUDE.md).
+
+**Pack capacity was a second confounding variable for cycle aging
+specifically, found during Milestone E2e's first real Leaf-vs-Model 3
+comparison, and since fixed by EFC-normalizing cycle-aging throughput
+(see `aging.py`'s docstring, "EFC normalization," for the full hand-traced
+evidence and the fix).** The original cycle-aging throughput term was an
+absolute amp-hour quantity, never normalized by pack capacity, so a larger
+pack (Model 3: 201Ah vs. Leaf: 66.7Ah, a ~3x difference) accumulated
+proportionally more cycle-aging delta for equivalent relative usage,
+independent of thermal architecture. Fixed by normalizing throughput into
+equivalent full cycles before applying the rate constant
+(`cycle_aging_rate_per_efc`, renamed from `cycle_aging_rate_per_ah` and
+re-derived against a re-expressed version of the same anchor — see
+`docs/DESIGN_QUESTIONS.md` Q-0006/Q-0007). Deliberately normalized by
+`capacity_nominal_ah` (the fixed, unaged nominal capacity), never the
+current SOH-scaled capacity, to avoid introducing an uncalibrated
+SOH-to-aging-rate feedback loop — this makes the resulting trajectory a
+bounded approximation, most accurate at SOH ≥ 0.7. This did not affect
+calendar aging, which has no capacity or current term.
+
+**The two calendar-aging anchors are idealized, single-condition
+benchmarks, not a prediction for realistic mixed-usage scenarios.** Each
+anchor holds temperature, SOC, and current constant for its full multi-year
+duration; a real simulated trajectory (varying ambient, varying SOC,
+mixed driving/charging) will not reproduce the anchors' exact loss ratio,
+and a smaller ratio in a realistic run is not by itself evidence of a
+calibration problem — check whether the run's actual average conditions
+match an anchor's stated conditions before concluding that.
 
 **Entropic heat is omitted from every run's thermal signature, including
 fast-charge (Milestone E2e).** `BatterySpec.docv_dt_v_per_k` is `0.0` for
