@@ -124,6 +124,7 @@ def default_charging_profile() -> ChargingProfile:
         dc_fast_charge_fraction=_sourced(0.1),
         preconditioning_enabled=False,
         dc_charge_power_kw=_sourced(50.0),
+        charge_reset_hour=_sourced(22.0),
     )
 
 

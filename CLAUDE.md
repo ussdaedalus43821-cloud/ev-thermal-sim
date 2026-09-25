@@ -1515,3 +1515,140 @@ not just *what* happened.
   ratified and the fix lands.** Fork branching and the mistake library
   remain correctly deferred behind the compounding-divergence question,
   and this fix is now squarely on that same path.
+- **Milestone "parked-SOC model" (done — design decisions ratified via
+  `docs/DESIGN_QUESTIONS.md` Q-0012/Q-0013, plus three new questions
+  opened and left unresolved by design, Q-0014/Q-0015/Q-0016):** replaces
+  the SOC-snapping approximation that produced the previous entry's
+  implausible 20-year numbers.
+  **Model:** `simulate_long_horizon` now tracks SOC as a real value through
+  each 24-hour cycle instead of snapping it to `typical_end_soc`
+  instantaneously after every trip. A trip applies its own actual SOC
+  delta (`characterization.final_soc - charging_profile.typical_start_soc`
+  — Tier-1's own already-computed result, not re-derived); parked periods
+  decay linearly via a new `_parked_soc_trajectory` function (mirroring
+  `relax_parked_temp_k`'s own step_s/sampling convention exactly, so the
+  two series stay index-aligned for `parked_calendar_aging`'s quadrature,
+  which now takes a real `soc_samples` series instead of one constant
+  scalar); one charge event per day, at a new `ChargingProfile.
+  charge_reset_hour: Sourced[float]` field (value: 22.0, i.e. late evening
+  — a day's trip is simulated starting at the day boundary in this model,
+  so realistic overnight charging completing shortly before the NEXT
+  day's trip falls late in THIS day's window), resets SOC to
+  `typical_end_soc`. No charge-session physics (power caps, taper,
+  thermal coupling) anywhere in this — only the daily trajectory's shape,
+  which is what calendar aging's SOC-sensitivity term actually consumes.
+  **A real finding, caught by the hand-computation this milestone's own
+  design review required before any code was written:** literally reusing
+  `sim.py`'s existing `aux_current_a` (`hvac_power_w + accessory_load_w`)
+  as the parked decay rate is a category error, not a simplification.
+  `hvac_power_w`'s field docstring is "typical cabin HVAC electrical
+  draw" — a driving/occupied-cabin load; `accessory_load_w`'s is
+  "baseline 12V/accessory electrical draw" — already the schema's own
+  name for standby drain. Reusing the full sum produced ~5.08%/hour decay
+  for the real Nissan Leaf profile — draining a full charge in ~16 hours,
+  a NEW degenerate near-permanent-near-zero-SOC failure mode, arguably
+  worse than the one this milestone exists to fix. `accessory_load_w`
+  alone gives ~0.92%/hour — physically sane. New public function
+  `battery.ocv_v` (extracted from the existing `_ocv_and_r0_ohm`'s OCV
+  term, no duplicated logic) supplies the pack voltage for the
+  power-to-current conversion, evaluated once at `typical_end_soc`/
+  `reference_temp_k` (not recomputed hourly — `docv_dt_v_per_k=0.0` for
+  every profile today, so temperature dependence is already inert
+  everywhere in this project).
+  **Pre-implementation hand-verification** (required before writing any
+  Tier-2 code, per this project's standing discipline): a standalone
+  recurrence calculation using the real Leaf/Guam scenario, real Tier-1
+  trip deltas, and the real shuffled day-type schedule gave a 1-year
+  time-weighted average SOC of ~0.648 (min 0.24, max 0.80) — below an
+  initial ~0.68-0.72 estimate, but that estimate was acknowledged as a
+  rough first-principles guess, not a calibrated target, and 0.648 was
+  accepted as the model's honest output, not something to tune toward a
+  target.
+  **Q-0013 (anchor treatment): resolved as Option 2, coefficients
+  unchanged.** `calendar_aging_rate_per_s`/`calendar_aging_activation_
+  temp_k` are NOT re-derived — the anchors' 80%/60% SOC values are
+  calibration conditions, not proxies for real fleet SOC trajectories, and
+  re-deriving against a changing SOC model has no principled stopping
+  point. The two anchor-reproduction tests in `tests/test_aging.py` call
+  `compute_aging_step` directly with constant `soc`/`cell_temp_k`, never
+  touching `simulate_long_horizon`'s trajectory at all — confirmed
+  unaffected by the full suite passing unchanged. New deferred-work item,
+  not a gap to fix: "anchor calibration sensitivity to assumed
+  constant-SOC conditions" — realistic-trajectory predictions carry this
+  systematic uncertainty until real fleet SOC distributions justify
+  re-deriving the coefficients.
+  **Three new design questions opened and deliberately left unresolved**
+  (`docs/DESIGN_QUESTIONS.md` Q-0014/Q-0015/Q-0016): what `typical_start_
+  soc` actually means now that it's a reference point rather than an
+  enforced daily value (current implemented behavior documented as
+  matching "Option 2, descriptive not prescriptive" from that discussion,
+  not deliberated as definitively correct); how `FAST_CHARGE_SESSION`
+  days should interact with the daily charge-reset event (currently no
+  special-casing — a fast-charge day's session and the day's normal reset
+  both apply, redundant but harmless); and that `test_long_horizon_
+  validation.py`'s reference generator still uses the OLD snapping
+  assumption and needs its own follow-up fix (currently still PASSES, but
+  only because both real-profile losses are small enough at its 60-day
+  window to sit under the 0.1% absolute tolerance floor — relative error
+  grew from ~0.8-4% historically to 15.64%/10.14% post-fix; a longer
+  window or different seed could push this past the floor and fail; not
+  blocking this milestone, since the fix itself is validated by direct
+  hand-computation and the checks below, not by this harness).
+  **Validation, per the required sequencing (flagship comparison, then
+  20-year point estimate, before any multi-year MC):**
+  1. **Flagship 90-day comparison re-run — comparative structure survives,
+     absolute numbers dropped, as expected:**
+     | | Leaf/Guam total | Leaf/Guam calendar | Model3/Seattle total | total ratio |
+     |---|---|---|---|---|
+     | Pre-SOC-fix (constant 0.8) | 0.6520% | 0.6184% | 0.1243% | 5.245 |
+     | **Post-SOC-fix** | **0.5828%** | **0.5492%** | **0.1194%** | **4.883** |
+
+     Both vehicles age less (expected — time-weighted average SOC ~0.648
+     is below the old constant 0.8), and the comparative structure holds
+     (ratio moved from 5.245 to 4.883, not collapsed or inverted). Cycle
+     loss is unaffected by this fix (0.0336%/0.0017%, unchanged — the
+     parked-SOC model only touches calendar aging).
+  2. **20-year unperturbed Leaf/Guam point estimate — plausible in
+     direction and magnitude, but BELOW the pre-stated "55-70% credible"
+     expectation, reported honestly rather than adjusted toward it:**
+     47.279% SOH at year 20 (vs. the pre-fix model's 40.910% — moved in
+     the right direction, by a real amount, but not into the stated
+     credible band). SOC now genuinely varies day-to-day (confirmed by
+     direct trajectory dump: distinct end-of-day SOC values across the
+     full 20-year run span roughly 0.7815-0.7861, no longer pinned at a
+     single constant), so the SOC-snapping severity finding that
+     triggered this milestone is conclusively resolved. **The most likely
+     explanation for landing below the credible estimate is the
+     separately-real, already-anticipated concern about calendar aging's
+     purely-linear-in-time formulation (no saturation term) extrapolated
+     roughly 2-4x past the calibration anchors' own 5-10 year window** —
+     see `docs/model_reference.md`'s new "Validated time horizon" note.
+     This is NOT treated as a bug to chase or a result to tune toward the
+     estimate — the estimate was a rough guess made before running the
+     model, not a target, and forcing the number into range would be
+     exactly the "tune the model to the desired narrative" failure mode
+     this project's rigor has avoided throughout. **Full 500-sample
+     multi-year Monte Carlo is intentionally NOT run or published as part
+     of this milestone** — the point-estimate check came back outside the
+     stated credible range, and per the explicit gate this milestone was
+     scoped under, that result gets surfaced for review before spending a
+     500-sample run on it, not treated as "close enough, proceed."
+  3. **MC v1's 90-day record re-run, replacing the previous entry's
+     numbers (N=500, same mc_seed/schedule_seed, only the underlying SOC
+     model changed):**
+     | day | p05 (old → new) | p50 (old → new) | p95 (old → new) |
+     |---|---|---|---|
+     | 0 | 99.9763% → 99.9845% | 99.9909% → 99.9937% | 99.9959% → 99.9973% |
+     | 30 | 99.3764% → 99.4609% | 99.7381% → 99.7708% | 99.8745% → 99.8889% |
+     | 60 | 98.8450% → 99.0068% | 99.5165% → 99.5733% | 99.7700% → 99.7948% |
+     | 89 | 98.3592% → 98.5980% | 99.3067% → 99.3860% | 99.6715% → 99.7055% |
+
+     Every value moved slightly higher (less degradation), consistent
+     with the flagship comparison's own direction and the ~0.648 vs. 0.8
+     average-SOC explanation. `examples/monte_carlo_leaf_guam.py` was
+     generalized to accept `--duration-years` (from a hardcoded 1) as
+     part of the multi-year investigation this milestone grew out of.
+  All prior sections of this file describing the pre-fix SOC-snapping
+  behavior, its EFC-table numbers, and the earlier 90-day MC record are
+  kept as historical record (explicitly, not silently superseded) — this
+  entry's numbers are what's current.

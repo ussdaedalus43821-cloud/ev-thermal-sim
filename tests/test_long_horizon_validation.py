@@ -177,14 +177,35 @@ def test_tier2_matches_tier1_reference_within_tolerance(profile_yaml: str) -> No
     +-3/+8K), `_interpolate_characterization`'s linear interpolation
     between ambient buckets (vs. the true nonlinear Arrhenius temperature
     dependence), and `relax_parked_temp_k`'s hourly (not continuous)
-    quadrature. None of these are eliminated by this test passing -- they're
-    why the tolerance has a floor at all. The Leaf's margin (this seed:
-    0.80% relative error, well inside the 5% band) is not a fragile
-    near-zero coincidence: re-run across seeds 7/55/999 (different day-type
-    schedules, same profile) gives 2.96%/4.14%/1.95% relative error --
-    consistently small and well-behaved, no sign flips or blowups, which is
-    what you'd expect from several independent small approximation errors
-    rather than one dominant term being cancelled by coincidence.
+    quadrature.
+
+    **A fifth error source, newly opened by the "parked-SOC model" milestone
+    (docs/DESIGN_QUESTIONS.md Q-0012) -- KNOWN, not yet closed:** this
+    reference still patches SOC to `typical_end_soc` every `_PARKED_STEP_S`
+    (the pre-Q-0012 snapping assumption `simulate_long_horizon` no longer
+    uses), while Tier-2 now runs a real per-hour decay-and-one-daily-reset
+    trajectory. Relative error at this test's own seed/window grew from
+    ~0.8-4% (pre-fix) to **15.64% (Leaf) / 10.14% (Model 3)** post-fix --
+    still passing ONLY because both losses are small enough at this 60-day
+    window to fall under the 0.1% absolute floor (diff=0.000739/0.000441,
+    both < the 0.001 floor), not because the reference is still a tight
+    ground truth. A longer window or different seed could push this past
+    the floor and fail. The reference generator needs its own follow-up fix
+    to mirror Q-0012's one-reset-per-day cadence (not blocking this
+    milestone -- see the deferred Q-NNNN entry for it) -- and even then,
+    the reference's real per-second physics will still apply sim.py's full
+    `aux_current_a` (hvac_power_w + accessory_load_w) during parked steps,
+    unconditionally, per sim.py's own already-documented behavior, while
+    Tier-2's new decay model deliberately uses `accessory_load_w` alone (a
+    driving-mode HVAC load is not a realistic 24/7 parked drain -- see
+    `simulate_long_horizon`'s own docstring) -- so some further residual
+    error from that divergence is expected to remain even after the
+    reference's charge-event cadence is fixed. Do not read a comfortable
+    margin on this test today as validating Tier-2's new SOC model; it
+    validates the OLD one, which Tier-2 no longer implements.
+    The Leaf's ~0.80% and cross-seed 2.96%/4.14%/1.95% relative-error
+    figures below are historical (pre-Q-0012), kept for record, not current
+    behavior:
     """
     n_days = 60
     profile = load_profile(PROFILES_DIR / profile_yaml)

@@ -25,6 +25,7 @@ from ev_thermal.long_horizon import (
     _archetype_assumed_start_temp_k,
     _fast_charge_phases,
     _interpolate_characterization,
+    _parked_soc_trajectory,
     _phase_aging,
     _speed_from_waypoints,
     ambient_bucket_temps_k,
@@ -315,19 +316,108 @@ def test_relax_parked_temp_k_zero_duration_returns_only_start_sample() -> None:
     assert samples == [(0.0, 300.0)]
 
 
+def test_parked_soc_trajectory_decays_linearly_with_no_charge_event_in_window() -> None:
+    samples = _parked_soc_trajectory(
+        start_soc=0.7, start_t_s=0.0, duration_s=7200.0, charge_event_s=1_000_000.0,
+        decay_per_hour=0.01, typical_end_soc=0.8, step_s=3600.0,
+    )
+    assert samples[0] == (0.0, 0.7)
+    assert samples[1][1] == pytest.approx(0.69)
+    assert samples[2][1] == pytest.approx(0.68)
+
+
+def test_parked_soc_trajectory_snaps_to_typical_end_soc_at_charge_event_boundary() -> None:
+    samples = _parked_soc_trajectory(
+        start_soc=0.5, start_t_s=0.0, duration_s=7200.0, charge_event_s=3600.0,
+        decay_per_hour=0.01, typical_end_soc=0.8, step_s=3600.0,
+    )
+    assert samples[1][1] == pytest.approx(0.8)  # step boundary crosses charge_event_s exactly
+    assert samples[2][1] == pytest.approx(0.79)  # decays again after the charge event
+
+
+def test_parked_soc_trajectory_charge_event_outside_window_never_fires() -> None:
+    no_event = _parked_soc_trajectory(
+        start_soc=0.5, start_t_s=0.0, duration_s=3600.0, charge_event_s=-100.0,
+        decay_per_hour=0.01, typical_end_soc=0.8, step_s=3600.0,
+    )
+    assert no_event[-1][1] == pytest.approx(0.49)
+    no_event_future = _parked_soc_trajectory(
+        start_soc=0.5, start_t_s=0.0, duration_s=3600.0, charge_event_s=1_000_000.0,
+        decay_per_hour=0.01, typical_end_soc=0.8, step_s=3600.0,
+    )
+    assert no_event_future[-1][1] == pytest.approx(0.49)
+
+
+def test_parked_soc_trajectory_never_goes_negative() -> None:
+    samples = _parked_soc_trajectory(
+        start_soc=0.05, start_t_s=0.0, duration_s=3600.0 * 10, charge_event_s=1_000_000.0,
+        decay_per_hour=0.5, typical_end_soc=0.8, step_s=3600.0,
+    )
+    assert all(soc >= 0.0 for _t, soc in samples)
+
+
+def test_parked_soc_trajectory_zero_duration_returns_only_start_sample() -> None:
+    samples = _parked_soc_trajectory(
+        start_soc=0.6, start_t_s=0.0, duration_s=0.0, charge_event_s=1000.0,
+        decay_per_hour=0.01, typical_end_soc=0.8,
+    )
+    assert samples == [(0.0, 0.6)]
+
+
+def test_parked_soc_trajectory_matches_relax_parked_temp_k_sample_timestamps() -> None:
+    """`parked_calendar_aging`'s `strict=True` zip requires these two series to
+    share an identical time axis -- this is the guard against that silently
+    breaking."""
+    temp_samples = relax_parked_temp_k(
+        start_temp_k=300.0, tau_s=1000.0, ambient_fn=lambda _t: 290.0,
+        start_t_s=0.0, duration_s=7500.0, step_s=3600.0,
+    )
+    soc_samples = _parked_soc_trajectory(
+        start_soc=0.6, start_t_s=0.0, duration_s=7500.0, charge_event_s=1_000_000.0,
+        decay_per_hour=0.01, typical_end_soc=0.8, step_s=3600.0,
+    )
+    assert [t for t, _ in soc_samples] == [t for t, _ in temp_samples]
+
+
 def test_parked_calendar_aging_matches_direct_compute_aging_step_sum() -> None:
     profile = _make_long_horizon_profile()
     spec = profile.battery
-    samples = [(0.0, 300.0), (3600.0, 305.0), (7200.0, 302.0)]
-    result = parked_calendar_aging(spec, soc=0.6, temp_samples=samples)
+    temp_samples = [(0.0, 300.0), (3600.0, 305.0), (7200.0, 302.0)]
+    soc_samples = [(0.0, 0.6), (3600.0, 0.6), (7200.0, 0.6)]
+    result = parked_calendar_aging(spec, soc_samples=soc_samples, temp_samples=temp_samples)
     expected = sum(
         compute_aging_step(
             spec, soh=1.0, cell_temp_k=temp0, soc=0.6, applied_current_a=0.0, dt_s=t1 - t0
         ).calendar_delta
-        for (t0, temp0), (t1, _temp1) in zip(samples, samples[1:], strict=False)
+        for (t0, temp0), (t1, _temp1) in zip(temp_samples, temp_samples[1:], strict=False)
     )
     assert result == pytest.approx(expected)
-    assert result > 0.0
+
+
+def test_parked_calendar_aging_uses_each_intervals_own_soc_not_a_constant() -> None:
+    """Milestone "parked-SOC model" (Q-0012): `parked_calendar_aging` must
+    actually read each interval's own start-of-interval SOC, not silently
+    collapse to a single constant the way it did before this milestone.
+    """
+    profile = _make_long_horizon_profile()
+    spec = profile.battery
+    temp_samples = [(0.0, 300.0), (3600.0, 300.0), (7200.0, 300.0)]
+    high_soc_samples = [(0.0, 0.8), (3600.0, 0.8), (7200.0, 0.8)]
+    low_soc_samples = [(0.0, 0.3), (3600.0, 0.3), (7200.0, 0.3)]
+
+    high_result = parked_calendar_aging(spec, soc_samples=high_soc_samples, temp_samples=temp_samples)
+    low_result = parked_calendar_aging(spec, soc_samples=low_soc_samples, temp_samples=temp_samples)
+
+    assert high_result > low_result  # calendar_aging_soc_sensitivity=1.0: higher SOC ages faster
+
+
+def test_parked_calendar_aging_raises_on_length_mismatch() -> None:
+    profile = _make_long_horizon_profile()
+    spec = profile.battery
+    temp_samples = [(0.0, 300.0), (3600.0, 300.0)]
+    soc_samples = [(0.0, 0.6), (3600.0, 0.6), (7200.0, 0.6)]
+    with pytest.raises(ValueError, match="shorter"):
+        parked_calendar_aging(spec, soc_samples=soc_samples, temp_samples=temp_samples)
 
 
 def test_apply_trip_start_offset_is_noop_at_assumed_start_temp() -> None:

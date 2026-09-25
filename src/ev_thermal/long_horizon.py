@@ -36,6 +36,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from ev_thermal.aging import compute_aging_step
+from ev_thermal.battery import ocv_v as battery_ocv_v
 from ev_thermal.schema import (
     AnnualDayTypeMix,
     BatterySpec,
@@ -625,21 +626,82 @@ def relax_parked_temp_k(
     return samples
 
 
-def parked_calendar_aging(spec: BatterySpec, soc: float, temp_samples: list[tuple[float, float]]) -> float:
+def parked_calendar_aging(
+    spec: BatterySpec,
+    soc_samples: list[tuple[float, float]],
+    temp_samples: list[tuple[float, float]],
+) -> float:
     """Sums calendar_delta (`aging.compute_aging_step`, `applied_current_a=0.0`
-    so `cycle_delta` is exactly zero) across consecutive `temp_samples`
-    intervals from `relax_parked_temp_k`, using each interval's start-of-
-    interval temperature (left Riemann, matching `_phase_aging`'s convention).
-    `soc` is held constant across the whole parked period -- no charger model
-    exists yet (see CLAUDE.md's dt-policy "or charging" gap).
+    so `cycle_delta` is exactly zero) across consecutive intervals, using each
+    interval's start-of-interval SOC and temperature (left Riemann, matching
+    `_phase_aging`'s convention). `soc_samples` and `temp_samples` MUST share
+    the same time axis (same `start_t_s`/`duration_s`/`step_s`, see
+    `_parked_soc_trajectory`/`relax_parked_temp_k`) -- `strict=True` below
+    catches a length mismatch immediately rather than silently misaligning
+    SOC and temperature within an interval.
+
+    Milestone "parked-SOC model" (see docs/DESIGN_QUESTIONS.md Q-0012):
+    `soc` is no longer held constant across the whole parked period -- the
+    caller now passes a real per-hour trajectory from
+    `_parked_soc_trajectory`, replacing the earlier single-scalar `soc`
+    parameter that produced the SOC-snapping severity documented in
+    CLAUDE.md's Known deferred work.
     """
     total = 0.0
-    for (t0, temp0), (t1, _temp1) in zip(temp_samples, temp_samples[1:], strict=False):
+    for (soc_t0, soc0), (soc_t1, _soc1), (_temp_t0, temp0) in zip(
+        soc_samples[:-1], soc_samples[1:], temp_samples[:-1], strict=True
+    ):
         result = compute_aging_step(
-            spec, soh=1.0, cell_temp_k=temp0, soc=soc, applied_current_a=0.0, dt_s=t1 - t0
+            spec, soh=1.0, cell_temp_k=temp0, soc=soc0, applied_current_a=0.0, dt_s=soc_t1 - soc_t0
         )
         total += result.calendar_delta
     return total
+
+
+def _parked_soc_trajectory(
+    start_soc: float,
+    start_t_s: float,
+    duration_s: float,
+    charge_event_s: float,
+    decay_per_hour: float,
+    typical_end_soc: float,
+    step_s: float = 3600.0,
+) -> list[tuple[float, float]]:
+    """Piecewise-linear SOC decay through a parked period, with exactly one
+    charge event (an instantaneous reset to `typical_end_soc`) applied at the
+    step boundary that crosses `charge_event_s` (an absolute sim-time, always
+    within this call's `[start_t_s, start_t_s + duration_s)` window in
+    practice -- `simulate_long_horizon` never calls this across more than one
+    calendar day). No charge-session physics (power caps, taper, thermal
+    coupling) -- only the SHAPE of the daily SOC trajectory matters for
+    calendar aging's SOC-sensitivity term. See docs/DESIGN_QUESTIONS.md
+    Q-0012.
+
+    Same step_s/sampling convention as `relax_parked_temp_k` (matching
+    timestamps, required by `parked_calendar_aging`'s `strict=True` zip) --
+    the charge event is snapped to the nearest step boundary at or after
+    `charge_event_s`, not sampled at its exact instant, trading a sub-hour
+    timing error (negligible next to every other approximation already in
+    this model) for guaranteed alignment with `temp_samples`.
+
+    Returns `[(elapsed_t_s, soc), ...]` at each step boundary, including the
+    starting point, mirroring `relax_parked_temp_k`'s own return shape.
+    """
+    samples: list[tuple[float, float]] = [(start_t_s, start_soc)]
+    if duration_s <= 0.0:
+        return samples
+    soc = start_soc
+    elapsed_s = 0.0
+    while elapsed_s < duration_s:
+        dt = min(step_s, duration_s - elapsed_s)
+        t_before = start_t_s + elapsed_s
+        t_after = t_before + dt
+        soc = max(0.0, soc - decay_per_hour * (dt / 3600.0))
+        if t_before < charge_event_s <= t_after:
+            soc = typical_end_soc
+        elapsed_s += dt
+        samples.append((t_after, soc))
+    return samples
 
 
 def _archetype_assumed_start_temp_k(
@@ -762,10 +824,19 @@ def simulate_long_horizon(
     their trajectory, and they re-equilibrate to near-ambient within minutes
     of any real parked period -- see CLAUDE.md).
 
-    SOC is topped up instantaneously to `charging_profile.typical_end_soc`
-    after every trip day (Tier-2 doesn't model charge-session physics at
-    phase level) and held constant through parked periods (no charger model
-    exists yet).
+    SOC is a real per-hour trajectory, not a snapped constant (Milestone
+    "parked-SOC model" -- see docs/DESIGN_QUESTIONS.md Q-0012, and
+    CLAUDE.md's Known deferred work for why the previous instantaneous-snap-
+    to-typical_end_soc behavior had to be replaced): a trip applies its own
+    actual SOC delta (`characterization.final_soc - charging_profile.
+    typical_start_soc`, i.e. `typical_start_soc` is the reference point
+    Tier-1 characterization used, not an enforced actual value each day --
+    see Q-0012's own note on this), the pack then decays through the parked
+    period at a rate driven by `AuxLoads.accessory_load_w` ONLY (the
+    schema's own "baseline 12V/accessory" load -- NOT `hvac_power_w`, which
+    is a driving/occupied-cabin load and produces an unrealistic ~5%/hour
+    drain if used here), and charges back to `typical_end_soc` exactly once
+    per day at `charging_profile.charge_reset_hour`.
     """
     spec = profile.battery
     battery_node_name = spec.thermal_node.name
@@ -774,6 +845,9 @@ def simulate_long_horizon(
         if spec.thermal_node.resistance_to_ambient_k_per_w is None
         else spec.thermal_node.resistance_to_ambient_k_per_w.value * spec.thermal_node.capacitance_j_per_k.value
     )
+    accessory_power_w = profile.aux_loads.accessory_load_w.value / profile.aux_loads.dc_dc_converter_efficiency.value
+    pack_voltage_v = battery_ocv_v(spec, charging_profile.typical_end_soc.value, spec.reference_temp_k.value)
+    decay_per_hour = (accessory_power_w / pack_voltage_v) / spec.capacity_nominal_ah.value
 
     day0 = start_day_of_year if start_day_of_year is not None else _default_start_day_of_year()
     pack_temp_k = ambient_temp_k(climate, day0, _START_OF_DAY_HOUR)
@@ -814,7 +888,8 @@ def simulate_long_horizon(
                 cycle_loss_cumulative += result.cycle_delta
 
             odometer_km += characterization.odometer_km_delta
-            soc = charging_profile.typical_end_soc.value
+            trip_delta_soc = characterization.final_soc - charging_profile.typical_start_soc.value
+            soc = max(0.0, soc + trip_delta_soc)
             pack_temp_k = characterization.final_node_temps_k[battery_node_name]
             trip_duration_s = sum(phase.duration_s for phase in characterization.phases)
             parked_duration_s = max(0.0, 86400.0 - trip_duration_s)
@@ -824,10 +899,20 @@ def simulate_long_horizon(
             parked_start_s = day_start_s
 
         temp_samples = relax_parked_temp_k(pack_temp_k, tau_s, ambient_fn, parked_start_s, parked_duration_s)
-        parked_loss = parked_calendar_aging(spec, soc, temp_samples)
+        charge_event_s = day_start_s + charging_profile.charge_reset_hour.value * 3600.0
+        soc_samples = _parked_soc_trajectory(
+            soc,
+            parked_start_s,
+            parked_duration_s,
+            charge_event_s,
+            decay_per_hour,
+            charging_profile.typical_end_soc.value,
+        )
+        parked_loss = parked_calendar_aging(spec, soc_samples, temp_samples)
         calendar_loss_cumulative += parked_loss
         soh = max(0.0, soh - parked_loss)
         pack_temp_k = temp_samples[-1][1]
+        soc = soc_samples[-1][1]
 
         checkpoints.append(
             LongHorizonCheckpoint(

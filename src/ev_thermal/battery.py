@@ -129,14 +129,27 @@ def _soc_floor_scale(soc: float, floor: float, full_available_soc: float) -> flo
     return (soc - floor) / (full_available_soc - floor)
 
 
-def _ocv_and_r0_ohm(spec: BatterySpec, soc: float, cell_temp_k: float) -> tuple[float, float]:
-    ocv_v = _interpolate(spec.ocv_curve_v, soc) + spec.docv_dt_v_per_k.value * (
+def _ocv_v(spec: BatterySpec, soc: float, cell_temp_k: float) -> float:
+    return _interpolate(spec.ocv_curve_v, soc) + spec.docv_dt_v_per_k.value * (
         cell_temp_k - spec.reference_temp_k.value
     )
+
+
+def _ocv_and_r0_ohm(spec: BatterySpec, soc: float, cell_temp_k: float) -> tuple[float, float]:
     r0_ohm = _interpolate(spec.r0_curve_ohm, soc) * math.exp(
         spec.r0_arrhenius_activation_temp_k.value * (1.0 / cell_temp_k - 1.0 / spec.reference_temp_k.value)
     )
-    return ocv_v, r0_ohm
+    return _ocv_v(spec, soc, cell_temp_k), r0_ohm
+
+
+def ocv_v(spec: BatterySpec, soc: float, cell_temp_k: float) -> float:
+    """Public open-circuit-voltage lookup -- the same curve `_ocv_and_r0_ohm`
+    uses internally for the full electrical step, exposed standalone for
+    callers (e.g. `long_horizon.py`'s parked-SOC decay model) that need a
+    representative pack voltage without the full R0/R1C1 electrical-step
+    machinery.
+    """
+    return _ocv_v(spec, soc, cell_temp_k)
 
 
 def available_discharge_current_a(spec: BatterySpec, soc: float, cell_temp_k: float, v_rc_v: float) -> float:

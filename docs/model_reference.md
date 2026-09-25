@@ -176,6 +176,37 @@ for a two-point empirical fit, not an error, but it means this coefficient
 must never be "corrected" toward a literature value without re-solving
 against the same two anchors, or the anchor fit breaks.
 
+**Validated time horizon: the two anchors' evidential content lives in a
+5-10 year window (the Leaf/Guam anchor is 5 years, the Model3/Seattle
+anchor is 10), not the 20-30 year vehicle lifetimes this project's
+long-horizon mode actually runs.** `calendar_delta = rate * dt` is purely
+linear in time, with no saturation term, so any multi-year prediction
+beyond roughly 10 years is a linear extrapolation past both anchors'
+own calibration window, not a claim validated against fleet data at that
+horizon. This matters concretely, not just in principle: after the
+parked-SOC model fix (see the note below and CLAUDE.md's Known deferred
+work), a 20-year point-estimate run of the Leaf/Guam scenario predicts
+47.3% SOH — lower than a rough "55-70% credible" expectation set before
+running it. The most likely explanation is this same linear-extrapolation
+gap, not a new bug (the fix's own direction and magnitude were separately
+verified: SOC now genuinely varies day-to-day, no longer pinned at a
+constant worst case, and both the flagship comparison's and this
+anchor-reproduction check's numbers moved in the expected direction).
+Treat any SOH trajectory predicted past ~10 years as extrapolation with
+this specific, named uncertainty, not as validated the way the anchors'
+own 5-10 year window is.
+
+**Parked-SOC model (added alongside the above finding):** calendar aging's
+SOC-sensitivity term now sees a real, time-varying SOC trajectory (decay
+while parked, one reset-to-`typical_end_soc` charge event per day) instead
+of a value snapped constant to `typical_end_soc` for the whole parked
+period. See CLAUDE.md's Known deferred work (Milestone "parked-SOC model")
+and `docs/DESIGN_QUESTIONS.md` Q-0012-Q-0016 for the full record, including
+why the snapped-constant version had to be replaced (it pinned SOC at the
+anchors' own worst-case 80% condition essentially permanently, fabricating
+part of any multi-year divergence claim) and what's still approximate
+about the replacement.
+
 **Shared across all six vehicles by design:** real cell chemistry (LMO for
 the Leaf, NCA for the Model 3/Bolt, NMC for the Niro, Samsung cells for the
 i3) ages differently in reality, but every profile here uses the same aging

@@ -65,6 +65,7 @@ def build_scenario(profile: ManufacturerProfile) -> Scenario:
         dc_fast_charge_fraction=_sourced(0.05),
         preconditioning_enabled=False,
         dc_charge_power_kw=_sourced(50.0),
+        charge_reset_hour=_sourced(22.0),
     )
     dt_policy = DTPolicy(min_dt_s=1.0, max_dt_s=60.0, max_temp_change_per_step_k=0.5, method="adaptive-euler")
 

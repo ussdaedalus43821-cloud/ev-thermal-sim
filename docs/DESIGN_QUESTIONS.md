@@ -549,6 +549,58 @@ code it calls is.
      entry (the "or charging" dt-policy clause, the SOC-snapping note
      itself).
 - Blocking: yes
+- **Resolution (2026-09-24): Option 1, approved, with specifics ratified
+  beyond the original options above:** SOC tracked as a real value through
+  each 24-hour cycle. A trip applies its own actual SOC delta (`character
+  ization.final_soc - charging_profile.typical_start_soc`, i.e. Tier-1's
+  own already-computed result, not re-derived from phase C-rates); parked
+  periods decay linearly at a rate driven by `AuxLoads.accessory_load_w`
+  ONLY (see the aux-load finding below — NOT the full `hvac_power_w +
+  accessory_load_w` `aux_current_a` sim.py uses elsewhere); one charge
+  event per day, at a new `ChargingProfile.charge_reset_hour: Sourced
+  [float]` field (renamed from the originally-proposed `charge_completion
+  _hour` — see the naming note below), resets SOC to `typical_end_soc`.
+  No charge-session physics (power caps, taper, thermal coupling) — only
+  the daily trajectory's shape.
+  **`charge_reset_hour` value: 22.0 (10pm), not `_START_OF_DAY_HOUR`
+  (reused).** A new, separate field — reusing `_START_OF_DAY_HOUR` would
+  couple two independent concerns (Tier-2's day-0 initial-temp lookup vs.
+  per-day charge timing) exactly the way `TRIP_HOUR_OF_DAY` was originally
+  split from `_START_OF_DAY_HOUR` to avoid. Since a day's trip is
+  simulated starting at the day boundary (hour 0) in this model, realistic
+  overnight charging — completing shortly before the NEXT day's trip —
+  falls late in THIS day's 24-hour window, near hour 24; 22.0 is a
+  defensible late-evening placeholder with margin from the boundary.
+  **Named `charge_reset_hour`, not `charge_completion_hour`** — the field
+  models one instant where SOC resets, not a real charge session's
+  start/duration/taper; "completion" implies a session the model doesn't
+  simulate. The value (22.0) didn't need to change for the rename, since
+  the coarse model doesn't depend on the exact hour within reason (see the
+  hand-computed sensitivity below).
+  **A real finding surfaced before implementing, via the hand-computation
+  this resolution required (not assumed): literally reusing sim.py's
+  `aux_current_a` (`hvac_power_w + accessory_load_w`) as the parked decay
+  rate is a category error, not a simplification.** `hvac_power_w`'s own
+  field docstring is "typical cabin HVAC electrical draw" — an occupied/
+  driving-mode load; `accessory_load_w`'s is "baseline 12V/accessory
+  electrical draw" — already the schema's own name for standby drain.
+  Reusing the full sum produced ~5.08%/hour decay for the real Nissan Leaf
+  profile — a full charge drained in ~16 hours, collapsing the model into
+  permanent near-zero SOC every single day, a new degenerate failure mode
+  as bad as the one this fix exists to remove. `accessory_load_w` alone
+  gives ~0.92%/hour — physically sane. Hand-computed (per the required
+  pre-implementation check) time-weighted average SOC over a 1-year
+  simulation of the real Leaf/Guam scenario, using the real day-type
+  schedule and real Tier-1 trip deltas: **~0.648**, min 0.24, max 0.80 —
+  below the ~0.68-0.72 initial estimate but not degenerate, and the
+  estimate itself was acknowledged as a rough first-principles guess, not
+  a calibrated target; 0.648 was accepted as the model's honest output.
+  Pack voltage for the decay-current conversion: `battery.ocv_v` (new
+  public function, extracted from `_ocv_and_r0_ohm`'s existing OCV term),
+  evaluated once at `typical_end_soc`/`reference_temp_k` (not recomputed
+  hourly — `docv_dt_v_per_k=0.0` for every profile today, so temperature
+  dependence is already inert everywhere in this project; revisit
+  alongside that field if it's ever sourced).
 
 ## Q-0013 — Anchor treatment once SOC dynamics change
 
@@ -588,3 +640,149 @@ code it calls is.
   here — this is exactly the kind of choice that shapes how every future
   SOC-model refinement interacts with the anchors, and belongs to the
   user's ruling like Q-0006/Q-0007 before it.
+- **Resolution (2026-09-24): Option 2, approved.** Coefficients
+  (`calendar_aging_rate_per_s`, `calendar_aging_activation_temp_k`) are
+  UNCHANGED by this milestone. Reasoning, for the record: the 80%/60% SOC
+  values in the anchors are calibration CONDITIONS, not proxies for real
+  fleet SOC trajectories — re-deriving coefficients against a changed SOC
+  input would entangle the coefficients with whatever SOC model happens to
+  be running at the time, with no principled stopping point (every future
+  SOC-realism improvement would force another re-derivation). Option 2
+  keeps the coefficients stable and the anchors testable:
+  `test_calendar_aging_matches_leaf_guam_anchor_within_one_percent`/
+  `test_calendar_aging_matches_model3_seattle_anchor_within_one_percent`
+  in `tests/test_aging.py` call `compute_aging_step` directly with
+  `soc`/`cell_temp_k` held constant for the anchor's stated duration —
+  they never go through `simulate_long_horizon`'s SOC trajectory at all,
+  so this milestone's SOC-model change doesn't touch them, confirmed
+  unchanged by the full suite passing after the fix. **New deferred-work
+  item, not a gap to fix:** "anchor calibration sensitivity to assumed
+  constant-SOC conditions" — the coefficients were calibrated against
+  fleet observations under assumed constant 80%/60% SOC; if real fleet SOC
+  distributions ever become available, re-derivation would be needed.
+  Until then, the anchors are idealized self-consistency tests, and
+  realistic-trajectory predictions (e.g. this milestone's own multi-year
+  point estimates) carry that systematic uncertainty as a documented
+  limitation. See CLAUDE.md's Known deferred work for the full record.
+
+## Q-0014 — `typical_start_soc` semantics under the new SOC-trajectory model
+
+- Date: 2026-09-24
+- Context: Under the pre-Q-0012 model, `typical_start_soc` was the SOC
+  Tier-1 characterization (`characterize_trip`, via `initialize_sim_state`)
+  used as a trip's starting condition, AND (via the old instantaneous-snap
+  logic) implicitly close to what Tier-2 assumed each trip actually started
+  from. Under the new model, those two roles are no longer necessarily the
+  same value: Tier-2 now derives each day's actual pre-trip SOC from the
+  previous day's charge-event-and-decay cycle, and applies a TRIP DELTA
+  (`characterization.final_soc - typical_start_soc`) on top of THAT
+  derived value, rather than resetting to `typical_start_soc` each day.
+  This creates a real ambiguity about what the field means going forward.
+- Options considered:
+  1. **`typical_start_soc` is the specified trip start.** The model sets
+     SOC to `typical_start_soc` at the first moment of each day's trip,
+     overriding whatever the overnight decay actually produced. Simpler,
+     but makes the overnight decay's effect on trip-start SOC essentially
+     decorative.
+  2. **`typical_start_soc` is descriptive, not prescriptive.** The model
+     derives actual start SOC from the charge-completion value and the
+     overnight decay; `typical_start_soc` documents roughly what that
+     comes out to (and can drift from it) and serves ONLY as the reference
+     point Tier-1 characterization's `final_soc` is measured relative to,
+     for computing the trip's own consumption delta. This is what the
+     current implementation actually does — `simulate_long_horizon` never
+     resets `soc` to `typical_start_soc` after day 0; it only reads
+     `typical_start_soc` once per trip, to compute `trip_delta_soc =
+     characterization.final_soc - typical_start_soc`, then applies that
+     delta to whatever `soc` currently is.
+  3. **Reconcile:** choose `charge_reset_hour`/decay parameters such that
+     overnight decay lands exactly at `typical_start_soc` by the next
+     trip, making options 1 and 2 coincide. Requires solving for a
+     consistent parameter set, or accepting a residual inconsistency
+     between the two anyway.
+- Blocking: no (raised, not resolved) — explicitly deferred per
+  instruction: document current behavior, do not resolve here.
+- **Current implemented behavior is Option 2** (confirmed by reading
+  `simulate_long_horizon`'s own code, not assumed): `typical_start_soc` is
+  a fixed reference point for measuring each trip's own consumption, not
+  an enforced daily starting condition. This was not deliberated as the
+  definitively "right" semantic choice — it's what naturally fell out of
+  reusing `characterization.final_soc` (Tier-1's own already-computed
+  result) without re-deriving trip consumption from phase C-rates. Revisit
+  once there's a concrete reason to (e.g. if `typical_start_soc` needs to
+  mean something precise for a downstream consumer).
+
+## Q-0015 — `FAST_CHARGE_SESSION` interaction with the daily SOC trajectory
+
+- Date: 2026-09-24
+- Context: A `FAST_CHARGE_SESSION` day is currently treated by
+  `simulate_long_horizon` exactly like any other trip day — its
+  `characterization.final_soc` (which, being a charging session, ends near
+  a high SOC) feeds the same `trip_delta_soc` computation as a driving
+  trip, and the day's normal charge-reset-and-decay cycle still applies
+  afterward. This raises an unresolved question: should a fast-charge day
+  interact with the SAME once-per-day `charge_reset_hour` event as every
+  other day (redundant — SOC is already near `typical_end_soc` from the
+  session itself, so the later reset just re-confirms the same value,
+  harmless but conceptually odd), or should it be treated as an
+  alternative to the day's normal charge event (the fast-charge session
+  IS that day's charging, so the later `charge_reset_hour` snap shouldn't
+  fire again)?
+- Options considered:
+  1. **No special-casing (current behavior).** Fast-charge days get a
+     `trip_delta_soc` like any trip, then the day's charge-reset-and-decay
+     cycle proceeds unchanged. Simple, and not obviously wrong (the reset
+     to `typical_end_soc` is close to a no-op on a day that already ended
+     near there), but not deliberately reasoned through either.
+  2. **Fast-charge sessions suppress that day's normal charge-reset
+     event**, treating the session itself as the day's one charging event.
+     More physically accurate (a real driver who fast-charges mid-day
+     doesn't ALSO plug in again overnight for a second full top-up in this
+     simplified model) but adds a conditional to the day loop specifically
+     for one `TripType`.
+- Blocking: no (raised, not resolved) — not blocking the parked-SOC model
+  landing; fast-charge days are 20/365 (~5.5%) of the default day-type mix
+  used in this project's example scenarios, a small fraction of the
+  signal. Revisit once there's a concrete reason this matters (e.g. a
+  fast-charge-focused long-horizon analysis where the distinction would be
+  more than a rounding error).
+
+## Q-0016 — `test_long_horizon_validation.py`'s reference generator needs its own follow-up fix
+
+- Date: 2026-09-24
+- Context: `_generate_tier1_reference_soh` still patches SOC to
+  `typical_end_soc` every `_PARKED_STEP_S` (the pre-Q-0012 snapping
+  assumption), while `simulate_long_horizon` now runs a real per-hour
+  decay-and-one-daily-reset trajectory. Confirmed by direct measurement:
+  the harness's own test still PASSES post-Q-0012, but relative error at
+  its seed/window grew from ~0.8-4% (historical) to 15.64% (Leaf) / 10.14%
+  (Model 3) — passing only because both losses are small enough at this
+  60-day window to sit under the 0.1% absolute floor, not because the
+  reference is still a tight ground truth. A longer window or different
+  seed could push this past the floor and fail.
+- Options considered:
+  1. **Fix the reference generator now, as part of this milestone.**
+     Keeps the validation harness meaningful immediately, but the fix
+     isn't a simple cadence change: even after matching the once-per-day
+     charge-event timing, the reference's real per-second physics (via
+     `run_scenario`) still applies sim.py's full `aux_current_a`
+     (`hvac_power_w + accessory_load_w`) during parked steps
+     unconditionally (sim.py's own already-documented behavior — see
+     CLAUDE.md), while Tier-2's new decay model deliberately uses
+     `accessory_load_w` alone. Closing that gap either means accepting a
+     new, larger residual error source in the validation harness's own
+     tolerance, or means changing `sim.py`'s core aux-draw behavior to be
+     driving-state-aware — a materially bigger, separately-scoped change
+     this milestone did not set out to make.
+  2. **Defer the reference-generator fix to its own follow-up**,
+     documenting the current fragility explicitly in the test's own
+     docstring (done) and here, and accepting that this harness currently
+     validates Tier-2 against a STALE reference for the SOC dimension
+     specifically (the ambient/schedule dimensions it also validates are
+     unaffected and still meaningful).
+- Blocking: no — the parked-SOC model fix itself is validated by direct
+  hand-computation (Q-0012's resolution), the flagship 90-day comparison,
+  and the 20-year point-estimate plausibility check, none of which depend
+  on this harness. This harness's OWN fidelity is a separate, real gap,
+  named explicitly rather than left to be discovered by a future flaky
+  failure.

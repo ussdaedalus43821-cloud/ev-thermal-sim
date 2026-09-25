@@ -836,6 +836,24 @@ class ChargingProfile(BaseModel):
             "since real effective charge rate is min(charger, vehicle acceptance)."
         ),
     )
+    charge_reset_hour: Sourced[float] = Field(
+        ...,
+        description=(
+            "Hour of day (0-24, local to Tier-2's day-boundary convention -- "
+            "see long_horizon.py's simulate_long_horizon) at which the parked-"
+            "SOC decay model applies its one daily charge event, instantaneously "
+            "setting SOC to typical_end_soc. Named 'reset', not 'completion': "
+            "this models the INSTANT SOC is set, not a real charge session's "
+            "start/duration/taper -- there is no charge-session physics here "
+            "(power caps, taper, thermal coupling), only the resulting daily "
+            "SOC trajectory's shape, which is what calendar aging's SOC-"
+            "sensitivity term actually needs. A day's trip is simulated "
+            "starting at the day boundary (hour 0), so a value late in the "
+            "24h range (e.g. ~22.0) represents charging completing shortly "
+            "before the NEXT day's trip, matching realistic overnight "
+            "charging. See docs/DESIGN_QUESTIONS.md Q-0012."
+        ),
+    )
 
 
 class DTPolicy(BaseModel):
