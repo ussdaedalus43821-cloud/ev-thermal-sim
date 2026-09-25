@@ -786,3 +786,60 @@ code it calls is.
   on this harness. This harness's OWN fidelity is a separate, real gap,
   named explicitly rather than left to be discovered by a future flaky
   failure.
+
+## Q-0017 — 47.3% vs. 55-70% multi-year SOH gate: accept as documented extrapolation limit, or investigate further?
+
+- Date: 2026-09-25
+- Context: The parked-SOC model milestone's own gate (CLAUDE.md, Milestone
+  "parked-SOC model") explicitly held full multi-year Monte Carlo pending
+  review of one finding: the unperturbed 20-year Leaf/Guam point estimate
+  came back at 47.3% SOH, below a rough pre-run "55-70% credible"
+  expectation, even though the parked-SOC fix moved the number in the
+  right direction (40.9% -> 47.3%). `docs/model_reference.md`'s "Validated
+  time horizon" note already identifies the most likely cause: calendar
+  aging's `calendar_delta = rate * dt` is purely linear in time with no
+  saturation term, and the two calibration anchors only cover a 5-10 year
+  window (Leaf/Guam: 5yr; Model3/Seattle: 10yr) — a 20-year run
+  extrapolates roughly 2-4x past that calibrated envelope.
+- Options considered:
+  1. **Accept as documented extrapolation limit; clear the gate.** Three
+     independent checks support this reading rather than treating it as a
+     bug: (a) the model reproduces both calibration anchors exactly when
+     run under their own stated constant-condition parameters
+     (`test_calendar_aging_matches_leaf_guam_anchor_within_one_percent`/
+     `..._model3_seattle_anchor_...` in `tests/test_aging.py`); (b) the
+     SOC-trajectory fix moved the estimate in the right direction by a
+     real, non-trivial amount, confirming the fix does what Q-0012 scoped
+     it to do, rather than the gap being unmoved or worsened; (c) the
+     mechanism is mechanistically understood (linear-in-time, no
+     saturation term), not an unexplained discrepancy. Tuning the model
+     (e.g. adjusting `calendar_aging_rate_per_s`/`calendar_aging_
+     activation_temp_k`, or adding an ad hoc saturation term) to land the
+     number inside "55-70%" would be tuning toward a pre-run guess, not a
+     validated target — exactly the failure mode this project has
+     consistently avoided (see, e.g., Q-0006/Q-0007's rejection of
+     capacity-averaging for the same reason).
+  2. **Investigate further before clearing the gate** — e.g. add a
+     saturation term to the calendar-aging formulation, or re-derive the
+     anchors against a longer-horizon fleet data point if one becomes
+     available. Rejected for now: no such data point exists, and inventing
+     a saturation curve without one would be exactly the kind of
+     unsourced-shape guess this project's `Sourced`/anchor discipline
+     exists to avoid.
+- Blocking: yes (blocks the multi-year Monte Carlo milestone until
+  resolved)
+- **Resolution (2026-09-25): Option 1, approved by the user. Gate cleared.**
+  The 47.3% estimate is accepted as-is. The linear-in-time-formulation /
+  anchor-extrapolation limit is not fixed by this resolution — it remains
+  exactly as documented in `docs/model_reference.md`'s "Validated time
+  horizon" note, cross-referenced from here — but it is no longer a reason
+  to withhold the multi-year Monte Carlo milestone. It is carried forward
+  as a deferred aging-model fidelity item (alongside per-vehicle chemistry
+  coefficients, Milestone D's refrigerant-loop abstraction, and
+  preconditioning) rather than as a blocking gate. See CLAUDE.md's Known
+  deferred work, Milestone "parked-SOC model" entry, for the gate-cleared
+  note. Any future multi-year SOH number presented outside a report should
+  still carry the "extrapolation past the 5-10yr calibration window" caveat
+  per `docs/model_reference.md` — clearing this gate authorizes running and
+  publishing multi-year results, it does not retroactively validate the
+  model at that horizon.

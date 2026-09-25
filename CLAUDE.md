@@ -1652,3 +1652,108 @@ not just *what* happened.
   behavior, its EFC-table numbers, and the earlier 90-day MC record are
   kept as historical record (explicitly, not silently superseded) — this
   entry's numbers are what's current.
+  **Gate cleared (2026-09-25), per `docs/DESIGN_QUESTIONS.md` Q-0017:** the
+  47.3%-vs-"55-70% credible" gap above was reviewed and accepted as a
+  documented extrapolation limit (calendar aging's linear-in-time
+  formulation, no saturation term, extrapolated 2-4x past the calibration
+  anchors' 5-10 year window), not a bug — supported by the anchors still
+  reproducing exactly under their own stated conditions, the fix having
+  moved the estimate in the right direction by a real amount, and the
+  mechanism being understood rather than mysterious. The model was NOT
+  tuned to land inside the pre-run guess. **This unblocks the full
+  500-sample multi-year Monte Carlo milestone**, which this gate had been
+  holding; the linear-in-time/anchor-extrapolation limit itself carries
+  forward as a deferred aging-model fidelity item, not as a reason to
+  withhold running or publishing multi-year results going forward. Any
+  multi-year SOH number should still carry `docs/model_reference.md`'s
+  "Validated time horizon" caveat when presented.
+- **Milestone "Multi-year Monte Carlo v1" (done, 2026-09-25):** the first
+  genuine multi-year Monte Carlo record, run after Q-0017 cleared the gate
+  above. No new sampling code was needed — `mc.py`/`examples/
+  monte_carlo_leaf_guam.py` already supported arbitrary `duration_years`;
+  this milestone is the reviewed record itself plus the investigation it
+  surfaced, not a new capability.
+  **Record (Nissan Leaf / Guam, N=500, mc_seed=999, schedule_seed=42, 20
+  years — reproduce via `uv run python -m examples.monte_carlo_leaf_guam
+  --duration-years 20`):**
+  | day (≈year) | p05 | p50 | p95 |
+  |---|---|---|---|
+  | 0 (0) | 99.9845% | 99.9937% | 99.9973% |
+  | 1825 (5) | 65.8973% | 86.0666% | 93.2431% |
+  | 3650 (10) | 31.8158% | 72.1386% | 86.4907% |
+  | 5475 (15) | 0.0000% | 58.2135% | 79.7321% |
+  | 7299 (20) | 0.0000% | 44.2954% | 72.9846% |
+
+  final_soh across 500 samples: min=0.0000%, max=83.1218%.
+  **A second, unplanned investigation was required before this table could
+  be recorded**: the p50 at year 20 (44.2954%) sat ~6.3% relative below
+  the already-reviewed unperturbed point estimate at the same horizon
+  (47.279% SOH, the number Q-0017 just cleared), which is exactly the
+  threshold the existing `test_mc_p50_approximates_flagship_point_estimate`
+  test enforces at 90 days — worth investigating before treating either
+  number as ready to publish, not smoothing over. Two candidate
+  explanations were distinguished by evidence, per explicit instruction,
+  not by reasoning alone: (1) horizon-dependent non-linearity — the gap
+  should grow smoothly and monotonically with horizon; (2) a parked-SOC-
+  model interaction artifact — the gap should appear abruptly at long
+  horizons, since the 90-day p50 test was never re-validated specifically
+  against the parked-SOC-model fix. **Confirmed #1, by two independent
+  pieces of evidence, both gathered via `examples/
+  mc_horizon_gap_investigation.py`
+  (`uv run python -m examples.mc_horizon_gap_investigation`):**
+  | horizon | point estimate | MC p50 | gap (relative) |
+  |---|---|---|---|
+  | 90-day | 99.4172% | 99.3860% | 0.031% |
+  | 1-year | 97.3647% | 97.2173% | 0.151% |
+  | 5-year | 86.8207% | 86.0743% | 0.860% |
+  | 10-year | 73.6411% | 72.1464% | 2.030% |
+  | 20-year | 47.2791% | 44.2954% | 6.311% |
+
+  (1) The gap grows smoothly and monotonically with horizon, with no
+  discontinuity where a parked-SOC-specific effect would show up. (2) The
+  existing 90-day test (`tests/test_mc.py::
+  test_mc_p50_approximates_flagship_point_estimate`, N=200, checked at
+  every one of 90 daily checkpoints) still PASSES its 5%-relative
+  tolerance today, post-parked-SOC-fix — ruling out "the test is stale,"
+  which would be #2's signature. A third finding, beyond what was asked
+  for: the gap is already nonzero (if small) at 90 days and 1 year, where
+  no sample has come anywhere near the SOH floor — proving the underlying
+  mechanism doesn't depend on floor-clamping at all; the floor-clamping
+  visible in the `p05=0.0000%` cells above (years 15 and 20) is that same
+  mechanism reaching its own limit at high cumulative loss, not a second,
+  separate effect.
+  **Mechanism** (evidence-consistent, explicitly not a formal derivation):
+  both `calendar_delta`/`cycle_delta` (`aging.py`) are Arrhenius-
+  exponential in a sampled coefficient, summed additively across every
+  step of a multi-year run. Integrating a convex, monotonic function of a
+  randomly-sampled input over many compounding steps is a textbook Jensen's-
+  inequality setup at the median: `sample_lognormal`'s median-unbiased
+  INPUT does not imply a median-unbiased OUTPUT once that input is run
+  through a nonlinear map and compounded over time. The direction is
+  informative, not incidental: `p50` comes in below the point estimate at
+  every horizon checked, because "ages faster" is unbounded/exponential
+  while "ages slower" is floored at `max(0.0, ...)` — producing a
+  left-skewed output distribution, consistent with everything measured
+  above.
+  **This is now documented everywhere the numbers travel, per explicit
+  instruction that the caveat must travel with the numbers, not just live
+  in one place:** `mc.py`'s module docstring (full mechanism + evidence,
+  new "p50 vs. the point estimate" section), `MCResult`'s docstring in
+  `schema.py` (short version, points to `mc.py`), `examples/
+  flagship_comparison.py`'s module docstring (explicit warning that its
+  own table is a point estimate, not a median, since that's the script
+  most likely to get an MC band shown alongside it later without this
+  caveat attached), and `docs/model_reference.md`'s new "Monte Carlo p50
+  vs. the point estimate" section (reader-facing summary).
+  **Practical consequence, stated explicitly per instruction:** at a 20-
+  year horizon, "the Leaf reaches ~47% SOH" (point estimate) and "the Leaf
+  reaches ~44% SOH" (MC median) are different claims about the same model,
+  and only the second describes what happens more often than not under the
+  model's own stated coefficient uncertainty. Neither the 20-year table
+  above nor the point estimate should be presented as interchangeable, or
+  as "the median/typical case," without this caveat attached.
+  **What's now unblocked:** the multi-year Monte Carlo gate this milestone
+  existed to clear is closed. Fork branching and the mistake library — the
+  two roadmap items that were waiting behind the compounding-divergence
+  question — are next, per the sequencing already established when that
+  question was first raised.
