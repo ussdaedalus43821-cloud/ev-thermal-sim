@@ -671,6 +671,187 @@ def advance_one_step(
     )
 
 
+def advance_charging_step(
+    profile: ManufacturerProfile,
+    scenario: Scenario,
+    state: SimState,
+    charge_power_request_w: float,
+    max_dt_s: float | None = None,
+    pump_aggressiveness: float = DEFAULT_PUMP_AGGRESSIVENESS,
+    network: ThermalNetwork | None = None,
+) -> SimStepRecord:
+    """Milestone E2e: advance `state` by one step of an external DC charging
+    session -- the charging-mode PEER to `advance_one_step`, not a variant of
+    it (see the module's Milestone E2e section, and CLAUDE.md's Known
+    deferred work, for the full reasoning this design was ratified against).
+    No driver, no motor/inverter mechanical output, vehicle stationary.
+
+    Reuses the exact same underlying calls `advance_one_step` uses for
+    everything that's shared, so charge and discharge heat generation can
+    never diverge between the two step functions: `battery.
+    compute_battery_electrical_step` (already charge-capable -- already
+    exercised today via regen's negative current request -- and, as of this
+    milestone, already routes through the extended `available_charge_
+    current_a`'s BMS current-limit curve with no further code needed here),
+    `controller.step_controller` (called with a zero torque request purely
+    for its cooling-duty output, verified independent of the torque-
+    arbitration path -- see CLAUDE.md), and `thermal.step_thermal_network`
+    over the same combined network, with motor/inverter heat inputs at zero.
+
+    dt is NOT chosen via `_choose_target_dt_s`'s tier-selection logic --
+    charging has only one regime (actively charging), not a driving-vs-
+    parked choice to make -- it's `scenario.dt_policy.min_dt_s` directly,
+    still stability-checked via the unchanged `_stabilize_dt_s`.
+
+    Setting `SimState.parked_duration_s` to 0.0 here is not new behavior
+    invented for this function -- it's what that field's own docstring
+    ("elapsed time... since the vehicle was last driving OR CHARGING")
+    already specified. This finally wires up the "or charging" half of the
+    adaptive-dt policy's original spec, previously an explicit known gap
+    (see the module docstring's Milestone E1 section) since no charging
+    model existed to make "parked but charging" distinguishable at all.
+    """
+    battery_spec = profile.battery
+    aged_battery_spec = apply_soh_to_battery_spec(battery_spec, state.battery_soh)
+    motor_spec = profile.motors[0]
+    inverter_spec = profile.inverter
+    cooling_loops = profile.thermal_architecture.cooling_loops
+
+    motor_name = motor_spec.thermal_node.name
+    inverter_name = inverter_spec.thermal_node.name
+    battery_name = battery_spec.thermal_node.name
+
+    ambient_temp_k = scenario.climate.mean_annual_temp_k.value
+
+    if network is None:
+        coolant_nodes = _coolant_thermal_nodes(cooling_loops, state.node_temps_k)
+        network = _combined_thermal_network(profile, coolant_nodes)
+    coolant_temps_k = {loop.name: state.node_temps_k[coolant_node_name(loop.name)] for loop in cooling_loops}
+
+    battery_rc_tau_s = aged_battery_spec.r1_ohm.value * aged_battery_spec.c1_farad.value
+    dt_s = _stabilize_dt_s(network, battery_rc_tau_s, scenario.dt_policy.min_dt_s)
+    if max_dt_s is not None:
+        dt_s = min(dt_s, max_dt_s)
+
+    causal_events: list[CausalEvent] = []
+
+    # cooling duty only -- torque-arbitration output unused, its independence
+    # from driver_torque_request_nm was verified by reading step_controller's
+    # full body before this design was ratified (see CLAUDE.md)
+    controller_result = step_controller(
+        0.0,
+        motor_spec,
+        inverter_spec,
+        aged_battery_spec,
+        profile.vehicle_dynamics,
+        cooling_loops,
+        state.node_temps_k[motor_name],
+        state.node_temps_k[inverter_name],
+        state.battery_soc,
+        state.node_temps_k[battery_name],
+        state.battery_v_rc_v,
+        state.battery_voltage_v,
+        0.0,
+        coolant_temps_k,
+        state.sim_time_s,
+        pump_aggressiveness=pump_aggressiveness,
+    )
+
+    charge_current_request_a = -charge_power_request_w / state.battery_voltage_v
+    battery_electrical = compute_battery_electrical_step(
+        aged_battery_spec,
+        charge_current_request_a,
+        state.battery_soc,
+        state.node_temps_k[battery_name],
+        state.battery_v_rc_v,
+        dt_s,
+        state.sim_time_s,
+    )
+    causal_events.extend(battery_electrical.causal_events)
+
+    aging_result = compute_aging_step(
+        battery_spec,
+        state.battery_soh,
+        state.node_temps_k[battery_name],
+        state.battery_soc,
+        battery_electrical.applied_current_a,
+        dt_s,
+    )
+
+    cooling_results = {
+        loop.name: step_cooling(
+            loop,
+            state.node_temps_k[coolant_node_name(loop.name)],
+            ambient_temp_k,
+            state.speed_mps,
+            controller_result.commanded_pump_duty[loop.name],
+            controller_result.commanded_fan_duty[loop.name],
+        )
+        for loop in cooling_loops
+    }
+    total_heat_rejected_w = sum(result.heat_rejected_w for result in cooling_results.values())
+
+    heat_inputs_w = {
+        motor_name: 0.0,
+        inverter_name: 0.0,
+        battery_name: battery_electrical.irreversible_heat_w + battery_electrical.entropic_heat_w,
+        **{
+            coolant_node_name(loop.name): -cooling_results[loop.name].heat_rejected_w
+            for loop in cooling_loops
+        },
+    }
+    new_temps_k = step_thermal_network(
+        network,
+        state.node_temps_k,
+        heat_inputs_w,
+        ambient_temp_k=ambient_temp_k,
+        coolant_temp_k=0.0,
+        coolant_flow_l_per_min=0.0,
+        dt_s=dt_s,
+    )
+
+    new_state = SimState(
+        state_id=f"{state.scenario_id}-step-{state.step_count + 1:06d}",
+        scenario_id=state.scenario_id,
+        sim_time_s=state.sim_time_s + dt_s,
+        odometer_km=state.odometer_km,
+        battery_soc=battery_electrical.soc,
+        battery_soh=aging_result.new_soh,
+        node_temps_k=new_temps_k,
+        rng_state=state.rng_state,
+        fork_lineage=state.fork_lineage,
+        step_count=state.step_count + 1,
+        dt_current_s=dt_s,
+        speed_mps=0.0,
+        battery_v_rc_v=battery_electrical.v_rc_v,
+        driver_integral_error_state=state.driver_integral_error_state,
+        battery_throughput_ah=state.battery_throughput_ah + abs(battery_electrical.applied_current_a) * dt_s / 3600.0,
+        battery_voltage_v=battery_electrical.terminal_voltage_v,
+        parked_duration_s=0.0,
+    )
+
+    return SimStepRecord(
+        new_state=new_state,
+        causal_events=causal_events,
+        requested_torque_nm=0.0,
+        commanded_torque_nm=0.0,
+        motor_mechanical_power_w=0.0,
+        motor_electrical_power_w=0.0,
+        battery_electrical_power_w=battery_electrical.terminal_voltage_v * battery_electrical.applied_current_a,
+        battery_ocv_power_w=battery_electrical.ocv_v * battery_electrical.applied_current_a,
+        pump_duty=controller_result.commanded_pump_duty,
+        fan_duty=controller_result.commanded_fan_duty,
+        heat_rejected_w=total_heat_rejected_w,
+        motor_loss_w=0.0,
+        inverter_loss_w=0.0,
+        battery_loss_w=battery_electrical.irreversible_heat_w + battery_electrical.entropic_heat_w,
+        aux_power_w=0.0,
+        active_limit_event_types=[event.event_type for event in controller_result.causal_events],
+        applied_current_a=battery_electrical.applied_current_a,
+        charging=True,
+    )
+
+
 def run_scenario(
     profile: ManufacturerProfile,
     scenario: Scenario,
@@ -750,6 +931,137 @@ def run_scenario(
             driver_aggression,
             max_dt_s=remaining_s,
             grade_rad=grade_rad,
+            pump_aggressiveness=pump_aggressiveness,
+            network=network,
+        )
+        dt_s = record.new_state.sim_time_s - state.sim_time_s
+        state = record.new_state
+        all_causal_events.extend(record.causal_events)
+
+        if record.battery_electrical_power_w >= 0.0:
+            consumed_j += record.battery_electrical_power_w * dt_s
+        else:
+            regen_recovered_j += -record.battery_electrical_power_w * dt_s
+
+        should_record = (
+            record_interval_s <= 0.0
+            or (state.sim_time_s - last_recorded_time_s) >= record_interval_s
+            or state.sim_time_s >= end_time_s
+        )
+        if should_record:
+            last_recorded_time_s = state.sim_time_s
+            time_series.time_s.append(state.sim_time_s)
+            time_series.speed_mps.append(state.speed_mps)
+            time_series.requested_torque_nm.append(record.requested_torque_nm)
+            time_series.commanded_torque_nm.append(record.commanded_torque_nm)
+            time_series.motor_electrical_power_w.append(record.motor_electrical_power_w)
+            time_series.soc.append(state.battery_soc)
+            time_series.battery_current_a.append(record.applied_current_a)
+            time_series.charging.append(record.charging)
+            for name, temp in state.node_temps_k.items():
+                time_series.node_temps_k.setdefault(name, []).append(temp)
+            time_series.pump_duty.append(record.pump_duty)
+            time_series.fan_duty.append(record.fan_duty)
+            time_series.heat_rejected_w.append(record.heat_rejected_w)
+            time_series.active_limit_event_types.append(record.active_limit_event_types)
+
+        motor_loss_j += record.motor_loss_w * dt_s
+        inverter_loss_j += record.inverter_loss_w * dt_s
+        battery_loss_j += record.battery_loss_w * dt_s
+        radiator_rejected_j += record.heat_rejected_w * dt_s
+        aux_j += record.aux_power_w * dt_s
+
+    energy_totals = EnergyTotals(
+        consumed_j=consumed_j,
+        regen_recovered_j=regen_recovered_j,
+        motor_loss_j=motor_loss_j,
+        inverter_loss_j=inverter_loss_j,
+        battery_loss_j=battery_loss_j,
+        radiator_rejected_j=radiator_rejected_j,
+        aux_j=aux_j,
+    )
+
+    return RunResult(
+        final_state=state,
+        time_series=time_series,
+        causal_events=all_causal_events,
+        energy_totals=energy_totals,
+    )
+
+
+def run_charging_session(
+    profile: ManufacturerProfile,
+    scenario: Scenario,
+    duration_s: float,
+    charge_power_request_w: float,
+    initial_state: SimState | None = None,
+    pump_aggressiveness: float = DEFAULT_PUMP_AGGRESSIVENESS,
+    record_interval_s: float = 0.0,
+) -> RunResult:
+    """Milestone E2e: run a DC charging session for `duration_s` seconds at a
+    constant `charge_power_request_w` power request -- peer to `run_scenario`,
+    looping `advance_charging_step` instead of `advance_one_step`. The
+    actually-applied current tapers naturally as `BatterySpec.charge_current_
+    limit_curve` and the voltage-limit ceiling bind (see `battery.available_
+    charge_current_a`); no separate taper mechanism exists or is needed.
+
+    Fixed `duration_s`, not an open-ended "until target SOC reached"
+    condition -- matches every other archetype's fixed-duration convention.
+    If the placeholder taper curve means a session doesn't reach a realistic
+    end SOC in that fixed duration, that's diagnostic information for
+    whoever characterizes it, not something this function papers over.
+
+    `RunResult.energy_totals.regen_recovered_j` accumulates a charging
+    session's energy too, not just literal regen braking -- consistent with
+    that field's own documented meaning ("total electrical energy returned
+    to the battery (charge)"), which was already generic despite its name.
+    No new `EnergyTotals` field was added for this; the existing one's
+    docstring already covers it.
+    """
+    if initial_state is not None:
+        state = initial_state
+    else:
+        state = initialize_sim_state(profile, scenario, scenario.random_seed)
+
+    coolant_nodes = _coolant_thermal_nodes(profile.thermal_architecture.cooling_loops, state.node_temps_k)
+    network = _combined_thermal_network(profile, coolant_nodes)
+
+    zero_duty_by_loop = {loop.name: 0.0 for loop in profile.thermal_architecture.cooling_loops}
+    time_series = SimTimeSeries(
+        time_s=[state.sim_time_s],
+        speed_mps=[state.speed_mps],
+        requested_torque_nm=[0.0],
+        commanded_torque_nm=[0.0],
+        motor_electrical_power_w=[0.0],
+        soc=[state.battery_soc],
+        battery_current_a=[0.0],
+        charging=[True],
+        node_temps_k={name: [temp] for name, temp in state.node_temps_k.items()},
+        pump_duty=[dict(zero_duty_by_loop)],
+        fan_duty=[dict(zero_duty_by_loop)],
+        heat_rejected_w=[0.0],
+        active_limit_event_types=[[]],
+    )
+    all_causal_events: list[CausalEvent] = []
+    consumed_j = 0.0
+    regen_recovered_j = 0.0
+    motor_loss_j = 0.0
+    inverter_loss_j = 0.0
+    battery_loss_j = 0.0
+    radiator_rejected_j = 0.0
+    aux_j = 0.0
+
+    last_recorded_time_s = state.sim_time_s
+
+    end_time_s = state.sim_time_s + duration_s
+    while state.sim_time_s < end_time_s:
+        remaining_s = end_time_s - state.sim_time_s
+        record = advance_charging_step(
+            profile,
+            scenario,
+            state,
+            charge_power_request_w,
+            max_dt_s=remaining_s,
             pump_aggressiveness=pump_aggressiveness,
             network=network,
         )

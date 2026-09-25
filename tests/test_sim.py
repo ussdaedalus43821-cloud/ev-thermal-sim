@@ -35,10 +35,12 @@ from ev_thermal.sim import (
     _choose_target_dt_s,
     _combined_thermal_network,
     _coolant_thermal_nodes,
+    advance_charging_step,
     advance_one_step,
     coolant_node_name,
     coolant_node_names,
     initialize_sim_state,
+    run_charging_session,
     run_scenario,
 )
 from ev_thermal.thermal import step_thermal_network
@@ -503,3 +505,84 @@ def test_long_horizon_determinism_same_seed_gives_same_final_state() -> None:
     assert result_a.final_state == result_b.final_state
     assert result_a.final_state.battery_soh < 1.0
     assert result_a.final_state.parked_duration_s > EXTENDED_PARKING_SETTLING_S
+
+
+# --- Milestone E2e: advance_charging_step / run_charging_session ---
+
+
+def test_advance_charging_step_produces_no_nan_or_inf() -> None:
+    profile = _make_profile()
+    scenario = _make_scenario(profile)
+    state = initialize_sim_state(profile, scenario, scenario.random_seed)
+
+    record = advance_charging_step(profile, scenario, state, charge_power_request_w=50_000.0)
+
+    for value in [
+        record.new_state.battery_soc,
+        record.new_state.battery_soh,
+        record.applied_current_a,
+        *record.new_state.node_temps_k.values(),
+    ]:
+        assert math.isfinite(value)
+
+
+def test_advance_charging_step_is_stationary_and_charges() -> None:
+    profile = _make_profile()
+    scenario = _make_scenario(profile)
+    state = initialize_sim_state(profile, scenario, scenario.random_seed)
+    start_soc = state.battery_soc
+
+    record = advance_charging_step(profile, scenario, state, charge_power_request_w=50_000.0)
+
+    assert record.charging is True
+    assert record.new_state.speed_mps == 0.0
+    assert record.new_state.odometer_km == state.odometer_km
+    assert record.applied_current_a < 0.0  # charging convention
+    assert record.new_state.battery_soc > start_soc
+
+
+def test_advance_charging_step_resets_parked_duration_s() -> None:
+    # Milestone E1's "or charging" gap: parked_duration_s must reset to 0.0
+    # during charging, per that field's own docstring, not just while driving.
+    profile = _make_profile()
+    scenario = _make_scenario(profile)
+    state = initialize_sim_state(profile, scenario, scenario.random_seed).model_copy(
+        update={"parked_duration_s": 999.0}
+    )
+
+    record = advance_charging_step(profile, scenario, state, charge_power_request_w=50_000.0)
+
+    assert record.new_state.parked_duration_s == 0.0
+
+
+def test_run_charging_session_current_tapers_across_the_soc_curve_knee() -> None:
+    profile = _make_profile()
+    scenario = _make_scenario(profile)
+
+    result = run_charging_session(
+        profile, scenario, duration_s=1800.0, charge_power_request_w=50_000.0, record_interval_s=60.0
+    )
+
+    assert result.final_state.battery_soc > 0.6  # crossed the placeholder curve's knee
+    currents = [abs(c) for c in result.time_series.battery_current_a[1:]]
+    assert currents[-1] < currents[0]  # tapered, not constant
+    assert all(result.time_series.charging)
+
+
+def test_run_charging_session_ages_the_battery() -> None:
+    profile = _make_profile()
+    scenario = _make_scenario(profile)
+
+    result = run_charging_session(profile, scenario, duration_s=1800.0, charge_power_request_w=50_000.0)
+
+    assert result.final_state.battery_soh < 1.0
+
+
+def test_run_charging_session_deterministic_same_seed_gives_same_final_state() -> None:
+    profile = _make_profile()
+    scenario = _make_scenario(profile, seed=21)
+
+    result_a = run_charging_session(profile, scenario, duration_s=600.0, charge_power_request_w=50_000.0)
+    result_b = run_charging_session(profile, scenario, duration_s=600.0, charge_power_request_w=50_000.0)
+
+    assert result_a.final_state == result_b.final_state
