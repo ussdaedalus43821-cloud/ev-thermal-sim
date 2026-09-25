@@ -920,9 +920,13 @@ not just *what* happened.
     diagnostic sequence (day-by-day decomposition, isolate-then-combine
     fixes, check whether the "reference" or Tier-2 is actually the less
     accurate side before assuming Tier-2 is wrong) is where to start.
-  - **Milestone E2e (design decisions ratified via `docs/DESIGN_QUESTIONS.md`
-    Q-0001 through Q-0005, not yet implemented):** fast-charge
+  - **Milestone E2e (done — design decisions ratified via `docs/
+    DESIGN_QUESTIONS.md` Q-0001 through Q-0005, then implemented across
+    four commits: schema, `battery.available_charge_current_a`'s BMS-curve
+    extension, `sim.advance_charging_step`/`run_charging_session`, and
+    `long_horizon.characterize_fast_charge_session`):** fast-charge
     characterization, the last piece of Milestone E2's own sequence.
+    Milestone E2 (E2a through E2e) is now fully closed.
     **Charge-mode step logic (Q-0001): a separate `advance_charging_step`
     function beside `advance_one_step`, plus a parallel
     `characterize_fast_charge_session` beside `characterize_trip`** — NOT a
