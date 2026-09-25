@@ -1407,6 +1407,32 @@ class LongHorizonRunResult(BaseModel):
     )
 
 
+class MistakeCaseResult(BaseModel):
+    """Output of `mistake.run_mistake_case`: the paired long-horizon runs a
+    `MistakeCase` produces, plus the computed delta — per `MistakeCase`'s own
+    docstring ("the lesson lives in the delta"), computed once here rather
+    than left to every caller to re-derive, matching the precedent
+    `mc.MCResult` already established (percentile computation lives in core,
+    not dashboard/presentation code).
+    """
+
+    case_name: str
+    failure_result: LongHorizonRunResult
+    counterfactual_result: LongHorizonRunResult
+    final_soh_failure: float = Field(..., description="battery_soh at failure_result's final checkpoint, 0-1.")
+    final_soh_counterfactual: float = Field(
+        ..., description="battery_soh at counterfactual_result's final checkpoint, 0-1."
+    )
+    soh_delta: float = Field(
+        ...,
+        description=(
+            "final_soh_counterfactual - final_soh_failure. Positive means the "
+            "counterfactual's design decision reduced degradation relative to "
+            "the failure mode."
+        ),
+    )
+
+
 class MCConfig(BaseModel):
     """Monte Carlo run configuration."""
 
