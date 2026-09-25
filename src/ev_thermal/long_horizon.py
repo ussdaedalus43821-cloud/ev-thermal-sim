@@ -1,5 +1,5 @@
-"""Milestone E2b: Tier-1 representative-trip characterization for long-horizon
-battery aging extrapolation.
+"""Milestones E2b/E2c/E2e: Tier-1 representative-trip characterization and
+Tier-2 long-horizon extrapolation for battery aging.
 
 Builds a `TripCharacterization` per `TripType` by running `sim.run_scenario`
 (unmodified — this module calls only its existing public interface, plus
@@ -19,11 +19,12 @@ today is implicitly Northern-Hemisphere-shaped, matching the six real
 reference vehicles' actual markets. Deferred: Southern Hemisphere / inverted-
 seasonal climates are unsupported until `Climate` gains a hemisphere field.
 
-`TripType.FAST_CHARGE_SESSION` characterization is explicitly out of scope
-here (see `_ARCHETYPES` below and CLAUDE.md's Milestone E2e note) — it needs
-a real charge-mode addition to `sim.py`'s step loop (battery absorbing
-current rather than supplying it), which is a sim-loop change deserving its
-own plan review, not a bolt-on to this module.
+`TripType.FAST_CHARGE_SESSION` characterization (Milestone E2e) is NOT
+handled by `characterize_trip`/`_ARCHETYPES` — it needs `sim.
+run_charging_session`'s charging-mode pipeline, not `run_scenario`'s driving
+one, so it has its own `characterize_fast_charge_session` function, which
+produces the same `TripCharacterization` shape and is merged into
+`characterize_all_trips`'s output alongside the four driving archetypes.
 """
 
 from __future__ import annotations
@@ -48,7 +49,7 @@ from ev_thermal.schema import (
     TripPhaseAging,
     TripType,
 )
-from ev_thermal.sim import initialize_sim_state, run_scenario
+from ev_thermal.sim import initialize_sim_state, run_charging_session, run_scenario
 
 ANNUAL_PEAK_DAY_OF_YEAR = 200.0
 """Day of year (1-365.25) of the annual ambient-temperature peak -- Northern
@@ -257,6 +258,46 @@ def _phase_aging(
     )
 
 
+def _degenerate_phase(
+    phase_name: str, time_s: list[float], cell_temp_k: list[float], soc: list[float], current_a: list[float],
+    capacity_ah: float, at_s: float,
+) -> TripPhaseAging:
+    """A zero-duration `TripPhaseAging` built directly from the sample nearest
+    `at_s`, for when a real phase boundary doesn't exist (see
+    `characterize_fast_charge_session`'s docstring). Deliberately NOT routed
+    through `_phase_aging`, which correctly raises on an empty time window --
+    that check should keep catching a genuinely empty time series elsewhere,
+    not be loosened to silently accept this specific, legitimate degenerate
+    case.
+    """
+    index = min(range(len(time_s)), key=lambda i: abs(time_s[i] - at_s))
+    return TripPhaseAging(
+        phase_name=phase_name,
+        duration_s=0.0,
+        mean_cell_temp_k=cell_temp_k[index],
+        peak_cell_temp_k=cell_temp_k[index],
+        mean_soc=soc[index],
+        mean_c_rate=abs(current_a[index]) / capacity_ah,
+        throughput_ah=0.0,
+    )
+
+
+def _pinned_climate(base_climate: Climate, ambient_bucket_temp_k: float) -> Climate:
+    """A copy of `base_climate` pinned to a constant `ambient_bucket_temp_k`
+    (seasonal/daily amplitudes zeroed) -- matches `run_scenario`'s existing
+    single-ambient behavior exactly. Shared by `characterize_trip` and
+    `characterize_fast_charge_session` so the pinning logic can't diverge
+    between the two.
+    """
+    return base_climate.model_copy(
+        update={
+            "mean_annual_temp_k": base_climate.mean_annual_temp_k.model_copy(update={"value": ambient_bucket_temp_k}),
+            "seasonal_amplitude_k": base_climate.seasonal_amplitude_k.model_copy(update={"value": 0.0}),
+            "daily_amplitude_k": base_climate.daily_amplitude_k.model_copy(update={"value": 0.0}),
+        }
+    )
+
+
 def characterize_trip(
     profile: ManufacturerProfile,
     scenario_template: Scenario,
@@ -275,24 +316,12 @@ def characterize_trip(
     """
     if trip_type not in _ARCHETYPES:
         raise NotImplementedError(
-            f"{trip_type} characterization is deferred to Milestone E2e (needs a real "
-            "charge-mode addition to sim.py's step loop) -- see CLAUDE.md."
+            f"{trip_type} is not a driving archetype -- use characterize_fast_charge_session "
+            "for TripType.FAST_CHARGE_SESSION, which needs its own charging-mode pipeline."
         )
     archetype = _ARCHETYPES[trip_type]
 
-    climate = scenario_template.climate.model_copy(
-        update={
-            "mean_annual_temp_k": scenario_template.climate.mean_annual_temp_k.model_copy(
-                update={"value": ambient_bucket_temp_k}
-            ),
-            "seasonal_amplitude_k": scenario_template.climate.seasonal_amplitude_k.model_copy(
-                update={"value": 0.0}
-            ),
-            "daily_amplitude_k": scenario_template.climate.daily_amplitude_k.model_copy(
-                update={"value": 0.0}
-            ),
-        }
-    )
+    climate = _pinned_climate(scenario_template.climate, ambient_bucket_temp_k)
     scenario = scenario_template.model_copy(update={"manufacturer_profile": profile, "climate": climate})
 
     base_state = initialize_sim_state(profile, scenario, scenario.random_seed)
@@ -341,23 +370,164 @@ def characterize_trip(
     )
 
 
+FAST_CHARGE_SESSION_DURATION_S = 1800.0
+"""TODO(spec-sourcing): placeholder DC fast-charge session length, same
+order of magnitude as the HIGHWAY archetype's duration -- a typical real
+fast-charge stop."""
+
+FAST_CHARGE_SOC_KNEE = 0.6
+"""Matches BatterySpec.charge_current_limit_curve's placeholder knee -- the
+SOC at which characterize_fast_charge_session draws the ramp/taper phase
+boundary. Kept as its own named constant (not read from the curve itself)
+since a characterization function shouldn't reach into a specific profile's
+curve shape to decide its own phase structure -- the boundary is a modeling
+choice about where "ramp" ends and "taper" begins, not a per-profile value."""
+
+
+def _fast_charge_phases(
+    time_s: list[float],
+    cell_temp_k: list[float],
+    soc: list[float],
+    current_a: list[float],
+    capacity_ah: float,
+    session_duration_s: float,
+) -> tuple[TripPhaseAging, TripPhaseAging]:
+    """Splits a charging session's time series into (`ramp`, `taper`) at the
+    first sample where `soc >= FAST_CHARGE_SOC_KNEE`, with explicit handling
+    for the two edge cases where no real crossing exists -- see
+    `characterize_fast_charge_session`'s docstring for the full reasoning.
+    Factored out from that function so these edge cases are directly unit-
+    testable against hand-crafted SOC traces, not only incidentally
+    exercised by whichever ambient buckets a real physics run happens to
+    produce.
+    """
+    boundary_index = next((i for i, s in enumerate(soc) if s >= FAST_CHARGE_SOC_KNEE), None)
+
+    if boundary_index is None:
+        # never crossed the knee: "ramp" covers the whole session, "taper" degenerate at the end
+        ramp = _phase_aging("ramp", time_s, cell_temp_k, soc, current_a, capacity_ah, 0.0, session_duration_s)
+        taper = _degenerate_phase("taper", time_s, cell_temp_k, soc, current_a, capacity_ah, session_duration_s)
+    elif boundary_index == 0:
+        # already past the knee at t=0: "ramp" degenerate at the start, "taper" covers the whole session
+        ramp = _degenerate_phase("ramp", time_s, cell_temp_k, soc, current_a, capacity_ah, 0.0)
+        taper = _phase_aging("taper", time_s, cell_temp_k, soc, current_a, capacity_ah, 0.0, session_duration_s)
+    else:
+        boundary_s = time_s[boundary_index]
+        ramp = _phase_aging("ramp", time_s, cell_temp_k, soc, current_a, capacity_ah, 0.0, boundary_s)
+        taper = _phase_aging(
+            "taper", time_s, cell_temp_k, soc, current_a, capacity_ah, boundary_s, session_duration_s
+        )
+    return ramp, taper
+
+
+def characterize_fast_charge_session(
+    profile: ManufacturerProfile,
+    scenario_template: Scenario,
+    ambient_bucket_temp_k: float,
+) -> TripCharacterization:
+    """Run one Tier-1 (full-fidelity `sim.run_charging_session`) characterization
+    for a DC fast-charge session at a constant `ambient_bucket_temp_k`, for
+    `profile`. Peer to `characterize_trip`, NOT a variant of it -- charging
+    needs `run_charging_session`, not `run_scenario` -- but produces the SAME
+    `TripCharacterization` shape, so `simulate_long_horizon`/`apply_trip_
+    start_offset` need zero changes to consume it. NOT registered in
+    `_ARCHETYPES`/dispatched via `characterize_trip`, since it needs its own
+    charging-mode pipeline.
+
+    Session start SOC comes from `charging_profile.typical_start_soc` via
+    `initialize_sim_state` (unchanged, no separate patching needed here --
+    that function already reads it). `typical_end_soc` is NOT used as a
+    stopping condition: the session runs for the fixed `FAST_CHARGE_SESSION_
+    DURATION_S` regardless of what SOC it reaches (matching `run_charging_
+    session`'s own fixed-duration convention) -- if the placeholder taper
+    curve means a session doesn't reach a realistic end SOC in that fixed
+    duration, that's diagnostic information for the caller, not something
+    silently papered over here.
+
+    **Arrival-temp approximation, stated explicitly, not claimed as
+    "correct":** a real fast-charge session arrives with the pack elevated
+    by the preceding drive, not at ambient. This characterization assumes
+    ambient-bucket start temp for consistency with every other archetype's
+    linear-offset replay scheme; the real arrival-temp effect is absorbed by
+    `apply_trip_start_offset` at replay time and is therefore approximate.
+    Revisit if offset error is shown to dominate the fast-charge thermal
+    signature specifically.
+
+    **Phases (`ramp`, `taper`) are SOC-triggered at `FAST_CHARGE_SOC_KNEE`,
+    not time-fixed like every other archetype.** SOC is monotonically
+    non-decreasing across a charging session (`advance_charging_step` always
+    requests negative/charging current; the applied magnitude only ever
+    shrinks, never flips sign, since every ceiling in `available_charge_
+    current_a` is non-negative by construction), so a knee-crossing, if it
+    exists, exists exactly once. `phases` ALWAYS has exactly 2 entries
+    regardless of whether a real crossing occurs -- `_interpolate_
+    characterization` zips two characterizations' phase lists with
+    `strict=True`, so a variable phase count per ambient bucket would crash
+    bucket interpolation the moment two adjacent buckets disagreed on
+    whether a session crosses the knee (plausible: colder buckets charge
+    more slowly), not just break a single session. When the session starts
+    at/above the knee, `ramp` is a `_degenerate_phase` built from the `t=0`
+    sample. When the session never reaches the knee in `duration_s`, `taper`
+    is a `_degenerate_phase` built from the `t=duration_s` (final) sample.
+    """
+    climate = _pinned_climate(scenario_template.climate, ambient_bucket_temp_k)
+    scenario = scenario_template.model_copy(update={"manufacturer_profile": profile, "climate": climate})
+
+    base_state = initialize_sim_state(profile, scenario, scenario.random_seed)
+    battery_node_name = profile.battery.thermal_node.name
+    patched_temps_k = dict(base_state.node_temps_k)
+    patched_temps_k[battery_node_name] = ambient_bucket_temp_k
+    initial_state = base_state.model_copy(update={"node_temps_k": patched_temps_k})
+
+    result = run_charging_session(
+        profile,
+        scenario,
+        duration_s=FAST_CHARGE_SESSION_DURATION_S,
+        charge_power_request_w=scenario.charging_profile.dc_charge_power_kw.value * 1000.0,
+        initial_state=initial_state,
+    )
+
+    time_s = result.time_series.time_s
+    cell_temp_k = result.time_series.node_temps_k[battery_node_name]
+    soc = result.time_series.soc
+    current_a = result.time_series.battery_current_a
+    capacity_ah = profile.battery.capacity_nominal_ah.value
+
+    ramp, taper = _fast_charge_phases(
+        time_s, cell_temp_k, soc, current_a, capacity_ah, FAST_CHARGE_SESSION_DURATION_S
+    )
+
+    return TripCharacterization(
+        trip_type=TripType.FAST_CHARGE_SESSION,
+        ambient_bucket_temp_k=ambient_bucket_temp_k,
+        phases=[ramp, taper],
+        odometer_km_delta=0.0,
+        final_soc=result.final_state.battery_soc,
+        final_node_temps_k=result.final_state.node_temps_k,
+    )
+
+
 def characterize_all_trips(
     profile: ManufacturerProfile,
     scenario_template: Scenario,
     n_buckets: int = N_AMBIENT_BUCKETS,
 ) -> dict[TripType, list[TripCharacterization]]:
     """Runs `characterize_trip` once per implemented `TripType` x ambient bucket,
-    for `profile` under `scenario_template`'s climate. The expensive half of the
+    plus `characterize_fast_charge_session` once per ambient bucket, for
+    `profile` under `scenario_template`'s climate. The expensive half of the
     two-tier split -- call once, reuse the result across many
     `simulate_long_horizon` calls (different day_type_mix, duration_years, or
-    seed) rather than re-running Tier-1 physics per call. Excludes
-    `TripType.FAST_CHARGE_SESSION` (see `characterize_trip`).
+    seed) rather than re-running Tier-1 physics per call.
     """
     buckets = ambient_bucket_temps_k(scenario_template.climate, n_buckets)
-    return {
+    result = {
         trip_type: [characterize_trip(profile, scenario_template, trip_type, bucket) for bucket in buckets]
         for trip_type in _ARCHETYPES
     }
+    result[TripType.FAST_CHARGE_SESSION] = [
+        characterize_fast_charge_session(profile, scenario_template, bucket) for bucket in buckets
+    ]
+    return result
 
 
 DAYS_PER_YEAR = 365

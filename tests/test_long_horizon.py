@@ -1,10 +1,11 @@
-"""Tests for Milestone E2b/E2c (`ev_thermal.long_horizon`): Tier-1
+"""Tests for Milestone E2b/E2c/E2e (`ev_thermal.long_horizon`): Tier-1
 representative-trip characterization (the ambient sinusoid, the ambient-bucket
-grid, waypoint interpolation, phase-aging aggregation, `characterize_trip`) and
+grid, waypoint interpolation, phase-aging aggregation, `characterize_trip`),
 Tier-2 long-horizon extrapolation (day-type shuffling, parked-period
 relaxation, trip-start chaining, ambient-bucket interpolation,
-`simulate_long_horizon`) -- all against the shared `tests.test_sim` fixture
-profile, except where noted.
+`simulate_long_horizon`), and fast-charge characterization (`characterize_
+fast_charge_session`, `_fast_charge_phases`) -- all against the shared
+`tests.test_sim` fixture profile, except where noted.
 """
 
 from __future__ import annotations
@@ -19,7 +20,10 @@ from ev_thermal.aging import compute_aging_step
 from ev_thermal.long_horizon import (
     ANNUAL_PEAK_DAY_OF_YEAR,
     DIURNAL_PEAK_HOUR,
+    FAST_CHARGE_SESSION_DURATION_S,
+    FAST_CHARGE_SOC_KNEE,
     _archetype_assumed_start_temp_k,
+    _fast_charge_phases,
     _interpolate_characterization,
     _phase_aging,
     _speed_from_waypoints,
@@ -27,6 +31,7 @@ from ev_thermal.long_horizon import (
     ambient_temp_k,
     apply_trip_start_offset,
     characterize_all_trips,
+    characterize_fast_charge_session,
     characterize_trip,
     parked_calendar_aging,
     relax_parked_temp_k,
@@ -221,9 +226,13 @@ def test_characterize_trip_city_stop_and_go_is_a_single_phase() -> None:
 
 
 def test_characterize_trip_fast_charge_session_raises_not_implemented() -> None:
+    # Milestone E2e: FAST_CHARGE_SESSION is implemented, but via
+    # characterize_fast_charge_session, not characterize_trip -- calling the
+    # wrong function for this TripType must still raise, with a message
+    # pointing at the right one.
     profile = _make_profile()
     scenario = _make_scenario(profile)
-    with pytest.raises(NotImplementedError, match="Milestone E2e"):
+    with pytest.raises(NotImplementedError, match="characterize_fast_charge_session"):
         characterize_trip(profile, scenario, TripType.FAST_CHARGE_SESSION, 298.15)
 
 
@@ -389,7 +398,11 @@ def test_interpolate_characterization_clamps_outside_range() -> None:
     assert above.phases[0].mean_cell_temp_k == pytest.approx(characterizations[1].phases[0].mean_cell_temp_k)
 
 
-def test_characterize_all_trips_returns_four_archetypes_with_ascending_buckets() -> None:
+def test_characterize_all_trips_returns_five_types_with_ascending_buckets() -> None:
+    # Milestone E2e added FAST_CHARGE_SESSION as a fifth type in this dict's
+    # output, produced by characterize_fast_charge_session rather than
+    # characterize_trip -- see test_characterize_all_trips_includes_fast_
+    # charge_session for a test focused specifically on that addition.
     profile = _make_profile()
     scenario = _make_scenario(profile)
     result = characterize_all_trips(profile, scenario, n_buckets=4)
@@ -398,6 +411,7 @@ def test_characterize_all_trips_returns_four_archetypes_with_ascending_buckets()
         TripType.HOT_SOAK_COMMUTE,
         TripType.HIGHWAY,
         TripType.CITY_STOP_AND_GO,
+        TripType.FAST_CHARGE_SESSION,
     }
     for characterizations in result.values():
         assert len(characterizations) == 4
@@ -482,3 +496,113 @@ def test_simulate_long_horizon_deterministic_under_fixed_seed() -> None:
         return [c.battery_soh for c in result.checkpoints]
 
     assert run() == run()
+
+
+# --- Milestone E2e: fast-charge characterization ---
+
+
+def test_fast_charge_phases_normal_crossing() -> None:
+    time_s = [0.0, 100.0, 200.0, 300.0]
+    cell_temp_k = [300.0, 301.0, 302.0, 303.0]
+    soc = [0.5, 0.55, 0.65, 0.8]
+    current_a = [-100.0, -100.0, -80.0, -60.0]
+
+    ramp, taper = _fast_charge_phases(time_s, cell_temp_k, soc, current_a, capacity_ah=100.0, session_duration_s=300.0)
+
+    assert ramp.phase_name == "ramp"
+    assert taper.phase_name == "taper"
+    assert ramp.duration_s == pytest.approx(200.0)
+    assert taper.duration_s == pytest.approx(100.0)
+    assert ramp.duration_s + taper.duration_s == pytest.approx(300.0)
+
+
+def test_fast_charge_phases_never_crosses_knee_gives_degenerate_taper() -> None:
+    time_s = [0.0, 100.0, 200.0, 300.0]
+    cell_temp_k = [300.0, 301.0, 302.0, 303.0]
+    soc = [0.1, 0.2, 0.3, 0.4]  # never reaches FAST_CHARGE_SOC_KNEE
+    current_a = [-100.0, -100.0, -100.0, -100.0]
+
+    ramp, taper = _fast_charge_phases(time_s, cell_temp_k, soc, current_a, capacity_ah=100.0, session_duration_s=300.0)
+
+    assert ramp.duration_s == pytest.approx(300.0)
+    assert taper.duration_s == 0.0
+    assert taper.throughput_ah == 0.0
+    # degenerate taper is built from the FINAL sample
+    assert taper.mean_cell_temp_k == pytest.approx(cell_temp_k[-1])
+    assert taper.mean_soc == pytest.approx(soc[-1])
+
+
+def test_fast_charge_phases_starts_above_knee_gives_degenerate_ramp() -> None:
+    time_s = [0.0, 100.0, 200.0, 300.0]
+    cell_temp_k = [300.0, 301.0, 302.0, 303.0]
+    soc = [0.65, 0.7, 0.8, 0.9]  # already past FAST_CHARGE_SOC_KNEE at t=0
+    current_a = [-60.0, -60.0, -60.0, -60.0]
+
+    ramp, taper = _fast_charge_phases(time_s, cell_temp_k, soc, current_a, capacity_ah=100.0, session_duration_s=300.0)
+
+    assert ramp.duration_s == 0.0
+    assert ramp.throughput_ah == 0.0
+    # degenerate ramp is built from the FIRST (t=0) sample
+    assert ramp.mean_cell_temp_k == pytest.approx(cell_temp_k[0])
+    assert ramp.mean_soc == pytest.approx(soc[0])
+    assert taper.duration_s == pytest.approx(300.0)
+
+
+def test_fast_charge_phases_soc_monotonic_means_at_most_one_crossing() -> None:
+    # A charging session's SOC can only rise (see characterize_fast_charge_
+    # session's own docstring for why) -- confirm the boundary detection finds
+    # the FIRST crossing, not confused by a hypothetical non-monotonic trace.
+    time_s = [0.0, 100.0, 200.0, 300.0, 400.0]
+    cell_temp_k = [300.0] * 5
+    soc = [0.5, 0.61, 0.62, 0.63, 0.64]
+    current_a = [-100.0] * 5
+
+    ramp, taper = _fast_charge_phases(time_s, cell_temp_k, soc, current_a, capacity_ah=100.0, session_duration_s=400.0)
+
+    assert ramp.duration_s == pytest.approx(100.0)
+    assert taper.duration_s == pytest.approx(300.0)
+
+
+def test_characterize_fast_charge_session_has_two_phases_named_ramp_and_taper() -> None:
+    profile = _make_profile()
+    scenario = _make_scenario(profile, ambient_temp_k=298.15)
+
+    characterization = characterize_fast_charge_session(profile, scenario, 298.15)
+
+    assert characterization.trip_type is TripType.FAST_CHARGE_SESSION
+    assert [p.phase_name for p in characterization.phases] == ["ramp", "taper"]
+    total_duration = sum(p.duration_s for p in characterization.phases)
+    assert total_duration == pytest.approx(FAST_CHARGE_SESSION_DURATION_S)
+
+
+def test_characterize_fast_charge_session_soc_increases_and_current_is_charging() -> None:
+    profile = _make_profile()
+    scenario = _make_scenario(profile, ambient_temp_k=298.15)
+
+    characterization = characterize_fast_charge_session(profile, scenario, 298.15)
+
+    assert characterization.final_soc > scenario.charging_profile.typical_start_soc.value
+    for phase in characterization.phases:
+        assert phase.mean_c_rate >= 0.0  # stored as a magnitude
+
+
+def test_characterize_all_trips_includes_fast_charge_session() -> None:
+    profile = _make_profile()
+    scenario = _make_scenario(profile)
+
+    result = characterize_all_trips(profile, scenario)
+
+    assert TripType.FAST_CHARGE_SESSION in result
+    fast_charge_characterizations = result[TripType.FAST_CHARGE_SESSION]
+    assert len(fast_charge_characterizations) == 4
+    buckets = [c.ambient_bucket_temp_k for c in fast_charge_characterizations]
+    assert buckets == sorted(buckets)
+    for c in fast_charge_characterizations:
+        assert len(c.phases) == 2
+
+
+def test_fast_charge_soc_knee_matches_placeholder_curve_documentation() -> None:
+    # Milestone E2e's ratified plan: FAST_CHARGE_SOC_KNEE mirrors
+    # BatterySpec.charge_current_limit_curve's placeholder knee (0.6) --
+    # a documentation/consistency guard, not a physics test.
+    assert FAST_CHARGE_SOC_KNEE == 0.6
