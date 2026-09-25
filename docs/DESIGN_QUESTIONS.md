@@ -843,3 +843,64 @@ code it calls is.
   per `docs/model_reference.md` — clearing this gate authorizes running and
   publishing multi-year results, it does not retroactively validate the
   model at that horizon.
+
+## Q-0018 — ForkPoint.overrides: what can a fork branch's counterfactual patch target?
+
+- Date: 2026-09-25
+- Context: Fork branching v1 (see CLAUDE.md's Known deferred work) needs to
+  turn `ForkPoint.overrides: dict[str, Any]` — schema-only until now, never
+  populated or consumed by any code — into something a real resolver can
+  apply to build a child `Scenario`. Nothing had ever defined what a path
+  in that dict is allowed to target. This meets this project's escalation
+  bar (schema field semantics, and a shape that's expensive to change once
+  forks exist that depend on it), so it wasn't decided unilaterally.
+- Options considered:
+  1. **Battery-only, reusing `mc.py`'s exact minimal resolver pattern**
+     (Q-0010 precedent): only `"battery.<field>"` paths, validated against
+     whatever type that field actually is. Smallest surface, proven
+     pattern, but can't express "what if the climate were hotter" or "what
+     if this pack were liquid-cooled" — exactly the comparisons this
+     project's teaching story and the mistake library are built on.
+  2. **General profile-level resolver**: a real dotted-path walker across
+     `ManufacturerProfile`'s full tree (`battery.*`, `motor.*`,
+     `thermal_architecture.*`, etc.) — what Q-0010 explicitly declined to
+     build for MC v1 because MC didn't need it. Bigger surface, more
+     validation to get right, but still can't reach climate/usage/charging
+     counterfactuals.
+  3. **Scenario-level resolver**: dotted paths can also reach `Scenario`'s
+     other top-level objects (`climate.*`, `usage_profile.*`,
+     `charging_profile.*`), not just `manufacturer_profile.*`. Broadest,
+     most validation surface, needed for a "what if this vehicle were
+     driven in Guam instead" or "vehicle sold and moved to a different
+     climate at year 10" style fork.
+- Blocking: yes
+- **Resolution (2026-09-25): Option 3, with an explicit depth constraint
+  on top of it.** Both axes (profile-level AND climate/usage/charging) are
+  load-bearing for what fork branching is actually for: the first
+  mistake-library entry ("Leaf in Guam") needs a climate fork, which rules
+  out battery-only (1); a mid-run "moved to a different climate" fork needs
+  to be expressible as an override applied at an arbitrary fork point, not
+  a freshly-constructed scenario, which rules out profile-only (2).
+  **Depth constraint**: a path addresses one of `Scenario`'s four top-level
+  objects (`profile` → `manufacturer_profile`, `climate`, `usage_profile`,
+  `charging_profile`) and at most ONE level below that — i.e. a dotted path
+  of exactly 2 or 3 segments, the last of which must resolve to a leaf
+  value (a `Sourced[T]`'s `.value`, or a plain scalar), never a list, dict,
+  or another nested model. `profile.battery.capacity_nominal_ah` is valid
+  (one hop into `battery`, then its leaf field); `profile.
+  thermal_architecture.cooling_loops[0].serves` is not (needs list
+  indexing and a fourth segment). No arbitrary-depth walking. If v1 turns
+  out to need a three-deep path to express a real use case, that's a
+  signal the fork model itself needs revisiting, not a cue to loosen the
+  resolver ad hoc — stop and escalate rather than patching around it.
+  This gives Option 3's expressive scope with something close to Option
+  1's validation simplicity: four top-level objects, each a known schema,
+  bounds the validation surface without an open-ended attribute walker.
+  Implemented in `src/ev_thermal/fork.py`'s `apply_override`/
+  `apply_overrides`, tested with one acceptance test per top-level object
+  plus a dedicated rejection test for the depth constraint
+  (`tests/test_fork.py`). Note: `Scenario.overrides` (`schema.py`) is a
+  separate, pre-existing, still-unused field with a narrower documented
+  scope ("on top of `manufacturer_profile`" only) — not reused or unified
+  with this resolver in this milestone; see CLAUDE.md's Known deferred
+  work for the flag.

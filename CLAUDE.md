@@ -1757,3 +1757,97 @@ not just *what* happened.
   two roadmap items that were waiting behind the compounding-divergence
   question — are next, per the sequencing already established when that
   question was first raised.
+- **Milestone "Fork branching v1" (done, 2026-09-25) — full-fidelity
+  (Tier-1-style) forking only.** Before this milestone, everything fork-
+  related was either schema-only or an unused stub: `ForkPoint`
+  (`schema.py`) round-tripped through JSON but was never constructed by
+  production code; `SimState.fork_lineage` existed but nothing ever
+  appended to it; `src/ev_thermal/fork.py` was a docstring-only stub. What
+  DID already work, and needed no changes: `SimState` is genuinely
+  fork-safe (serializable `rng_state`, tested round-trip including RNG
+  state), `driver_integral_error_state` is already threaded so a resumed
+  run doesn't restart the PI controller's integral from zero, and
+  `sim.run_scenario(initial_state=...)` already resumes a full-fidelity
+  run from any saved `SimState` (already tested,
+  `test_fork_replay_from_saved_state_is_identical`). This milestone is
+  wiring those existing primitives together, not inventing new ones.
+  **Scoped into two milestones up front, deliberately not one**: this is
+  v1, full-fidelity/per-second forking only. Tier-2/long-horizon
+  (`long_horizon.simulate_long_horizon`) checkpoint-resume is a separate,
+  deferred "Fork branching v2" — `LongHorizonCheckpoint` doesn't carry
+  `rng_state` or enough schedule-position information to resume from, and
+  `simulate_long_horizon` always regenerates its RNG and shuffled
+  day-type schedule from `seed`, starting at day 0. Bundling v2 into v1
+  risked repeating the Milestone-D-before-E scope mistake this project
+  already corrected once; v2 gets its own plan review when it's next.
+  **`ForkPoint.overrides`'s semantics, ratified via `docs/
+  DESIGN_QUESTIONS.md` Q-0018**: a dotted path of 2 or 3 segments,
+  `<top_level>.<leaf>` or `<top_level>.<sub_object>.<leaf>`, where
+  `top_level` is one of `Scenario`'s four top-level objects (`profile` →
+  `manufacturer_profile`, `climate`, `usage_profile`, `charging_profile`)
+  and the final segment must resolve to a leaf value (a `Sourced[T]`'s
+  `.value`, or a plain scalar) — never a list, dict, or further-nested
+  model. No arbitrary-depth walking, no list/dict indexing. Both the
+  profile axis and the climate/usage/charging axis are load-bearing: the
+  first mistake-library entry ("Leaf in Guam") needs a climate fork, and a
+  mid-run "vehicle moved to a different climate at year 10" fork needs to
+  be an override applied at an arbitrary point, not a freshly-built
+  scenario — ruling out both a battery-only (MC-v1-style) resolver and a
+  profile-only one. The depth bound keeps validation to four known
+  top-level schemas rather than an open-ended attribute walker.
+  **`src/ev_thermal/fork.py`** (previously a stub) now has: `apply_override`/
+  `apply_overrides` (the Q-0018 resolver, immutable — every `model_copy`
+  returns a new object, parent untouched), `create_fork_point` (builds a
+  `ForkPoint` with a deterministic content-hash `fork_id`, matching
+  `causal.make_causal_event`'s already-established convention — a
+  process-random `uuid4` would break fork-replay's exact-reproducibility
+  premise the same way it would have for `CausalEvent.event_id`), and
+  `branch` (applies a `ForkPoint`'s overrides to build a child `Scenario`,
+  appends `fork_point.fork_id` to `fork_lineage` — the first code that
+  ever populates it — and returns a child `SimState` ready to pass to
+  `sim.run_scenario(initial_state=...)`).
+  **A real correctness issue was caught before it shipped, not assumed
+  away**: `SimState.state_id` is `f"{scenario_id}-step-{step_count:06d}"`,
+  and `sim.py` always carries `state.scenario_id` forward unchanged across
+  steps, never re-deriving it from whatever `Scenario` a later call
+  happens to pass. Left alone, a forked branch and its parent's own
+  un-forked continuation would produce IDENTICAL `state_id`s at the same
+  `step_count` — a real collision, since `state_id`/`fork_lineage` are
+  exactly how a caller is supposed to tell branches apart. `branch()`
+  fixes this by giving the child a fork-namespaced `scenario_id`
+  (`f"{parent_scenario_id}-fork-{fork_id}"`) and rewriting the returned
+  state's own `state_id` to match — verified directly by
+  `test_fork_of_a_fork_accumulates_lineage_and_diverges_state_ids`, which
+  forks twice and confirms all three branches' final `state_id`s are
+  distinct.
+  **Found, flagged, not touched**: `Scenario.overrides` (`schema.py`) is a
+  separate, pre-existing, still-unused field with narrower documented
+  scope ("on top of `manufacturer_profile`" only) than what `ForkPoint.
+  overrides` now supports. Not unified with the new resolver in this
+  milestone — doing so would mean changing that field's own documented
+  semantics, a second Q-NNNN-worthy decision this milestone didn't need to
+  make to ship v1. Left exactly as it was; a future milestone can decide
+  whether to wire it up, deprecate it in favor of the fork mechanism, or
+  leave it alone.
+  **Tests** (`tests/test_fork.py`, 9 total): one acceptance test per
+  top-level object (`profile`/`climate`/`usage_profile`/
+  `charging_profile`), one rejection test for the Q-0018 depth constraint
+  (too many segments, a non-leaf field, an unknown top-level prefix), one
+  `apply_overrides`-applies-every-entry test, and three behavioral
+  acceptance tests: **genuine divergence** (forks mid-run with a climate
+  override, proves the forked branch's peak node temps actually exceed the
+  un-forked continuation's via the SAME already-validated hot-vs-cool
+  mechanism `test_hot_ambient_produces_higher_peak_component_temps_than_
+  cool` exercises — not a new physical claim, a proof that forking reaches
+  it correctly), **non-mutation** (parent `Scenario`/`SimState` unchanged
+  after a fork is created and continued), and **multi-generation lineage**
+  (fork of a fork; `fork_lineage` accumulates root→leaf in order; all
+  three branches' `state_id`s stay distinct). Full suite (251 tests),
+  `mypy --strict`, and `ruff` all pass.
+  **What's now unblocked:** the fork-branching engine exists. The mistake
+  library — MistakeCase's `failure_profile`/`counterfactual_profile`
+  pairing under a shared `Scenario` — is next; whether it actually uses
+  `fork.py`'s mechanism (branching a shared baseline at a fork point) or
+  stays two independently-constructed full runs is an open question for
+  that milestone's own scoping, not decided here. Fork branching v2
+  (Tier-2/long-horizon resume) remains deferred, its own future milestone.
