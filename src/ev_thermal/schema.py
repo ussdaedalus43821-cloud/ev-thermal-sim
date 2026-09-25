@@ -1397,3 +1397,50 @@ class MCConfig(BaseModel):
     random_seed: int
     parallel: bool = Field(..., description="Whether to execute runs in parallel.")
     output_metrics: list[str] = Field(..., description="Names of metrics to collect from each run.")
+
+
+class MCSampleResult(BaseModel):
+    """One Monte Carlo sample's outcome: which perturbed values were actually
+    drawn, and the resulting SOH trajectory and endpoint metrics for that draw.
+    """
+
+    sample_index: int
+    sampled_values: dict[str, float] = Field(
+        ..., description="Dotted path (from MCConfig.parameters_to_vary) -> the value drawn for this sample."
+    )
+    soh_trajectory: list[float] = Field(
+        ..., description="battery_soh from each LongHorizonCheckpoint, one entry per simulated day."
+    )
+    endpoint_metrics: dict[str, float] = Field(
+        ..., description="MCConfig.output_metrics name -> value at the final checkpoint of this sample."
+    )
+
+
+class MCPercentileBand(BaseModel):
+    """p05/p50/p95 of `MCSampleResult.soh_trajectory` across all samples, at one day."""
+
+    day_index: int
+    p05: float
+    p50: float
+    p95: float
+
+
+class MCResult(BaseModel):
+    """Output of `mc.run_monte_carlo` (see that module's docstring for the
+    sampling methodology and its two explicit caveats).
+
+    The band this carries is uncertainty around a PLACEHOLDER aging-
+    coefficient value, not uncertainty around real battery chemistry — see
+    `mc.py`'s module docstring. It is also conditional on one fixed
+    day-type schedule (the schedule-generating RNG seed is held constant
+    across every sample, deliberately, so the band isolates sensitivity to
+    aging-coefficient uncertainty alone, not schedule-order variance).
+    Sampling schedule-order variance is a separate, deferred Monte Carlo
+    mode.
+    """
+
+    config: MCConfig
+    samples: list[MCSampleResult]
+    soh_band: list[MCPercentileBand] = Field(
+        ..., description="Time-indexed p05/p50/p95 SOH band, one entry per simulated day."
+    )

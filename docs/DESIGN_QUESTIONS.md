@@ -341,3 +341,162 @@ Format:
   `aging.py`'s "Coefficient provenance" section. See CLAUDE.md's Known
   deferred work for the full implementation record and the corrected
   Leaf/Model3 comparison numbers.
+
+## Q-0008 — Monte Carlo v1 scope: which parameters get sampled?
+
+- Date: 2026-09-24
+- Context: `MCConfig`/`Confidence` are schema-only; `mc.py` is a stub. Full
+  raw-physics Monte Carlo at N=500 over a 20-30 year horizon is intractable
+  (CLAUDE.md's own stated motivation for the Tier-1/Tier-2 split). Tier-1
+  characterization (`characterize_all_trips`) is reusable across samples
+  only if none of the varied parameters feed into Tier-1's own physics —
+  true for `BatterySpec`'s aging-rate coefficients (`calendar_aging_*`,
+  `cycle_aging_*`, `resistance_growth_per_soh_loss`), which are read only
+  by `compute_aging_step` during Tier-2 replay, never during
+  `characterize_trip`. Varying a thermal/electrical spec instead would
+  force re-running Tier-1 per sample, ~500x the cost.
+- Options considered:
+  1. **v1 scope: `BatterySpec`'s aging-rate coefficients only**, reusing
+     one Tier-1 characterization across all N samples. Thermal/electrical-
+     spec and climate sampling deferred to a later milestone that can
+     afford the Tier-1-per-sample cost. (Claude's recommendation.)
+  2. Sample thermal/electrical specs too in v1, re-running Tier-1 per
+     sample. Rejected as prohibitively expensive for the first version.
+- Blocking: yes
+- **Resolution (2026-09-24): Option 1, approved, with the exact field list
+  made explicit — all seven of `BatterySpec`'s aging-related `Sourced[float]`
+  fields, not a subset:** `calendar_aging_rate_per_s`,
+  `calendar_aging_activation_temp_k`, `calendar_aging_soc_sensitivity`,
+  `cycle_aging_rate_per_efc`, `cycle_aging_activation_temp_k`,
+  `cycle_aging_c_rate_sensitivity`, `resistance_growth_per_soh_loss`.
+  Explicitly called out as non-negotiable inclusions, not left to Claude's
+  discretion: `calendar_aging_soc_sensitivity` (the SOC-snapping deferred-
+  work note already documents this as the direct lever for a known 50-70%
+  overnight-aging overestimate, and the calibration anchors were derived
+  with that known-wrong assumption baked in — its own uncertainty is not
+  optional to model), and both Arrhenius pseudo-activation-temperature
+  terms (`calendar_aging_activation_temp_k`/`cycle_aging_activation_temp_k`
+  — real chemistry activation-energy spreads span roughly a factor of 2-3
+  in rate at typical pack temperatures, probably the single largest
+  uncertainty in the whole aging model).
+
+## Q-0009 — Monte Carlo v1 sampling distribution
+
+- Date: 2026-09-24
+- Context: `Confidence` (low/medium/high) is meant to size the sampling
+  spread, but no distribution family or numeric spread has ever been
+  defined. Needed before any sampling code can be written.
+- Options considered:
+  1. Log-normal, centered at each field's `value`, spread (CV = std/mean)
+     determined solely by `confidence` via one fixed, project-wide mapping.
+     Guarantees positivity (every sampled field here is a strictly-positive
+     physical rate/coefficient) — no truncation/clipping logic needed.
+  2. Normal distribution, truncated/clipped at a small positive epsilon to
+     avoid unphysical negative values. Rejected: clipping distorts the
+     distribution's actual shape near the clip boundary in a way log-normal
+     avoids by construction.
+- Blocking: yes
+- **Resolution (2026-09-24): Option 1 (log-normal), with the exact CV
+  mapping specified, not left to Claude to pick:**
+  ```
+  Confidence.LOW    -> CV = 0.50
+  Confidence.MEDIUM -> CV = 0.20
+  Confidence.HIGH   -> CV = 0.05
+  ```
+  Stated ONCE in `mc.py`'s module docstring and referenced from every
+  sampled field — explicitly NOT decided per-field, since per-field
+  spreads would reintroduce exactly the confound class the EFC-
+  normalization fix (Q-0006/Q-0007) just removed. Sampled fields are drawn
+  INDEPENDENTLY of each other for v1 (no covariance / shared latent
+  parameter modeled) — justified as "no shared latent parameter, treat as
+  independent," a deliberately conservative choice, since independent
+  sampling produces the WIDEST plausible band (any true correlation
+  between coefficients would narrow it, not widen it); revisit only if a
+  real fleet-covariance estimate becomes available. **`MCResult`'s
+  docstring must state explicitly: the resulting band is uncertainty
+  around a placeholder coefficient value, not uncertainty around real
+  battery chemistry** — same honesty register as Q-0007's anchor-
+  idealization note. Do not present an MC band as a real-world confidence
+  interval until the underlying coefficients are sourced, not assumed.
+
+## Q-0010 — Monte Carlo v1 dotted-path resolution
+
+- Date: 2026-09-24
+- Context: `MCConfig.parameters_to_vary: list[str]` needs a resolver from
+  dotted-path string to an actual `Sourced[float]` field on a
+  `ManufacturerProfile`. The existing placeholder test in `test_schema.py`
+  writes paths like `"battery.internal_resistance_ohm"`/
+  `"climate.mean_annual_temp_k"` as if both were top-level siblings, which
+  doesn't match the real schema (`battery` is under `ManufacturerProfile`;
+  `climate` is under `Scenario`, a different parent object entirely) — that
+  test predates any real resolver and is illustrative, not binding.
+- Options considered:
+  1. A general resolver handling arbitrary nesting across both
+     `ManufacturerProfile` and `Scenario`-level objects (climate, usage,
+     charging profile).
+  2. Resolve against `ManufacturerProfile` only. First path segment names
+     the component (`battery.`, `motor.`, `inverter.`, etc.); the rest
+     resolves as an attribute path within that component's spec. For v1,
+     since Q-0008 scopes sampling to `battery.*` fields only, a full
+     general resolver isn't needed — a minimal, `battery`-only resolver
+     suffices. (Claude's recommendation.)
+- Blocking: yes
+- **Resolution (2026-09-24): Option 2, approved, explicitly scoped down
+  further for v1: don't build a general resolver at all.** Since every
+  v1 sampled field lives at `battery.<field_name>`, a ten-line resolver
+  that validates the first path segment is literally `"battery"` and then
+  does a direct `getattr` on `profile.battery` is enough — no component
+  dispatch table, no recursive attribute-path walker. Cross-object paths
+  (`climate.*`, `thermal_architecture.*`, motor/inverter specs) are a
+  different, deferred problem — build the general resolver only when a
+  future milestone actually needs to sample outside `battery.*`.
+
+## Q-0011 — Monte Carlo v1 output shape and where percentiles are computed
+
+- Date: 2026-09-24
+- Context: No `MCResult` type exists. Per the "physics lives in core, not
+  UI" architecture rule, it's unclear whether percentile-band computation
+  over N samples counts as a core/domain calculation (belongs in `mc.py`)
+  or a presentation concern (belongs in `dashboard/`).
+- Options considered:
+  1. `mc.py` returns only raw per-sample data (sampled parameter values,
+     full SOH trajectories, endpoint metrics); `dashboard/` (and any other
+     consumer) computes percentile bands itself from the raw samples.
+  2. `mc.py` computes and returns both raw per-sample data AND a derived,
+     time-indexed percentile band (p05/p50/p95 per checkpoint), as part of
+     `MCResult`. (Claude's recommendation.)
+- Blocking: yes
+- **Resolution (2026-09-24): Option 2, approved. Percentile computation
+  belongs in `mc.py`, not `dashboard/` — it's statistics on raw simulation
+  output, not rendering, and `dashboard/`'s "never contains domain
+  calculations" rule is about physics/simulation logic, not this.**
+  `MCResult` carries both raw per-sample endpoint metrics AND a
+  time-indexed percentile band computed once, in `mc.py`, so every
+  consumer (dashboard, `examples/flagship_comparison.py`-style scripts,
+  future review tooling) shares one implementation rather than each
+  re-deriving percentiles independently. Testable directly against a
+  hand-computed small-N case. **The band is defined as p05-p50-p95, not
+  p01-p99 or any wider tail** — at N=500 (the project's own target sample
+  count), sampling error on the p05 estimate is roughly ±0.7% absolute,
+  which does not support defensible p01/p99 tail estimates; producing
+  wider percentiles the sample size can't actually support would be
+  manufacturing false precision. State N=500's p05-p95 support limit
+  explicitly in `mc.py`'s docstring. Raise to N=2000 later if a wider band
+  is needed and affordable — cheap once Tier-1 characterization is cached,
+  since only Tier-2's per-sample replay cost scales with N.
+
+## Reproducibility (applies beyond any single Q-NNNN)
+
+Any comparison or Monte Carlo run whose numbers end up in CLAUDE.md's
+record must be committed as a script under `examples/` (or `scripts/`),
+with every scenario-defining parameter (profile paths, climate, scenario
+duration, and for Monte Carlo specifically: `n_runs`/`random_seed`) as an
+explicit, named argument — never run ad hoc and copy-pasted into a
+document. `examples/flagship_comparison.py` (landed alongside Q-0006/
+Q-0007's fix) is the first instance of this convention; the first Monte
+Carlo run that lands in CLAUDE.md's record must follow it, not repeat the
+gap that convention was built to close. Rationale: the simulator itself is
+deterministic (same seed, same inputs -> byte-identical output), but that
+guarantee only covers what's actually committed — an uncommitted
+configuration script isn't reproducible no matter how deterministic the
+code it calls is.

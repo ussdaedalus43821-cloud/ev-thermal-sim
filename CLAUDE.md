@@ -1372,3 +1372,87 @@ not just *what* happened.
   **Monte Carlo, fork branching, and the mistake library's hold is now
   lifted** — findings 1, 2, and 3 are all resolved, finding 1's fix is
   implemented and tested, and the corrected comparison has been reviewed.
+- **Milestone "Monte Carlo v1" (done — design decisions ratified via
+  `docs/DESIGN_QUESTIONS.md` Q-0008 through Q-0011):** the first working
+  Monte Carlo capability, scoped narrowly and deliberately per Q-0008 —
+  sampling only `BatterySpec`'s seven aging-related `Sourced[float]` fields
+  (`calendar_aging_rate_per_s`, `calendar_aging_activation_temp_k`,
+  `calendar_aging_soc_sensitivity`, `cycle_aging_rate_per_efc`,
+  `cycle_aging_activation_temp_k`, `cycle_aging_c_rate_sensitivity`,
+  `resistance_growth_per_soh_loss`), reusing ONE Tier-1 characterization
+  across every sample (verified none of these fields feed into Tier-1
+  physics — only into `aging.compute_aging_step`, called during Tier-2
+  replay). Thermal/electrical-spec and climate sampling — which would
+  force re-running Tier-1 per sample, ~500x the cost — deferred to a later
+  milestone.
+  **New module `mc.py`:** `sample_lognormal` (Q-0009: log-normal, MEDIAN-
+  centered at each field's `value` — not mean-centered; `mu = ln(median)`,
+  no `sigma`-dependent correction), `CV_BY_CONFIDENCE` (the one fixed,
+  project-wide spread mapping — LOW=0.50, MEDIUM=0.20, HIGH=0.05 — stated
+  once and referenced from every sampled field, deliberately not decided
+  per-field, matching Q-0009's explicit reasoning that per-field spreads
+  would reintroduce the same confound class the EFC-normalization fix just
+  removed), `sample_battery_spec` (Q-0010's minimal `battery.*`-only
+  resolver — no general dotted-path walker), and `run_monte_carlo` (holds
+  the day-type schedule seed — `scenario_template.random_seed` — fixed
+  across every sample, confirmed by directly reading
+  `simulate_long_horizon`'s body that `shuffle_day_type_schedule` is its
+  ONLY internal RNG consumer; a separate, independent stream derived from
+  `MCConfig.random_seed` via `numpy.random.SeedSequence.spawn` drives only
+  the coefficient sampling).
+  **New schema types:** `MCSampleResult` (per-sample provenance — which
+  values were drawn — plus its full `soh_trajectory` and
+  `endpoint_metrics`), `MCPercentileBand` (time-indexed p05/p50/p95),
+  `MCResult` (Q-0011: percentile computation lives in `mc.py`, not
+  `dashboard/` — it's statistics on raw output, not rendering; every
+  consumer shares one implementation). `MCResult`'s docstring carries both
+  of Q-0009's required caveats verbatim: the band is uncertainty around a
+  placeholder coefficient value, not real battery chemistry; and it's
+  conditional on one fixed day-type schedule, not a sample over schedule-
+  order variance (a separate, deferred MC mode). Band is defined as
+  p05/p50/p95 only, not a wider tail — at N=500 (this project's own target
+  sample count), sampling error on p05 is roughly ±0.7% absolute, which
+  doesn't support a defensible p01/p99 estimate.
+  **A real bug was caught during implementation, exactly by the test the
+  design review specified, not discovered later:** the first
+  `sample_lognormal` draft computed `mu = ln(value) - sigma^2/2` (mean-
+  centering), which made the sampler's empirical median measurably lower
+  than the target `value` (confirmed: ~8.9 vs. a target of 10.0 at
+  `CV=0.50`, an 11% shift, far outside a 3% tolerance) — contradicting
+  both the module's own docstring claim and the whole point of the
+  band's `p50` being comparable to a direct point-estimate run. Caught by
+  `test_sample_lognormal_mean_and_cv_match_target_over_many_draws` and
+  `test_mc_p50_approximates_flagship_point_estimate` (`tests/test_mc.py`)
+  — the latter built exactly per instruction: same scenario, same schedule
+  seed as `examples/flagship_comparison.py`, asserting the MC median
+  tracks a direct `simulate_long_horizon` call within 5% relative at every
+  checkpoint. Fixed by dropping the mean-correction (`mu = ln(median)`
+  directly); both tests pass afterward. This is the reproducibility/
+  verification discipline this project has run all session catching a
+  real defect before it shipped, not a hypothetical benefit.
+  **Reproducibility (per the standing convention `examples/
+  flagship_comparison.py` established):** `examples/monte_carlo_leaf_guam.py`
+  is the committed, reproducible runner for the first MC record below —
+  `n_runs`/`mc_seed`/`schedule_seed`/`duration_days`/`profile` are all
+  explicit CLI flags, reusing `flagship_comparison.py`'s own scenario
+  builders directly (not re-declared) so the two scripts' schedule seeds
+  can never silently drift apart. Must be run as `python -m examples.
+  monte_carlo_leaf_guam`, not a bare script path — it cross-imports
+  `examples.flagship_comparison`, which needs the repo root on `sys.path`;
+  a bare `python examples/monte_carlo_leaf_guam.py` invocation puts
+  `examples/` itself there instead and fails with `ModuleNotFoundError`
+  (documented in the script's own usage docstring).
+  **First recorded run** (Nissan Leaf / Guam climate, N=500,
+  `mc_seed=999`, `schedule_seed=42`, same scenario as the flagship
+  comparison, 90-day window):
+  | day | p05 | p50 | p95 |
+  |---|---|---|---|
+  | 0 | 99.9763% | 99.9909% | 99.9959% |
+  | 30 | 99.3764% | 99.7381% | 99.8745% |
+  | 60 | 98.8450% | 99.5165% | 99.7700% |
+  | 89 | 98.3592% | 99.3067% | 99.6715% |
+
+  Per Q-0009's mandatory caveat: this band is sensitivity to placeholder
+  aging-coefficient uncertainty under one fixed usage schedule, not a
+  real-world confidence interval — do not present it as the latter until
+  the underlying coefficients are sourced.
