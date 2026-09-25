@@ -159,10 +159,22 @@ def available_charge_current_a(spec: BatterySpec, soc: float, cell_temp_k: float
     """The battery's charge current ceiling (magnitude): single source of
     truth for `step_battery` and `controller.py`, mirroring
     `available_discharge_current_a`.
+
+    Milestone E2e: `soc_charge_limit_a` is the BMS-enforced SOC-based charge
+    ceiling (see `BatterySpec.charge_current_limit_curve`'s own docstring for
+    the full reasoning) -- a general charge-current ceiling, not fast-charge-
+    specific, so this also correctly throttles regen at high SOC. Note that
+    `c_rate_limit_a` itself is deliberately NOT a separate `min()` term:
+    `charge_current_limit_curve` values are a trusted `<=1.0` invariant, so
+    `soc_charge_limit_a <= c_rate_limit_a` always, making a flat `c_rate_limit_a`
+    term permanently dead weight -- keeping it would be correct by accident,
+    not by design, and would silently ignore a future curve value `>1.0`
+    (a data error) instead of surfacing it.
     """
     ocv_v, r0_ohm = _ocv_and_r0_ohm(spec, soc, cell_temp_k)
     c_rate_limit_a = spec.max_charge_c_rate.value * spec.capacity_nominal_ah.value
     voltage_limit_a = max((spec.max_terminal_voltage_v.value - ocv_v + v_rc_v) / r0_ohm, 0.0)
+    soc_charge_limit_a = _interpolate(spec.charge_current_limit_curve, soc) * c_rate_limit_a
     derate_temp_k = spec.thermal_node.derate_temp_k.value
     max_temp_k = spec.thermal_node.max_temp_k.value
     hot_scale = _hot_derate_scale(cell_temp_k, derate_temp_k, max_temp_k)
@@ -170,7 +182,7 @@ def available_charge_current_a(spec: BatterySpec, soc: float, cell_temp_k: float
         cell_temp_k, spec.cold_derate_threshold_temp_k.value, spec.cold_derate_activation_temp_k.value
     )
     thermal_scale = 0.0 if cell_temp_k <= spec.min_operating_temp_k.value else hot_scale * cold_scale
-    return min(c_rate_limit_a, voltage_limit_a) * thermal_scale
+    return min(voltage_limit_a, soc_charge_limit_a) * thermal_scale
 
 
 def compute_battery_electrical_step(

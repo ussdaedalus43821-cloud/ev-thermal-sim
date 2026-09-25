@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from ev_thermal.battery import BatteryStabilityError, step_battery
+from ev_thermal.battery import BatteryStabilityError, available_charge_current_a, step_battery
 from ev_thermal.schema import BatterySpec, Confidence, Sourced, ThermalNode
 
 _COOLANT_TEMP_K = 298.15
@@ -190,6 +190,52 @@ def test_charge_at_0c_is_limited_more_than_charge_at_25c() -> None:
     warm = _step(spec, requested_a, soc, _REFERENCE_TEMP_K)
 
     assert abs(cold.applied_current_a) < abs(warm.applied_current_a)
+
+
+def test_available_charge_current_a_unrestricted_below_soc_curve_knee() -> None:
+    spec = _make_battery_spec()
+    below_knee = available_charge_current_a(spec, soc=0.5, cell_temp_k=_REFERENCE_TEMP_K, v_rc_v=0.0)
+    at_zero = available_charge_current_a(spec, soc=0.0, cell_temp_k=_REFERENCE_TEMP_K, v_rc_v=0.0)
+
+    assert below_knee == pytest.approx(at_zero)
+
+
+def test_available_charge_current_a_throttles_above_soc_curve_knee() -> None:
+    spec = _make_battery_spec()
+    below_knee = available_charge_current_a(spec, soc=0.5, cell_temp_k=_REFERENCE_TEMP_K, v_rc_v=0.0)
+    near_full = available_charge_current_a(spec, soc=0.97, cell_temp_k=_REFERENCE_TEMP_K, v_rc_v=0.0)
+
+    assert near_full < below_knee
+    # placeholder curve: scale=0.2 at soc=0.97 vs scale=1.0 below the knee
+    assert near_full / below_knee == pytest.approx(0.2, abs=0.01)
+
+
+def test_charge_current_throttled_at_high_soc_end_to_end() -> None:
+    spec = _make_battery_spec()
+    requested_a = -1000.0
+
+    below_knee = _step(spec, requested_a, 0.5, _REFERENCE_TEMP_K)
+    near_full = _step(spec, requested_a, 0.97, _REFERENCE_TEMP_K)
+
+    assert abs(near_full.applied_current_a) < abs(below_knee.applied_current_a)
+
+
+def test_regen_current_also_throttled_at_high_soc() -> None:
+    # Milestone E2e: charge_current_limit_curve is a general BMS ceiling, not
+    # fast-charge-specific -- it must throttle regen (a much smaller charge
+    # current than fast-charge, but the same underlying cell-protection
+    # physics) at high SOC too, same as real EVs' reduced-regen behavior.
+    spec = _make_battery_spec()
+    # Below both SOC points' ceilings pre-E2e (270A/54A here), so this current
+    # is unclamped at soc=0.5 but clamped at soc=0.97 -- isolates the new
+    # curve's effect rather than saturating both points identically.
+    modest_regen_a = -100.0
+
+    below_knee = _step(spec, modest_regen_a, 0.5, _REFERENCE_TEMP_K)
+    near_full = _step(spec, modest_regen_a, 0.97, _REFERENCE_TEMP_K)
+
+    assert below_knee.applied_current_a == pytest.approx(modest_regen_a)
+    assert abs(near_full.applied_current_a) < abs(below_knee.applied_current_a)
 
 
 def test_soc_floor_limits_discharge_and_logs_causal_event() -> None:
