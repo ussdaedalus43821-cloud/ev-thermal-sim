@@ -1089,6 +1089,20 @@ not just *what* happened.
       acceptance_kw)` — revisit whoever adds a second charger type.
       `charge_power_request_w` (referenced below) is explicitly
       `charging_profile.dc_charge_power_kw.value * 1000.0`.
+    - **New `SimStepRecord.charging: bool`**, set `True` only inside
+      `advance_charging_step` (default `False` everywhere else, via
+      `advance_one_step` explicitly passing `False`, not a field default
+      that could silently mean something different in an untouched call
+      site). Review addition, not part of the original plan: reusing
+      `SimStepRecord`/`SimTimeSeries` unchanged for charging is still the
+      right call, but without this field a charging session and an idle
+      park look identical in the resulting time series — `speed_mps=0.0`,
+      `requested_torque_nm=0.0`, everything else quiet — which is a real
+      usability gap for the dashboard surface this data will feed next,
+      not just a data-modeling nicety. `mode: Literal["driving", "parked",
+      "charging"]` was considered and rejected for now — more extensible,
+      but more churn than this milestone needs; revisit if a fourth state
+      is ever needed.
     - **`sim.advance_charging_step`**, peer to `advance_one_step`, reusing
       `SimStepRecord`/`SimState` unchanged (driving-specific fields --
       `speed_mps`, `requested_torque_nm`, etc. -- just stay 0.0/unchanged,
@@ -1193,7 +1207,12 @@ not just *what* happened.
       not routed through `_phase_aging`, which raises on an empty window by
       design (`covered_s <= 0.0`) and should keep doing so for a genuine
       empty-time-series bug elsewhere, not be loosened to silently accept
-      this specific degenerate case.
+      this specific degenerate case. **Pinning which sample, explicitly, so
+      the two edge cases aren't asymmetric by accident:** when `ramp` is
+      degenerate (session starts at/above 60% SOC), it's built from the
+      `t=0` sample. When `taper` is degenerate (session never reaches 60%
+      SOC in `duration_s`), it's built from the `t=duration_s` (final)
+      sample.
       Session start/end SOC: reuses `charging_profile.typical_start_soc`/
       `typical_end_soc` (no new field) — flagged as a real simplification,
       not fully realistic (real fast-charge sessions often start from a
