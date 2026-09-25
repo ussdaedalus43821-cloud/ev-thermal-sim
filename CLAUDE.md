@@ -1333,22 +1333,42 @@ not just *what* happened.
   cycle aging, and Model 3's `capacity_nominal_ah` — the EFC denominator —
   is close enough to the new 202.7 Ah reference constant that its own
   cycle numbers barely move).
-  **Transparency note:** this comparison's exact scenario parameters
-  (climate amplitudes, day-type mix, charging profile) had to be
-  reconstructed from scratch for this re-run — the original script that
-  produced the earlier-reported "1.24x ratio, inverted cycle component"
-  numbers was not preserved. This reconstruction is a good-faith
-  equivalent (same climates, same profiles, same anchor-consistent
-  day-type mix pattern), not a byte-identical replay, and its own pre-fix
-  numbers (total ratio 5.06x, cycle ratio 6.51x — already Leaf > Model3
-  under this specific reconstruction) don't reproduce the earlier
-  "inverted" finding exactly. That's expected and doesn't weaken the
-  fix's justification: the capacity confound was proven analytically and
-  via a controlled hand-trace (finding 1 above) independent of any one
-  scenario's specific current/temperature mix, which can push the
-  pre-fix ratio above or below 1 depending on how much C-rate and
-  temperature differences happen to offset the capacity effect in that
-  specific run. The fix removes the confound either way.
+  **Transparency note, and the process gap it exposed, now fixed:** this
+  comparison's exact scenario parameters (climate amplitudes, day-type
+  mix, charging profile) had to be reconstructed from scratch for this
+  re-run — the original script that produced the earlier-reported "1.24x
+  ratio, inverted cycle component" numbers was not preserved. This
+  reconstruction is a good-faith equivalent (same climates, same profiles,
+  same anchor-consistent day-type mix pattern), not a byte-identical
+  replay, and its own pre-fix numbers (total ratio 5.06x, cycle ratio
+  6.51x — already Leaf > Model3 under this specific reconstruction) don't
+  reproduce the earlier "inverted" finding exactly. That's expected and
+  doesn't weaken the fix's justification: the capacity confound was proven
+  analytically and via a controlled hand-trace (finding 1 above)
+  independent of any one scenario's specific current/temperature mix,
+  which can push the pre-fix ratio above or below 1 depending on how much
+  C-rate and temperature differences happen to offset the capacity effect
+  in that specific run. The fix removes the confound either way. **What's
+  actually verified is narrower than "the original inversion is fixed":**
+  it's "under a reconstruction, the fix moves Leaf cycle aging in the
+  expected direction by the expected magnitude" — real evidence, just
+  scoped to this reconstruction, not the lost original run.
+  **The underlying process gap — the sim is deterministic (same seed, same
+  inputs -> byte-identical output) but the ad hoc scripts that configure
+  and run a specific named comparison were never committed, so that
+  guarantee didn't actually cover comparisons like this one — is fixed,
+  not just noted.** `examples/flagship_comparison.py` is now the
+  committed, reproducible runner for this comparison: every scenario
+  parameter (profile paths, climate presets, day-type mix, charging
+  profile, duration, seed) is an explicit, named argument or CLI flag, not
+  an inline literal in a throwaway script. `uv run python
+  examples/flagship_comparison.py` reproduces the corrected row of the
+  table above exactly; `--duration-days`/`--seed`/`--profile-a`/
+  `--profile-b` are exposed specifically because they're the axes this
+  comparison is expected to be re-run along (multi-year horizon,
+  preconditioning, other profile pairs). Any future comparison that ends
+  up in this file's record should go into a script the same way, not be
+  run ad hoc.
   **Monte Carlo, fork branching, and the mistake library's hold is now
   lifted** — findings 1, 2, and 3 are all resolved, finding 1's fix is
   implemented and tested, and the corrected comparison has been reviewed.
