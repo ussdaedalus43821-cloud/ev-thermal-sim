@@ -72,6 +72,66 @@ available.
    represents sensitivity to aging-coefficient uncertainty only. Sampling
    schedule-order variance is a separate Monte Carlo mode, deferred.
 
+## p50 vs. the point estimate: a Jensen's-inequality gap that grows with horizon
+
+`MCResult.soh_band[i].p50` and a direct, unperturbed `long_horizon.
+simulate_long_horizon` call's SOH at the same checkpoint are DIFFERENT
+OBJECTS BY CONSTRUCTION, not by accident, and the gap between them grows
+with horizon -- this is expected of ANY correctly-built Monte Carlo over
+this model, not a defect to fix here.
+
+**Why**: the point estimate evaluates the aging model once, at each
+coefficient's central (median) value. The MC instead pushes a full
+distribution of coefficient values through the same model and reports the
+resulting OUTPUT distribution's own median. Both `calendar_delta` and
+`cycle_delta` (`aging.compute_aging_step`) are Arrhenius-exponential in a
+sampled activation-temperature coefficient, and deltas are summed
+additively across every step of a multi-year run -- integrating a convex,
+monotonic function of a randomly-sampled input over many compounding steps
+is a textbook setting for Jensen's inequality to bite AT THE MEDIAN, not
+just the mean: an unbiased median INPUT (guaranteed by `sample_lognormal`'s
+median-centering, see above) does not imply an unbiased median OUTPUT once
+that input is run through a nonlinear map and compounded over time. This is
+intrinsic to the model's own Arrhenius/exponential structure, not an
+artifact of `sample_lognormal`'s implementation or of the parked-SOC model
+(`long_horizon.py`, Milestone "parked-SOC model") -- confirmed by direct
+investigation (`examples/mc_horizon_gap_investigation.py`, and see
+CLAUDE.md's "Multi-year Monte Carlo v1" entry for the full record): the gap
+is already present, smaller, at 90 days and 1 year, horizons where NO
+sample has come anywhere near the SOH floor, and it grows smoothly and
+monotonically with horizon (roughly 0.03% at 90 days -> 6.3% at 20 years
+for the Nissan Leaf / Guam scenario) with no discontinuity where a
+SOC-model-specific effect would show up instead.
+
+**Direction is informative, not incidental**: `p50` comes in BELOW the
+point estimate, consistently, at every horizon checked. That's expected,
+not arbitrary -- "ages faster" is unbounded/exponential in this model,
+while "ages slower" is bounded below by `aging.py`'s explicit
+`max(0.0, ...)` floor (SOH can't go negative). The resulting SOH
+distribution is left-skewed: bad coefficient draws pull the tail out
+further than good draws can compensate, and a skewed distribution's median
+sits on the side its longer tail points away from. A literal `p05=0.0%`
+seen at a long enough horizon is this same effect reaching its own limit --
+a real fraction of sampled coefficient draws, compounded linearly for many
+years with no saturation term (see `docs/model_reference.md`'s "Validated
+time horizon" note), cross zero and sit at the floor -- not a distinct bug.
+
+**Practical consequence**: at a long enough horizon, the unperturbed point
+estimate stops being a "central case" description of the model's own
+output under its own stated coefficient uncertainty. "The Leaf reaches
+~47% SOH at 20 years" (the point estimate) and "the Leaf reaches ~44% SOH
+at 20 years" (the MC median, same scenario) are different claims, and only
+the second describes what happens more often than not once coefficient
+uncertainty is accounted for. Do not present a long-horizon point estimate
+as "the median/typical case" without this caveat, and do not treat a
+smaller p50-vs-point-estimate agreement at short horizons as proof the
+same agreement holds at long ones -- it doesn't, by construction, and the
+divergence is the expected shape, not noise.
+
+This explanation is evidence-consistent, not a formal derivation -- read it
+as "the mechanism most consistent with what was actually measured," not as
+a proven theorem about this specific aging formulation.
+
 ## Percentile support at N=500 (see Q-0011)
 
 The band is defined as p05/p50/p95, not a wider tail. At N=500 (this

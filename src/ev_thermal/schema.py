@@ -1455,6 +1455,14 @@ class MCResult(BaseModel):
     aging-coefficient uncertainty alone, not schedule-order variance).
     Sampling schedule-order variance is a separate, deferred Monte Carlo
     mode.
+
+    `soh_band[i].p50` is NOT the same quantity as an unperturbed point
+    estimate's SOH at checkpoint `i`, and the gap between them grows with
+    horizon (negligible at 90 days, ~6% relative at 20 years for the
+    reference Leaf/Guam scenario) — see `mc.py`'s module docstring, "p50
+    vs. the point estimate," for why this is an expected Jensen's-
+    inequality effect of this model's own Arrhenius/exponential aging
+    formulation, not a bug or a sampling artifact.
     """
 
     config: MCConfig

@@ -271,3 +271,29 @@ near full charge for common Li-ion cathodes) that guessing one here would
 be inventing data this project's own conventions explicitly avoid. Source
 real `docv/dT` curves in the spec-sourcing milestone, same as every other
 `TODO(spec-sourcing)` battery coefficient.
+
+## Monte Carlo p50 vs. the point estimate
+
+A Monte Carlo band's `p50` (median SOH across samples) is not the same
+number as an unperturbed point-estimate run's SOH at the same checkpoint,
+and the gap between them grows with horizon. This was investigated
+directly (see `examples/mc_horizon_gap_investigation.py` and
+`ev_thermal.mc`'s module docstring for the full mechanism and evidence),
+not assumed: for the reference Nissan Leaf / Guam scenario, the gap is
+~0.03% at 90 days and grows smoothly to ~6.3% (relative) by 20 years.
+
+The short version: the point estimate evaluates the aging model once at
+each coefficient's central value; the Monte Carlo pushes a spread of
+coefficient values through the same model and reports the *output*
+distribution's own median. Because aging compounds a convex
+(Arrhenius-exponential) function of a sampled coefficient additively over
+many years, an unbiased median input does not produce an unbiased median
+output — a Jensen's-inequality effect intrinsic to this model's own
+formulation, not a bug in the sampler. The direction is also informative:
+`p50` consistently comes in *below* the point estimate, because "ages
+faster" is unbounded while "ages slower" is floored at 0% SOH, producing a
+left-skewed output distribution. At a 20-year horizon specifically, the
+point estimate stops describing a "central" or "typical" outcome under the
+model's own stated coefficient uncertainty — treat it and the MC median as
+two distinct claims, not interchangeable numbers, once the horizon is long
+enough for this effect to matter.

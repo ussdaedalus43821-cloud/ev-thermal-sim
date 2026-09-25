@@ -23,6 +23,18 @@ Usage:
     uv run python examples/flagship_comparison.py --duration-days 30
     uv run python examples/flagship_comparison.py \
         --profile-a configs/profiles/bmw_i3.yaml --profile-b configs/profiles/audi_etron.yaml
+
+**This script produces a POINT ESTIMATE, not a median.** Every number this
+script prints is a single unperturbed run at each aging coefficient's
+central value — it does not itself run Monte Carlo. If a Monte Carlo band
+(`ev_thermal.mc.run_monte_carlo`) is ever shown alongside this script's
+table, do not assume `MCResult.soh_band[i].p50` will match the
+corresponding row here, especially at a long duration: the two are
+different objects by construction, and the gap between them grows with
+horizon (negligible at 90 days, ~6% relative by 20 years for the reference
+Leaf/Guam scenario). See `ev_thermal.mc`'s module docstring ("p50 vs. the
+point estimate") for why, and `examples/mc_horizon_gap_investigation.py`
+for the reproducible evidence.
 """
 
 from __future__ import annotations
