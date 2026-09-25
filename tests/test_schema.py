@@ -115,6 +115,12 @@ def make_battery_spec() -> BatterySpec:
         resistance_growth_per_soh_loss=sourced(1.0),
         cold_soak_offset_k=sourced(3.0),
         hot_soak_offset_k=sourced(8.0),
+        charge_current_limit_curve=[
+            (sourced(0.0), sourced(1.0)),
+            (sourced(0.6), sourced(1.0)),
+            (sourced(0.95), sourced(0.2)),
+            (sourced(1.0), sourced(0.2)),
+        ],
     )
 
 
@@ -302,6 +308,7 @@ def make_charging_profile() -> ChargingProfile:
         typical_end_soc=sourced(0.8),
         dc_fast_charge_fraction=sourced(0.4),
         preconditioning_enabled=False,
+        dc_charge_power_kw=sourced(150.0),
     )
 
 
@@ -601,6 +608,7 @@ def make_sim_step_record() -> SimStepRecord:
         aux_power_w=1200.0,
         active_limit_event_types=["MOTOR_LIMIT_TRIGGERED"],
         applied_current_a=140.0,
+        charging=False,
     )
 
 
@@ -611,6 +619,7 @@ def test_sim_step_record_round_trip_with_requested_torque() -> None:
     assert restored.requested_torque_nm == 150.0
     assert restored.requested_torque_nm != restored.commanded_torque_nm
     assert restored.applied_current_a == 140.0
+    assert restored.charging is False
 
 
 def test_sim_time_series_round_trip_with_requested_torque() -> None:
@@ -622,6 +631,7 @@ def test_sim_time_series_round_trip_with_requested_torque() -> None:
         motor_electrical_power_w=[0.0, 650.0],
         soc=[0.6, 0.6],
         battery_current_a=[0.0, 140.0],
+        charging=[False, True],
         node_temps_k={"battery_pack": [298.15, 298.2]},
         pump_duty=[{"battery_loop": 0.2}, {"battery_loop": 0.4}],
         fan_duty=[{"battery_loop": 0.1}, {"battery_loop": 0.3}],
@@ -632,6 +642,7 @@ def test_sim_time_series_round_trip_with_requested_torque() -> None:
     assert restored == series
     assert restored.requested_torque_nm == [200.0, 150.0]
     assert restored.battery_current_a == [0.0, 140.0]
+    assert restored.charging == [False, True]
 
 
 # --- ForkPoint / CausalEvent ---

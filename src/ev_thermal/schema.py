@@ -418,6 +418,38 @@ class BatterySpec(BaseModel):
             "calibrate against. See long_horizon.py."
         ),
     )
+    charge_current_limit_curve: list[tuple[Sourced[float], Sourced[float]]] = Field(
+        ...,
+        description=(
+            "Milestone E2e: BMS-enforced charge current ceiling, as a SOC -> scale-"
+            "factor curve (values MUST be <=1.0, trusted as an invariant, not "
+            "runtime-validated -- same convention as ocv_curve_v/r0_curve_ohm), "
+            "multiplying max_charge_c_rate. NOT a fast-charge-only concept despite "
+            "motivating this milestone: this is the same cell-protection physics "
+            "(lithium-plating risk rises with charge current, especially at high "
+            "SOC) that also governs regen braking, just rarely binding there since "
+            "regen current is far lower than fast-charge current -- it is why real "
+            "EVs show reduced-regen warnings near full charge. "
+            "Combined with the existing hot/cold temperature derate scales "
+            "(thermal_scale = hot_scale * cold_scale) as an independent "
+            "multiplicative factor, applied via battery.available_charge_current_a's "
+            "existing final multiplication, not a separate step: a SEPARABLE "
+            "approximation (SOC and temperature contributions multiply). Real BMS "
+            "limits can be non-separable, particularly where the taper knee shifts "
+            "with pack temperature -- revisit if sourced curves become available. "
+            "Deliberately IDENTICAL across all six profiles (chemistry is a "
+            "controlled variable, per aging.py's convention): any Leaf-vs-Model3 "
+            "fast-charge difference must emerge from thermal architecture (Leaf's "
+            "hot_scale dropping sharply from no active battery cooling, so its "
+            "*effective* ceiling throttles hard even though the *curve* is "
+            "identical) rather than from a profile-specific curve shape -- giving "
+            "the Leaf a steeper curve later would double-count the throttle effect "
+            "its own thermal design already produces and break the causal "
+            "attribution this comparison exists to demonstrate. "
+            "TODO(spec-sourcing): full C-rate (scale=1.0) to 60% SOC, linear taper "
+            "60%->95% down to scale=0.2, constant scale=0.2 ceiling 95%->100%."
+        ),
+    )
 
 
 class MotorSpec(BaseModel):
@@ -777,6 +809,18 @@ class ChargingProfile(BaseModel):
     )
     preconditioning_enabled: bool = Field(
         ..., description="Whether the driver/vehicle typically preconditions the battery before fast charging."
+    )
+    dc_charge_power_kw: Sourced[float] = Field(
+        ...,
+        description=(
+            "Milestone E2e: charger-rated power during a DC fast-charge session, "
+            "in kW -- distinct from charge_power_kw, which is the predominant "
+            "(typically slower) charger type's power. Represents the charger's "
+            "rating, not necessarily the vehicle's own max acceptance rate; if a "
+            "second charger type is ever modeled, this may need to split between "
+            "a charger abstraction and a per-vehicle max-acceptance-rate field, "
+            "since real effective charge rate is min(charger, vehicle acceptance)."
+        ),
     )
 
 
@@ -1192,6 +1236,13 @@ class SimTimeSeries(BaseModel):
             "long_horizon.py's characterization runner (mean-C-rate extraction)."
         ),
     )
+    charging: list[bool] = Field(
+        default_factory=list,
+        description=(
+            "Milestone E2e: SimStepRecord.charging history, so a charging session "
+            "is distinguishable from an idle park in the time series."
+        ),
+    )
     node_temps_k: dict[str, list[float]] = Field(
         default_factory=dict, description="ThermalNode name -> temperature history, in kelvin."
     )
@@ -1261,6 +1312,17 @@ class SimStepRecord(BaseModel):
             "needs current, which wasn't exposed outside battery.py's own step before "
             "this). Positive is discharge, negative is charge, same convention as "
             "battery_electrical_power_w."
+        ),
+    )
+    charging: bool = Field(
+        ...,
+        description=(
+            "Milestone E2e: True only for a step produced by sim.advance_charging_step, "
+            "False everywhere else (explicitly passed False by advance_one_step, not a "
+            "field default). Without this, a charging session and an idle park look "
+            "identical in the resulting time series (speed_mps=0.0, "
+            "requested_torque_nm=0.0, everything else quiet) -- a real usability gap "
+            "for the dashboard, not just a data-modeling nicety."
         ),
     )
 

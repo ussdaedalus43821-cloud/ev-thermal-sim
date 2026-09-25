@@ -241,6 +241,15 @@ battery:
     value: 8.0
     confidence: low
     source: "placeholder — to be sourced from real-world soak data"
+  charge_current_limit_curve:
+    - [{value: 0.0, confidence: low, source: "placeholder (Milestone E2e) — full C-rate to 60% SOC, linear taper 60%->95% down to 20% of max_charge_c_rate, constant 20% ceiling 95%->100%"},
+       {value: 1.0, confidence: low, source: "placeholder (Milestone E2e) — full C-rate to 60% SOC, linear taper 60%->95% down to 20% of max_charge_c_rate, constant 20% ceiling 95%->100%"}]
+    - [{value: 0.6, confidence: low, source: "placeholder (Milestone E2e) — full C-rate to 60% SOC, linear taper 60%->95% down to 20% of max_charge_c_rate, constant 20% ceiling 95%->100%"},
+       {value: 1.0, confidence: low, source: "placeholder (Milestone E2e) — full C-rate to 60% SOC, linear taper 60%->95% down to 20% of max_charge_c_rate, constant 20% ceiling 95%->100%"}]
+    - [{value: 0.95, confidence: low, source: "placeholder (Milestone E2e) — full C-rate to 60% SOC, linear taper 60%->95% down to 20% of max_charge_c_rate, constant 20% ceiling 95%->100%"},
+       {value: 0.2, confidence: low, source: "placeholder (Milestone E2e) — full C-rate to 60% SOC, linear taper 60%->95% down to 20% of max_charge_c_rate, constant 20% ceiling 95%->100%"}]
+    - [{value: 1.0, confidence: low, source: "placeholder (Milestone E2e) — full C-rate to 60% SOC, linear taper 60%->95% down to 20% of max_charge_c_rate, constant 20% ceiling 95%->100%"},
+       {value: 0.2, confidence: low, source: "placeholder (Milestone E2e) — full C-rate to 60% SOC, linear taper 60%->95% down to 20% of max_charge_c_rate, constant 20% ceiling 95%->100%"}]
 
 motors:
   - motor_type: "PMSM"

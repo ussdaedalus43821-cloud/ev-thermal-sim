@@ -96,6 +96,7 @@ def _make_battery_spec() -> BatterySpec:
         resistance_growth_per_soh_loss=_sourced(1.0),
         cold_soak_offset_k=_sourced(3.0),
         hot_soak_offset_k=_sourced(8.0),
+        charge_current_limit_curve=_curve([(0.0, 1.0), (0.6, 1.0), (0.95, 0.2), (1.0, 0.2)]),
     )
 
 
