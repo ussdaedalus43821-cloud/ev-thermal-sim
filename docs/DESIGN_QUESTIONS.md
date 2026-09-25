@@ -500,3 +500,91 @@ deterministic (same seed, same inputs -> byte-identical output), but that
 guarantee only covers what's actually committed — an uncommitted
 configuration script isn't reproducible no matter how deterministic the
 code it calls is.
+
+## Q-0012 — Parked-SOC model scope (replacing the instantaneous end-of-day SOC snap)
+
+- Date: 2026-09-24
+- Context: A first multi-year Monte Carlo run (Nissan Leaf / Guam, 20 years)
+  was run as a pre-publication check, per this project's standing "check
+  the actual numbers before committing" discipline, before any record
+  landed in CLAUDE.md. It surfaced implausible results: the UNPERTURBED
+  point-estimate run already predicts 40.9% SOH by year 20, and the MC
+  coefficient-uncertainty band's p05 hits literal 0% SOH before year 20.
+  Root cause, confirmed by directly dumping every checkpoint's
+  `battery_soc` across the full 20-year run (not assumed): **SOC is
+  pinned at exactly 0.8 (`typical_end_soc`) for the ENTIRE 20-year
+  horizon** — `distinct SOC values over full 20yr run: [0.8]`.
+  `simulate_long_horizon` snaps SOC to `typical_end_soc` after every trip
+  day and only holds (never decays) it during parked periods; with this
+  scenario's day-type mix (240 of 365 days/year are trip days), SOC never
+  gets a chance to drift from 0.8 at all. Combined with calendar aging's
+  `calendar_delta = rate * dt` having no saturation term (purely linear
+  in time, no upper bound built in) and `calendar_aging_soc_sensitivity
+  =1.0` giving a permanent +30% rate at `soc=0.8` versus the `soc=0.5`
+  baseline, this compounds over a 20-year horizon into implausible
+  near-total pack death — a severity a 90-day validation window cannot
+  reveal, since the same 30% elevation only accumulates a small absolute
+  error there. This is not a new bug: it is Milestone E2c's own
+  documented "SOC-snapping" deferred-work note (which estimated a
+  "50-70% overnight overestimate") made maximally severe by a realistic
+  multi-year horizon and a trip-heavy day-type mix that keeps SOC pinned
+  essentially 100% of the time, not just overnight.
+- Options considered:
+  1. **A lightweight piecewise-linear parked-SOC model.** During the
+     parked period, SOC decays (driven by the existing `aux_current_a`-
+     equivalent standby drain) from its value at day-start toward a lower
+     value, then resets to `typical_end_soc` once per day at a charge-
+     event time (a new field, e.g. a charge-start hour, or reuse the
+     existing end-of-trip/start-of-parked-period timing). No charging
+     curves, no C-rate-dependent charge duration, no charge-power caps, no
+     thermal coupling during the charge event itself — only the DAILY SOC
+     TRAJECTORY'S SHAPE matters for calendar aging's SOC-sensitivity term,
+     and a piecewise-linear/step approximation captures that shape without
+     modeling charge-session physics Tier-2 doesn't otherwise have.
+  2. **A fuller charge-event model** (actual charge power, duration,
+     taper, reusing E2e's `advance_charging_step` machinery at Tier-2
+     scale). Rejected as over-scoped for what calendar aging's SOC term
+     actually needs, and conflates this fix with the separately-deferred
+     "real charger model" work already noted in E2c's own deferred-work
+     entry (the "or charging" dt-policy clause, the SOC-snapping note
+     itself).
+- Blocking: yes
+
+## Q-0013 — Anchor treatment once SOC dynamics change
+
+- Date: 2026-09-24
+- Context: E2c's own deferred-work note already warned about this exact
+  situation: "The two calibration anchors (Leaf/Guam, Model3/Seattle) were
+  both derived with this same snapping assumption already baked in.
+  Changing this approximation now breaks the anchors — it requires
+  re-calibrating the coefficients, not just swapping in better SOC
+  dynamics." That warning is now live: fixing Q-0012 changes what SOC
+  value the aging model actually sees day to day, which is exactly what
+  the anchors were solved against.
+- Options considered:
+  1. **Re-derive `calendar_aging_rate_per_s`/`calendar_aging_activation_
+     temp_k`** against the same two anchors, but under the NEW SOC-
+     trajectory model's own predicted average-SOC for each anchor's
+     stated scenario (e.g., re-simulate the Leaf/Guam anchor's 5-year,
+     40°C, "80% SOC" condition through the new parked-SOC model and solve
+     coefficients to hit 70% SOH under THAT trajectory, not a literal
+     constant-0.8 assumption).
+  2. **Re-express the anchors as constant-SOC self-consistency checks
+     instead of re-deriving coefficients.** Keep the current coefficients
+     exactly as-is, and treat each anchor's stated condition ("80% SOC,
+     constant") as a deliberately idealized configuration the new SOC-
+     trajectory model must still be ABLE to reproduce when fed a
+     genuinely-constant-SOC scenario (no trips, no drain) — the anchors
+     become a regression test on the SOC-agnostic core of the calendar
+     model, not a claim about any realistic trajectory. SOC-trajectory
+     realism becomes a separate, additive axis the new parked-SOC model
+     provides on top, not something the anchors themselves need to
+     account for.
+- Blocking: yes
+- Note: Claude's read is that Option 2 is cleaner — it preserves the
+  anchors' role as idealized calibration targets already validated
+  against real fleet data points, and avoids re-deriving coefficients
+  every time SOC-trajectory realism improves in the future. Not decided
+  here — this is exactly the kind of choice that shapes how every future
+  SOC-model refinement interacts with the anchors, and belongs to the
+  user's ruling like Q-0006/Q-0007 before it.

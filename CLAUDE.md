@@ -1456,3 +1456,62 @@ not just *what* happened.
   aging-coefficient uncertainty under one fixed usage schedule, not a
   real-world confidence interval — do not present it as the latter until
   the underlying coefficients are sourced.
+- **A first multi-year Monte Carlo run (Leaf/Guam, 20 years) was run as a
+  pre-publication check, per this project's own "check the actual numbers
+  before committing" discipline — and its numbers are deliberately NOT
+  published here, in any form, reframed or otherwise.** The unperturbed
+  point-estimate run alone predicts 40.9% SOH by year 20; the MC band's
+  p05 hits literal 0% SOH before year 20. Investigated, not assumed to be
+  a code bug: dumping every checkpoint's `battery_soc` across the full
+  run showed `distinct SOC values over full 20yr run: [0.8]` — SOC is
+  pinned at exactly `typical_end_soc` for the ENTIRE horizon, not just
+  overnight. This is Milestone E2c's own already-documented "SOC-snapping"
+  approximation (previously estimated there as "a 50-70% overnight
+  calendar-aging overestimate"), made catastrophically visible by a
+  realistic multi-year horizon and a trip-heavy day-type mix that keeps
+  SOC pinned essentially 100% of the time: `calendar_delta = rate * dt`
+  has no saturation term (purely linear in time), and
+  `calendar_aging_soc_sensitivity=1.0` gives a permanent +30% rate at
+  `soc=0.8` versus the `soc=0.5` baseline — compounded linearly for 20
+  straight years instead of the fraction of real time a vehicle actually
+  spends at high SOC. **Explicitly rejected: publishing this table with a
+  caveat.** An artifact labeled "20-year Leaf-in-Guam SOH" gets cited by
+  future readers regardless of its caption — the `Sourced`/caveat
+  discipline this project already runs on exists precisely because
+  caveats don't travel with a number once it's quoted elsewhere. This is
+  evidence the tool's own SOC handling is currently fabricating part of
+  the compounding-divergence effect, not evidence toward demonstrating it,
+  and it does not get published while that's true.
+  **Priority reorder, explicit and deliberate:** this fix now outranks
+  the preconditioning milestone (Q-0004's deferred work, referenced
+  earlier in this file). Preconditioning affects roughly the fraction of
+  days that include a fast-charge session, once per session, and its
+  omission makes Leaf-in-Guam look LESS bad than reality. The SOC-
+  snapping gap affects every hour of every day and makes Leaf-in-Guam
+  look MORE bad than reality — of the two, it's the one actively
+  distorting the headline claim right now, not just leaving it
+  incomplete.
+  **Scope: this is a fix to `long_horizon.py`'s SOC handling, not to
+  `mc.py`.** Monte Carlo v1 is correct as it stands — it faithfully
+  extrapolated whatever `simulate_long_horizon` gave it; the bug is
+  upstream. Two design questions this fix raises are opened as
+  `docs/DESIGN_QUESTIONS.md` Q-0012 (parked-SOC model scope — a
+  lightweight piecewise-linear decay-and-daily-reset model, not a full
+  charge-event model) and Q-0013 (how to treat the two calendar-aging
+  anchors once SOC dynamics change — re-derive the coefficients, or
+  re-express the anchors as constant-SOC self-consistency checks the new
+  model must still reproduce under a literally-constant-SOC scenario).
+  Both are ratified-pending, not yet decided.
+  **The 90-day flagship comparison (`examples/flagship_comparison.py`,
+  documented earlier in this file) is unaffected and stands as-is.** Not
+  because SOC-snapping is harmless at 90 days — it isn't — but because at
+  90 days the bias is a roughly-30%-elevated multiplier on a small
+  absolute number, and the comparison is comparative under an IDENTICAL
+  bias applied to both vehicles. The mechanism claim (thermal architecture
+  produces different SOH outcomes) is intact at that horizon; the
+  compounding-over-decades claim was never made there in the first place.
+  **Nothing gets published at multi-year horizons — no MC record, no
+  Leaf-vs-Model3 long-horizon comparison — until Q-0012/Q-0013 are
+  ratified and the fix lands.** Fork branching and the mistake library
+  remain correctly deferred behind the compounding-divergence question,
+  and this fix is now squarely on that same path.

@@ -16,7 +16,17 @@ examples.flagship_comparison, which needs the repo root on sys.path;
 `python examples/monte_carlo_leaf_guam.py` puts examples/ itself there
 instead and fails with ModuleNotFoundError):
     uv run python -m examples.monte_carlo_leaf_guam
-    uv run python -m examples.monte_carlo_leaf_guam --n-runs 2000 --duration-days 30
+    uv run python -m examples.monte_carlo_leaf_guam --n-runs 2000 --duration-years 1
+    uv run python -m examples.monte_carlo_leaf_guam --duration-years 20
+
+Multi-year horizons are the actually-interesting case (see `ev_thermal.mc`'s
+module docstring and this project's own premise -- heat-management
+decisions compound over a vehicle's LIFE, not over 90 days): the default
+`--duration-years 1` is cheap and was this feature's first correctness
+check, not the intended final use. A 20-30 year run at N=500 costs roughly
+3-6 minutes and tens to a few hundred MB (measured, not estimated --
+n_runs=20/duration_years=30 peaked at ~92MB RSS; scale roughly linearly
+with n_runs).
 """
 
 from __future__ import annotations
@@ -37,7 +47,7 @@ from examples.flagship_comparison import (
 DEFAULT_N_RUNS = 500
 DEFAULT_MC_SEED = 999
 DEFAULT_SCHEDULE_SEED = 42
-DEFAULT_DURATION_DAYS = 90
+DEFAULT_DURATION_YEARS = 1
 
 AGING_PARAMETER_PATHS = [
     "battery.calendar_aging_rate_per_s",
@@ -61,7 +71,7 @@ def main() -> None:
         default=DEFAULT_SCHEDULE_SEED,
         help="Seeds the day-type schedule, held fixed across every sample.",
     )
-    parser.add_argument("--duration-days", type=int, default=DEFAULT_DURATION_DAYS)
+    parser.add_argument("--duration-years", type=int, default=DEFAULT_DURATION_YEARS)
     args = parser.parse_args()
 
     profile = load_profile(args.profile)
@@ -77,18 +87,19 @@ def main() -> None:
         output_metrics=["final_soh", "final_calendar_loss", "final_cycle_loss"],
     )
 
-    result = run_monte_carlo(profile, scenario, day_type_mix, config, duration_years=1)
+    result = run_monte_carlo(profile, scenario, day_type_mix, config, duration_years=args.duration_years)
 
-    print(f"{profile.name} / {climate.location_name}")
+    print(f"{profile.name} / {climate.location_name}, {args.duration_years} year(s)")
     print(f"n_runs={args.n_runs}  mc_seed={args.mc_seed}  schedule_seed={args.schedule_seed}")
     if args.n_runs < 500:
         print("NOTE: n_runs < 500 -- p05/p95 sampling error is larger than this project's own N=500 target.")
     print()
-    print(f"{'day':>5}{'p05':>10}{'p50':>10}{'p95':>10}")
-    checkpoint_days = sorted({0, args.duration_days // 3, 2 * args.duration_days // 3, args.duration_days - 1})
+    print(f"{'day':>6}{'p05':>10}{'p50':>10}{'p95':>10}")
+    n_days = len(result.soh_band)
+    checkpoint_days = sorted({0, n_days // 4, n_days // 2, 3 * n_days // 4, n_days - 1})
     for day_index in checkpoint_days:
         band = result.soh_band[day_index]
-        print(f"{day_index:>5}{band.p05 * 100:>9.4f}%{band.p50 * 100:>9.4f}%{band.p95 * 100:>9.4f}%")
+        print(f"{day_index:>6}{band.p05 * 100:>9.4f}%{band.p50 * 100:>9.4f}%{band.p95 * 100:>9.4f}%")
 
     final_metrics = [s.endpoint_metrics["final_soh"] for s in result.samples]
     print()
