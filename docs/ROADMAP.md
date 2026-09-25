@@ -184,15 +184,17 @@ seam" milestone.
   Altitude is a trivial per-location lookup; a generic peak-irradiance
   placeholder (the passenger profiles all use one) would suffice for a
   first version.
-- **A `UsageProfile`/`ChargingProfile` for the Blue Bird profile don't
-  exist yet** — `characterize_all_trips`/`simulate_long_horizon` need
-  both before this profile can actually run a `Scenario`. Transition's
-  own `SCHOOL_BUS_DEPOT_PRESET` already has real numbers these could be
-  built from (70mi/day × ~180 school days/year, 11kW L2 charging).
-- **The Blue Bird profile has only been smoke-tested (60s), not run
-  through a real Tier-1 characterization or long-horizon trajectory** —
-  do this once, and check the actual numbers, before its data goes into
-  any published table.
+- **Done: the Blue Bird profile now has a real `UsageProfile`/
+  `ChargingProfile` and has been run through a real Tier-1 characterization
+  and a 90-day Tier-2 trajectory** — see `docs/MILESTONES.md`'s "Blue Bird
+  Vision Electric validation" milestone for the full record, including a
+  real causal-event bug this validation caught and fixed (affecting all
+  seven profiles, not just this one) and a second implausible-placeholder
+  fix specific to this profile (`inverter.peak_current_a`). Still open: the
+  `UsageProfile`/`ChargingProfile` built for this were constructed for this
+  validation pass, not yet formally adopted as the profile's canonical
+  usage/charging data for a published Transition-seam comparison — revisit
+  once that comparison is actually being built.
 - **The second Transition vehicle class (tank-wash truck) is explicitly
   deferred** until the seam is proven end-to-end on the primary (school
   bus) case.

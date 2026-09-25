@@ -64,22 +64,47 @@ def compute_motor_heat(
     causal_events: list[CausalEvent] = []
 
     derate_temp_k = spec.thermal_node.derate_temp_k.value
+    # available_torque_nm stays the single source of truth for the ceiling
+    # itself; thermal_scale is recomputed here only to tell apart WHY the
+    # ceiling bound (see the branch below), not to recompute the ceiling.
+    thermal_scale = _derate_scale(winding_temp_k, derate_temp_k, spec.thermal_node.max_temp_k.value)
     torque_ceiling_nm = available_torque_nm(spec, winding_temp_k)
     applied_torque_nm = max(-torque_ceiling_nm, min(torque_request_nm, torque_ceiling_nm))
     if abs(applied_torque_nm) < abs(torque_request_nm):
-        causal_events.append(
-            make_causal_event(
-                sim_time_s=sim_time_s,
-                event_type="DERATE_TRIGGERED",
-                description=(
-                    f"Motor winding temp {winding_temp_k:.1f}K exceeded derate threshold "
-                    f"{derate_temp_k:.1f}K; torque request {torque_request_nm:.1f}Nm limited "
-                    f"to {applied_torque_nm:.1f}Nm."
-                ),
-                affected_component="motor",
-                severity="warning",
+        # Two genuinely different causes produce the same clamp, and must be
+        # told apart rather than both blamed on temperature: thermal_scale<1.0
+        # means the derate curve is actually binding; thermal_scale==1.0 means
+        # the request simply exceeds peak_torque_nm regardless of temperature
+        # (winding_temp_k can be far below derate_temp_k in this case).
+        if thermal_scale < 1.0:
+            causal_events.append(
+                make_causal_event(
+                    sim_time_s=sim_time_s,
+                    event_type="DERATE_TRIGGERED",
+                    description=(
+                        f"Motor winding temp {winding_temp_k:.1f}K exceeded derate threshold "
+                        f"{derate_temp_k:.1f}K; torque request {torque_request_nm:.1f}Nm limited "
+                        f"to {applied_torque_nm:.1f}Nm."
+                    ),
+                    affected_component="motor",
+                    severity="warning",
+                )
             )
-        )
+        else:
+            causal_events.append(
+                make_causal_event(
+                    sim_time_s=sim_time_s,
+                    event_type="TORQUE_LIMIT_TRIGGERED",
+                    description=(
+                        f"Torque request {torque_request_nm:.1f}Nm exceeded motor peak rating "
+                        f"peak_torque_nm={spec.peak_torque_nm.value:.1f}Nm (winding temp {winding_temp_k:.1f}K "
+                        f"is below the {derate_temp_k:.1f}K derate threshold — not a thermal cause); "
+                        f"limited to {applied_torque_nm:.1f}Nm."
+                    ),
+                    affected_component="motor",
+                    severity="warning",
+                )
+            )
 
     current_a = abs(applied_torque_nm) / spec.torque_constant_nm_per_a.value
     winding_resistance_ohm = spec.winding_resistance_ref_ohm.value * (

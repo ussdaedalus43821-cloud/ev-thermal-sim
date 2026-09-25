@@ -108,10 +108,12 @@ related code:
 - **Entropic heat is inert** until a real dOCV/dT is sourced for any
   profile — most consequential for fast-charge SOH-loss estimates.
 - **The Transition seam is partially built**: the first commercial-vehicle
-  profile exists (`configs/profiles_commercial/`), but Transition-side
-  wiring, a `UsageProfile`/`ChargingProfile` for it, and a real long-
-  horizon validation run don't exist yet. See `docs/ROADMAP.md`'s
-  "Transition seam" section and `docs/seam_reconnaissance.md`.
+  profile exists (`configs/profiles_commercial/`) and has now been
+  validated the way the six passenger profiles were (real Tier-1
+  characterization + a 90-day Tier-2 trajectory, both physically
+  plausible), but Transition-side wiring doesn't exist yet. See
+  `docs/ROADMAP.md`'s "Transition seam" section and
+  `docs/seam_reconnaissance.md`.
 - **Fork branching v2** (Tier-2/long-horizon checkpoint resume) is
   deferred — only full-fidelity per-second forking exists today.
 - **Calendar aging's linear-in-time formulation is a known extrapolation

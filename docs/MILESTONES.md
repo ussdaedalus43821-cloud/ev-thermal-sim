@@ -2074,3 +2074,122 @@ whole history to find.
   See `docs/seam_reconnaissance.md`'s own §7 for whether the originally-
   proposed interface shape (§5) still holds now that gap 3 is closed and a
   real commercial profile exists.
+- **Milestone "Blue Bird Vision Electric validation" (done, 2026-09-26):**
+  closes the "smoke-tested only" gap the commercial-profile milestone left
+  open — per explicit instruction, validated the same way the six
+  passenger profiles were before anything built on top of it, not just
+  the schema/60s-smoke-test bar `tests/test_profiles_commercial.py`
+  already enforced.
+  **New `examples/validate_blue_bird_vision_electric.py`** (the
+  committed, reproducible runner, per this project's standing
+  reproducibility convention): builds a real `Climate` (NOAA Columbus, OH
+  normals — the same figures used for the Transition seam's gap-3
+  closure, converted to kelvin, plus Columbus's real elevation and a
+  placeholder solar-irradiance figure matching every other profile's
+  convention), `UsageProfile` (annual mileage and one-way trip mean/std
+  derived from Transition's real `SCHOOL_BUS_DEPOT_PRESET` route data —
+  vehicle-count-weighted across its four real routes, not invented), and
+  `ChargingProfile` (11kW L2 matching Transition's real per-vehicle
+  charging-demand figure, `dc_fast_charge_fraction=0.0` since a
+  depot-charged fleet has no real DC-fast-charge usage pattern) — none of
+  which existed for this profile before, per `docs/ROADMAP.md`'s own
+  "Transition seam" note. A `day_type_mix` (60/60/60 COLD_START_COMMUTE/
+  HOT_SOAK_COMMUTE/CITY_STOP_AND_GO, no HIGHWAY, no FAST_CHARGE_SESSION)
+  splits Transition's real ~180-school-days/year figure evenly — a
+  reasonable, explicitly-flagged assumption for a first validation pass,
+  not a researched usage claim.
+  Three checks, matching how the six passenger profiles were actually
+  validated (not just their own schema tests): (1) a 1800s single-fidelity
+  `run_scenario` thermal-steady-state check — the exact class of check
+  that originally caught the demo profile's thermal-runaway bug; (2) a
+  real Tier-1 characterization (`characterize_all_trips`) across every
+  implemented archetype; (3) a real 90-day Tier-2 `simulate_long_horizon`
+  trajectory, cross-checked in order of magnitude against the passenger-
+  fleet flagship record.
+  **A real, pre-existing bug was found and fixed, affecting all seven
+  profiles (six passenger + Blue Bird), not created by this milestone —
+  the validation run's own causal-event log contradicted itself, which is
+  what surfaced it.** `motor.py`/`inverter.py`'s `DERATE_TRIGGERED` causal
+  event fired whenever a torque/current request was clamped, unconditionally
+  attributing the cause to "winding/junction temp exceeded derate
+  threshold" — even when the actual temperature was nowhere near that
+  threshold and the real binding constraint was simply the flat
+  `peak_torque_nm`/`peak_current_a` rating (the derate curve's own `scale`
+  factor was exactly 1.0, meaning it wasn't the derate curve that bound at
+  all). Caught directly: the Step-A validation run logged "Inverter
+  junction temp 297.3K exceeded derate threshold 398.1K" — 297.3K is not
+  greater than 398.1K, a literal, checkable contradiction in the event's
+  own text. `battery.py` was checked and does NOT have this bug — its
+  event generation already correctly gates each specific message
+  (cold-derate, hot-derate, SOC-floor) behind that mechanism's own scale
+  factor actually being `<1.0`, the correct pattern. `controller.py`'s own
+  (authoritative) arbitration-layer events were also checked and are
+  unaffected — they report the ceiling and the component's current
+  temperature as context without asserting temperature caused the clamp,
+  so they were never wrong, just less specific.
+  **Fix**: both `motor.compute_motor_heat` and `inverter.compute_inverter_
+  heat` now compute the thermal derate scale factor explicitly (still via
+  the same `available_torque_nm`/`available_current_a` single-source-of-
+  truth ceiling functions — not duplicated logic, just also inspecting
+  *why* that ceiling landed where it did) and branch: `thermal_scale<1.0`
+  keeps the existing `DERATE_TRIGGERED` event/message; `thermal_scale==1.0`
+  (peak rating alone is binding) now emits a new, distinctly-named
+  `TORQUE_LIMIT_TRIGGERED`/`CURRENT_LIMIT_TRIGGERED` event with an accurate
+  description. No test asserted on the old message text (checked before
+  changing it); full suite (267 tests), `mypy --strict`, and `ruff` all
+  pass after the fix. This bug was invisible on the six passenger
+  profiles not because they don't have peak-rating ceilings, but because
+  none of their existing tests/examples happened to inspect the causal
+  event *text* closely enough at a moment where a flat rating (not the
+  derate curve) was the actual binding constraint — the same "found only
+  by actually trying it" pattern this project's validation discipline
+  keeps surfacing.
+  **A second, profile-specific finding, same category as the vehicle-
+  dynamics fields the original commercial-profile milestone already had
+  to re-derive**: `inverter.peak_current_a` had been left at the shared
+  six-profile passenger-EV placeholder (500.0A) under the "no basis to
+  adjust" reasoning applied to most un-researched inverter fields — this
+  validation run proved that reasoning wrong for this specific field.
+  A plain 1800s cruise at constant speed produced real torque requests
+  implying up to 871A during the low-speed portion of an ordinary
+  ramp-up (a 33,000lb bus needs real current to move; this motor's real
+  peak rating, 234.9kW/3254Nm, is far above any of the six passenger
+  profiles'), continuously clamping current for the run's first ~40
+  seconds — a gross implausibility of exactly the kind this validation
+  pass exists to catch, not a subtle one. Re-estimated at 1000.0A (~15%
+  headroom above the observed peak request), same "domain-appropriate
+  estimate, not verbatim placeholder reuse" treatment already applied to
+  this profile's `curb_mass_kg`/motor `mass_kg`/etc. — confirmed by
+  re-running the validation script after the change: limit/derate events
+  during the 1800s check dropped from 15 to 0, node temperatures were
+  unchanged (40.2°C/42.4°C/26.1°C/33.2°C motor/inverter/battery/coolant),
+  and the 90-day SOH trajectory moved only trivially (0.5292% → 0.5306%
+  total loss) — confirming the fix changed only the spurious clamping,
+  not the underlying thermal/aging physics.
+  **Results** (both the causal-event fix and the `peak_current_a` fix
+  applied): Step A — thermal steady state reached quickly and stays well
+  inside every derate threshold (motor 40.2°C, inverter 42.4°C, battery
+  26.1°C, coolant 33.2°C), zero limit/derate events at a plain 30mph
+  cruise, energy balance holds (positive implied mechanical work). Step B
+  — all 4 implemented archetypes (plus fast-charge characterization)
+  produce finite, ambient-sensitive peak cell temperatures across all 4
+  climate buckets. Step C — 90-day SOH trajectory is finite and
+  monotonically non-increasing; total loss (0.5306%, calendar-dominated at
+  0.5172%) sits in the same order of magnitude as the passenger-fleet
+  flagship record (Leaf/Guam 0.5828%, Model3/Seattle 0.1194% over the same
+  90 days) — plausible, not identical, exactly as expected for a
+  different vehicle class under a different (Columbus, OH) climate.
+  **What this does and does NOT establish**: this profile now clears the
+  same physical-plausibility bar the six passenger profiles cleared before
+  anything was built on top of them (finite, non-pathological, thermally
+  bounded, order-of-magnitude-sane). It does NOT mean this profile's
+  `UsageProfile`/`ChargingProfile` are canonical or ready for a published
+  Transition-seam comparison — they were built for this validation pass
+  specifically (see `docs/ROADMAP.md`'s "Transition seam" section), with
+  `typical_start_soc`/`typical_end_soc` explicitly reusing the flagship
+  script's own convention rather than being tuned to this vehicle's real
+  ~150-mile range, and the `day_type_mix`'s 60/60/60 split being a
+  reasonable assumption, not a researched usage claim. It also does NOT
+  mean the seven aging-rate coefficients are validated for this vehicle
+  class — that gap (flagged in the original commercial-profile milestone)
+  is unaffected by this validation pass and remains open.

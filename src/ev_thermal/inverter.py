@@ -52,22 +52,47 @@ def compute_inverter_heat(
     causal_events: list[CausalEvent] = []
 
     derate_temp_k = spec.thermal_node.derate_temp_k.value
+    # available_current_a stays the single source of truth for the ceiling
+    # itself; thermal_scale is recomputed here only to tell apart WHY the
+    # ceiling bound (see the branch below), not to recompute the ceiling.
+    thermal_scale = _derate_scale(junction_temp_k, derate_temp_k, spec.thermal_node.max_temp_k.value)
     current_ceiling_a = available_current_a(spec, junction_temp_k)
     applied_current_a = min(ac_current_request_a, current_ceiling_a)
     if applied_current_a < ac_current_request_a:
-        causal_events.append(
-            make_causal_event(
-                sim_time_s=sim_time_s,
-                event_type="DERATE_TRIGGERED",
-                description=(
-                    f"Inverter junction temp {junction_temp_k:.1f}K exceeded derate threshold "
-                    f"{derate_temp_k:.1f}K; current request {ac_current_request_a:.1f}A limited "
-                    f"to {applied_current_a:.1f}A."
-                ),
-                affected_component="inverter",
-                severity="warning",
+        # Two genuinely different causes produce the same clamp, and must be
+        # told apart rather than both blamed on temperature: thermal_scale<1.0
+        # means the derate curve is actually binding; thermal_scale==1.0 means
+        # the request simply exceeds peak_current_a regardless of temperature
+        # (junction_temp_k can be far below derate_temp_k in this case).
+        if thermal_scale < 1.0:
+            causal_events.append(
+                make_causal_event(
+                    sim_time_s=sim_time_s,
+                    event_type="DERATE_TRIGGERED",
+                    description=(
+                        f"Inverter junction temp {junction_temp_k:.1f}K exceeded derate threshold "
+                        f"{derate_temp_k:.1f}K; current request {ac_current_request_a:.1f}A limited "
+                        f"to {applied_current_a:.1f}A."
+                    ),
+                    affected_component="inverter",
+                    severity="warning",
+                )
             )
-        )
+        else:
+            causal_events.append(
+                make_causal_event(
+                    sim_time_s=sim_time_s,
+                    event_type="CURRENT_LIMIT_TRIGGERED",
+                    description=(
+                        f"Current request {ac_current_request_a:.1f}A exceeded inverter peak rating "
+                        f"peak_current_a={spec.peak_current_a.value:.1f}A (junction temp {junction_temp_k:.1f}K "
+                        f"is below the {derate_temp_k:.1f}K derate threshold — not a thermal cause); "
+                        f"limited to {applied_current_a:.1f}A."
+                    ),
+                    affected_component="inverter",
+                    severity="warning",
+                )
+            )
 
     r_ds_on_ohm = spec.r_ds_on_ref_ohm.value * (
         1.0 + spec.r_ds_on_temp_coefficient_per_k.value * (junction_temp_k - spec.r_ds_on_ref_temp_k.value)

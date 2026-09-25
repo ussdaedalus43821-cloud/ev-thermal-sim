@@ -396,9 +396,10 @@ inverter:
       source: "placeholder — estimated from physical plausibility, not sourced"
       note: "weak secondary path alongside the dominant active coolant path (inverter is liquid-cooled)"
   peak_current_a:
-    value: 500.0
+    value: 1000.0
     confidence: low
-    source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"
+    source: "estimated — docs/research/commercial_profiles_v1.md, found via examples/validate_blue_bird_vision_electric.py"
+    note: "NOT the shared six-profile passenger-EV placeholder (500.0A) — verbatim reuse was checked and found implausible: a validation run of this profile hit real torque requests implying up to 871A during an ordinary low-speed ramp-up (a 33,000lb bus needs real current to move, and this motor's real peak rating is 234.9kW/3254Nm, both far above any of the six passenger profiles'), continuously clamping current for the first ~40s of the run. Re-estimated at roughly 15% headroom above that observed peak request, same 'domain-appropriate estimate, not verbatim placeholder reuse' treatment already applied to this profile's vehicle-dynamics fields — see this profile's own header comment and commercial_profiles_v1.md's 'Fields intentionally NOT re-derived' section, which should be read as also covering this field now."
   r_ds_on_ref_ohm:
     value: 0.002
     confidence: low
