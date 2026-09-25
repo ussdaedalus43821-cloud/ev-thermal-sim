@@ -904,3 +904,171 @@ code it calls is.
   scope ("on top of `manufacturer_profile`" only) — not reused or unified
   with this resolver in this milestone; see CLAUDE.md's Known deferred
   work for the flag.
+
+## Q-0019 — Mistake library v1: how is the first MistakeCase's counterfactual_profile constructed?
+
+- Date: 2026-09-25
+- Context: Mistake library v1 (see CLAUDE.md's Known deferred work) needs a
+  first real `MistakeCase` instance. `MistakeCase`'s own docstring already
+  settles the ARCHITECTURE question (two independent long-horizon runs
+  sharing one `Scenario` context, not a `fork.py` branch, and not a
+  different real vehicle as the "fix" — "the only variable is the design
+  decision being taught"). What it doesn't settle is what specifically
+  changes between `failure_profile` and `counterfactual_profile` for the
+  first entry (Nissan Leaf: passive-air battery cooling). This determines
+  a published, citable comparison result, meeting this project's
+  escalation bar — not decided unilaterally.
+- Options considered:
+  1. **Minimal, isolated edit**: copy the real `nissan_leaf.yaml` profile
+     unmodified into `failure_profile`. For `counterfactual_profile`: add
+     one `CoolingLoop` (`"battery_loop"`, `serves: ["battery_pack"]`, with
+     placeholder hydraulics matching `powertrain_loop`'s existing
+     magnitude/style) and tighten `battery.thermal_node.
+     resistance_to_coolant_k_per_w` from `0.5` to `0.02` — matching Tesla
+     Model 3's real actively-cooled placeholder value for the same field,
+     not an arbitrary number. Nothing else changes: capacity, motor, mass,
+     chemistry all stay byte-identical to the real Leaf.
+  2. **Broader edit**: the same cooling-loop addition, plus adjusting other
+     thermal fields (e.g. `derate_temp_k`/`max_temp_k`,
+     `resistance_to_ambient_k_per_w`) to more aggressively demonstrate the
+     effect. Risks conflating "added active cooling" with "also tuned
+     unrelated thermal parameters," muddying which single decision the
+     delta is attributable to.
+  3. **Different real vehicle**: use a real actively-cooled profile (e.g.
+     Tesla Model 3) as `counterfactual_profile` directly. Cheapest, but
+     reintroduces the multi-variable confound this project has repeatedly
+     eliminated elsewhere (EFC normalization, shared aging coefficients,
+     shared day-type mix), and directly contradicts `MistakeCase`'s own
+     docstring.
+- Blocking: yes
+- **Resolution (2026-09-25): Option 1, approved.** `counterfactual_profile`
+  is the real Nissan Leaf profile with exactly two changes: one added
+  `CoolingLoop` serving `["battery_pack"]`, and
+  `resistance_to_coolant_k_per_w` tightened to `0.02` (Model 3's own real
+  placeholder value for the same field, chosen specifically so the
+  counterfactual's "actively cooled" claim is grounded in an existing,
+  already-reviewed number rather than invented fresh). `battery.
+  cooling_mechanism`'s `Sourced[str]` value/confidence/source are updated
+  to reflect this is now a hypothetical edit (`confidence: low`, source
+  naming it a counterfactual, not real Leaf research) — the real Leaf
+  profile's own `cooling_mechanism` entry (`confidence: high`, cited to
+  `docs/research/profiles_v1.md`) is untouched in `failure_profile`.
+  Constructed programmatically (`.model_copy()` in `examples/
+  mistake_library_leaf_battery_cooling.py`), not committed as a seventh
+  YAML file — this keeps it visibly a hypothetical derived from the real
+  profile, matching CLAUDE.md's own framing ("six real manufacturer
+  drivetrains... plus user-editable counterfactuals"), not a new
+  "reference vehicle." `evidence` cites the real Leaf's documented
+  hot-climate degradation (`docs/research/profiles_v1.md`: "~4.2%/year hot
+  climates; ~20% loss after 12mo") for the failure mode, plus the real
+  actively-cooled profiles' (Bolt/Model3/e-tron/Niro) documented SoH
+  outcomes as corroborating evidence that the fix CATEGORY works — not a
+  claim that this specific hypothetical edit reproduces any one of those
+  vehicles' exact numbers.
+
+## Q-0020 — Tier-2 parked-period coolant-loop coupling: physics model and energy-cost consistency
+
+- Date: 2026-09-25
+- Context: Building the mistake library's first entry (Q-0019) surfaced that
+  `simulate_long_horizon`'s parked-period calendar-aging relaxation
+  (`relax_parked_temp_k`) routes exclusively through `BatterySpec.
+  thermal_node.resistance_to_ambient_k_per_w` — never through any
+  `CoolingLoop` serving the battery, even when one exists (Milestone E2c's
+  original design, unrelated to this milestone). Checked directly across
+  all six real profiles: four of six (Audi e-tron, Chevrolet Bolt, Kia Niro
+  EV, Tesla Model 3) already have an active battery-serving `CoolingLoop`
+  with only a weak `resistance_to_ambient_k_per_w=2.0` fallback — so fixing
+  this changes real, already-published behavior for those four vehicles
+  (not just the mistake library's new Leaf counterfactual), including
+  `examples/flagship_comparison.py`'s published 90-day numbers and
+  `tests/test_long_horizon_validation.py`'s E2d harness (which uses Leaf
+  and Model 3 as its two real-profile cases). This meets the escalation
+  bar on both schema-semantics and re-running-a-validated-comparison
+  grounds; approved to proceed as its own milestone, not folded into the
+  mistake library, after the user was shown the exact blast radius.
+- Options considered (physics model):
+  1. **Thermostat-gated parallel resistance, reusing `CoolingLoop.
+     thermostat_temp_k`/`thermostat_full_open_temp_k`'s existing linear-ramp
+     convention** (the same 0%-at-thermostat_temp_k to 100%-at-
+     thermostat_full_open_temp_k ramp `cooling.py`'s real per-second model
+     already uses) rather than a hard on/off switch or a new placeholder
+     value. (Approved — see resolution.)
+  2. **Always-on coolant path whenever a serving loop exists**, no
+     gating. Rejected: overstates the benefit (real BMS-triggered thermal
+     management doesn't run the pump continuously while idle) and doesn't
+     reuse any existing schema field, inventing a new implicit assumption
+     instead.
+- Options considered (energy-cost consistency): does the pump's
+  `pump_power_w` draw against SOC while the coolant path is gated on?
+  1. **Yes — scale `pump_power_w` by the same `duty` ramp and add it as an
+     extra SOC decrement.** Modeling the coolant path's thermal benefit
+     without charging its power draw would repeat the EXACT shortcut Q-0004
+     already rejected for preconditioning ("models the effect without the
+     mechanism," and the mechanism has a real energy cost that feeds back
+     into SOC). (Approved.)
+  2. **No — accept it as a flagged v1 simplification.** Rejected given the
+     direct Q-0004 precedent; the added implementation cost of computing
+     the decrement from `relax_parked_temp_k`'s own returned temperature
+     trajectory (no restructuring of `_parked_soc_trajectory` needed) was
+     small enough not to justify the shortcut.
+- Blocking: yes
+- **Resolution (2026-09-25): Option 1 for both.** Implemented in
+  `long_horizon.py`: `relax_parked_temp_k` gains four new OPTIONAL
+  parameters (`capacitance_j_per_k`, `coolant_resistance_k_per_w`,
+  `thermostat_temp_k`, `thermostat_full_open_temp_k`) — omitted at every
+  pre-existing call site, so behavior there is byte-identical to before
+  (verified: full suite, 256 tests, passes unchanged). When all four are
+  given, each step recomputes `duty = clamp((pack_temp_k -
+  thermostat_temp_k) / (thermostat_full_open_temp_k - thermostat_temp_k),
+  0, 1)` and combines the direct ambient path and a duty-weighted coolant
+  path (`resistance_to_coolant_k_per_w + 1/radiator_ua_w_per_k`, in series,
+  quasi-steady — no separate coolant-node thermal mass tracked, consistent
+  with this function's existing piecewise-constant-ambient simplification)
+  as PARALLEL conductances into one effective tau for that step. New
+  `_pump_soc_decrement` helper sums `pump_power_w * duty` only over
+  intervals starting AT OR AFTER the day's charge-reset event — mirroring
+  `_parked_soc_trajectory`'s own reset-step convention exactly, since
+  intervals before/at the reset get wiped by the hard reset to
+  `typical_end_soc` regardless of their own drain, and double-subtracting
+  that would be wrong. `fan_power_w` is NOT charged (flagged simplification
+  — fan draws for forced airflow, which matters more while driving; parked
+  coolant circulation is approximated as pump-only).
+  **A further finding, surfaced by this fix rather than resolved by it:**
+  re-running the mistake library's Leaf case after this fix landed showed
+  NO change — direct diagnosis (`pack_cell_temp_k` trajectory dump) showed
+  neither the failure nor counterfactual profile ever exceeds ~306K over a
+  full year in the Guam scenario, well below even a realistic thermostat
+  threshold (confirmed against Tesla Model 3's own real researched
+  battery-loop thermostat, 318.15K/45°C — higher than the 308.15K value
+  used in the counterfactual, so the gap isn't a tuning error). ROOT CAUSE:
+  a radiator-based coolant loop can only reject heat TOWARD ambient, never
+  below it — and the failure profile's pack already tracks within ~1K of
+  Guam's ambient via the pre-existing ambient path, leaving little "excess
+  heat above ambient" for any radiator loop to remove. The real-world
+  hot-climate degradation this project's research describes is driven
+  mainly by sustained high AMBIENT temperature itself (calendar aging's
+  Arrhenius sensitivity to absolute cell temp), which only an active
+  refrigerant CHILLER can address (can cool below ambient) — and
+  `cooling.py`'s chiller path is explicitly unimplemented, a PRE-EXISTING
+  CLAUDE.md deferred-work item (`CoolingLoop.chiller_present`/
+  `chiller_capacity_w` exist in the schema but do nothing), not something
+  this milestone introduced. **Decision (2026-09-25): accept the small
+  delta, document the physical limit, do not implement the chiller path as
+  part of closing this milestone or the mistake library** — chiller
+  implementation is a materially bigger, separately-scoped physics
+  addition (affects the full per-second model, not just Tier-2) that
+  deserves its own plan review. See CLAUDE.md's Known deferred work for
+  both this milestone's record and the mistake library's.
+  **Re-validation required and completed — result was itself informative,
+  not just a formality**: `examples/flagship_comparison.py`'s published
+  90-day numbers were re-run and came back UNCHANGED (Leaf/Guam 0.5828%,
+  Model3/Seattle 0.1194%, ratio 4.8827 — matching the prior record within
+  rounding). This is not a null result; it's the SAME physical-limit
+  mechanism documented above showing up a second, independent way: Seattle
+  is milder than Guam, so if the thermostat gate barely engages in Guam, it
+  engages even less in Seattle — Model 3's real battery-loop thermostat
+  (318.15K/45°C) essentially never triggers in either climate under this
+  scenario's conditions. No numbers needed correcting in CLAUDE.md's
+  existing flagship-comparison record. `tests/
+  test_long_horizon_validation.py`'s E2d harness was re-checked too — see
+  CLAUDE.md for its pass/fail status.

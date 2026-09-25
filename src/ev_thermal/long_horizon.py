@@ -596,6 +596,10 @@ def relax_parked_temp_k(
     start_t_s: float,
     duration_s: float,
     step_s: float = 3600.0,
+    capacitance_j_per_k: float | None = None,
+    coolant_resistance_k_per_w: float | None = None,
+    thermostat_temp_k: float | None = None,
+    thermostat_full_open_temp_k: float | None = None,
 ) -> list[tuple[float, float]]:
     """Exact per-interval exponential relaxation toward ambient, treating ambient
     as piecewise-constant within each `step_s` interval -- NOT a single closed-
@@ -604,13 +608,41 @@ def relax_parked_temp_k(
     `T[i+1] = Ta(t_i) + (T[i] - Ta(t_i)) * exp(-dt/tau_s)` is exact within each
     interval given that approximation.
 
-    `tau_s=None` means the node has no ambient path
+    `tau_s=None` means the node has no direct ambient path
     (`BatterySpec.thermal_node.resistance_to_ambient_k_per_w` is `None`) -- pack
-    temp holds constant, matching that field's documented adiabatic semantics.
+    temp holds constant via that path, matching that field's documented
+    adiabatic semantics (unless a coolant path is also given, below).
+
+    ## Coolant-loop coupling while parked (see docs/DESIGN_QUESTIONS.md Q-0020)
+
+    When `coolant_resistance_k_per_w`, `thermostat_temp_k`, and
+    `thermostat_full_open_temp_k` are ALL given (along with
+    `capacitance_j_per_k`, needed to recombine resistances into an effective
+    tau each step), the battery's pack temperature also relaxes through a
+    coolant-mediated path in PARALLEL with the direct ambient path -- reusing
+    the SAME linear thermostat ramp `cooling.py`'s real per-second model
+    already uses (0% engaged at `thermostat_temp_k`, 100% at
+    `thermostat_full_open_temp_k`), not a hard on/off switch or a new
+    placeholder. `coolant_resistance_k_per_w` is the SERIES battery-to-
+    coolant-to-radiator-to-ambient resistance (`resistance_to_coolant_k_per_w
+    + 1/radiator_ua_w_per_k`) -- the coolant node itself is treated as
+    quasi-steady (no separate thermal mass tracked), a coarser approximation
+    than the full per-second model, consistent with this function's existing
+    piecewise-constant-ambient simplification. Recomputed every step (not
+    once for the whole call), since `duty` depends on the CURRENT pack temp.
+    If any of the four coolant-path arguments is omitted, behavior is
+    byte-identical to the pre-Q-0020 ambient-only function -- every existing
+    call site that doesn't pass them is unaffected.
 
     Returns `[(elapsed_t_s, pack_temp_k), ...]` at each step boundary, including
     the starting point, for calendar-aging quadrature (`parked_calendar_aging`).
     """
+    coolant_path_active = (
+        coolant_resistance_k_per_w is not None
+        and thermostat_temp_k is not None
+        and thermostat_full_open_temp_k is not None
+        and capacitance_j_per_k is not None
+    )
     samples: list[tuple[float, float]] = [(start_t_s, start_temp_k)]
     if duration_s <= 0.0:
         return samples
@@ -618,8 +650,20 @@ def relax_parked_temp_k(
     elapsed_s = 0.0
     while elapsed_s < duration_s:
         dt = min(step_s, duration_s - elapsed_s)
-        if tau_s is not None:
-            ambient = ambient_fn(start_t_s + elapsed_s)
+        ambient = ambient_fn(start_t_s + elapsed_s)
+        if coolant_path_active:
+            assert capacitance_j_per_k is not None  # narrows for mypy; coolant_path_active already guarantees this
+            assert coolant_resistance_k_per_w is not None
+            assert thermostat_temp_k is not None
+            assert thermostat_full_open_temp_k is not None
+            duty = min(1.0, max(0.0, (temp_k - thermostat_temp_k) / (thermostat_full_open_temp_k - thermostat_temp_k)))
+            ambient_conductance_w_per_k = 0.0 if tau_s is None else capacitance_j_per_k / tau_s
+            coolant_conductance_w_per_k = duty / coolant_resistance_k_per_w
+            total_conductance_w_per_k = ambient_conductance_w_per_k + coolant_conductance_w_per_k
+            if total_conductance_w_per_k > 0.0:
+                effective_tau_s = capacitance_j_per_k / total_conductance_w_per_k
+                temp_k = ambient + (temp_k - ambient) * math.exp(-dt / effective_tau_s)
+        elif tau_s is not None:
             temp_k = ambient + (temp_k - ambient) * math.exp(-dt / tau_s)
         elapsed_s += dt
         samples.append((start_t_s + elapsed_s, temp_k))
@@ -655,6 +699,35 @@ def parked_calendar_aging(
             spec, soh=1.0, cell_temp_k=temp0, soc=soc0, applied_current_a=0.0, dt_s=soc_t1 - soc_t0
         )
         total += result.calendar_delta
+    return total
+
+
+def _pump_soc_decrement(
+    temp_samples: list[tuple[float, float]],
+    charge_event_s: float,
+    thermostat_temp_k: float,
+    thermostat_full_open_temp_k: float,
+    pump_decay_per_hour_at_full_duty: float,
+) -> float:
+    """Sums the coolant pump's SOC draw (per Q-0020's energy-cost-consistency
+    requirement -- modeling the parked-cooling-loop's thermal benefit without
+    charging its power draw would repeat the exact shortcut Q-0004 already
+    rejected for preconditioning) over intervals AFTER the day's charge-reset
+    event only. Intervals at or before the reset get wiped by
+    `_parked_soc_trajectory`'s own hard reset to `typical_end_soc` regardless
+    of how much they drained, so counting their pump draw here would double-
+    subtract drain the reset already erases -- `t0 >= charge_event_s` mirrors
+    that function's own `t_before < charge_event_s <= t_after` reset-step
+    condition exactly (the reset step and everything before it excluded).
+    Left-Riemann (interval-start temp for duty), matching
+    `parked_calendar_aging`'s convention.
+    """
+    total = 0.0
+    for (t0, temp0), (t1, _temp1) in zip(temp_samples[:-1], temp_samples[1:], strict=True):
+        if t0 < charge_event_s:
+            continue
+        duty = min(1.0, max(0.0, (temp0 - thermostat_temp_k) / (thermostat_full_open_temp_k - thermostat_temp_k)))
+        total += duty * pump_decay_per_hour_at_full_duty * ((t1 - t0) / 3600.0)
     return total
 
 
@@ -845,9 +918,17 @@ def simulate_long_horizon(
         if spec.thermal_node.resistance_to_ambient_k_per_w is None
         else spec.thermal_node.resistance_to_ambient_k_per_w.value * spec.thermal_node.capacitance_j_per_k.value
     )
+    battery_loop = next(
+        (loop for loop in profile.thermal_architecture.cooling_loops if battery_node_name in loop.serves), None
+    )
     accessory_power_w = profile.aux_loads.accessory_load_w.value / profile.aux_loads.dc_dc_converter_efficiency.value
     pack_voltage_v = battery_ocv_v(spec, charging_profile.typical_end_soc.value, spec.reference_temp_k.value)
     decay_per_hour = (accessory_power_w / pack_voltage_v) / spec.capacity_nominal_ah.value
+    pump_decay_per_hour_at_full_duty = (
+        0.0
+        if battery_loop is None
+        else (battery_loop.pump_power_w.value / pack_voltage_v) / spec.capacity_nominal_ah.value
+    )
 
     day0 = start_day_of_year if start_day_of_year is not None else _default_start_day_of_year()
     pack_temp_k = ambient_temp_k(climate, day0, _START_OF_DAY_HOUR)
@@ -898,8 +979,32 @@ def simulate_long_horizon(
             parked_duration_s = 86400.0
             parked_start_s = day_start_s
 
-        temp_samples = relax_parked_temp_k(pack_temp_k, tau_s, ambient_fn, parked_start_s, parked_duration_s)
         charge_event_s = day_start_s + charging_profile.charge_reset_hour.value * 3600.0
+        if battery_loop is None:
+            temp_samples = relax_parked_temp_k(pack_temp_k, tau_s, ambient_fn, parked_start_s, parked_duration_s)
+            pump_loss_soc = 0.0
+        else:
+            coolant_resistance_k_per_w = (
+                spec.thermal_node.resistance_to_coolant_k_per_w.value + 1.0 / battery_loop.radiator_ua_w_per_k.value
+            )
+            temp_samples = relax_parked_temp_k(
+                pack_temp_k,
+                tau_s,
+                ambient_fn,
+                parked_start_s,
+                parked_duration_s,
+                capacitance_j_per_k=spec.thermal_node.capacitance_j_per_k.value,
+                coolant_resistance_k_per_w=coolant_resistance_k_per_w,
+                thermostat_temp_k=battery_loop.thermostat_temp_k.value,
+                thermostat_full_open_temp_k=battery_loop.thermostat_full_open_temp_k.value,
+            )
+            pump_loss_soc = _pump_soc_decrement(
+                temp_samples,
+                charge_event_s,
+                battery_loop.thermostat_temp_k.value,
+                battery_loop.thermostat_full_open_temp_k.value,
+                pump_decay_per_hour_at_full_duty,
+            )
         soc_samples = _parked_soc_trajectory(
             soc,
             parked_start_s,
@@ -912,7 +1017,7 @@ def simulate_long_horizon(
         calendar_loss_cumulative += parked_loss
         soh = max(0.0, soh - parked_loss)
         pack_temp_k = temp_samples[-1][1]
-        soc = soc_samples[-1][1]
+        soc = max(0.0, soc_samples[-1][1] - pump_loss_soc)
 
         checkpoints.append(
             LongHorizonCheckpoint(

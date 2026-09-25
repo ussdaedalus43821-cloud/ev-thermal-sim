@@ -27,6 +27,7 @@ from ev_thermal.long_horizon import (
     _interpolate_characterization,
     _parked_soc_trajectory,
     _phase_aging,
+    _pump_soc_decrement,
     _speed_from_waypoints,
     ambient_bucket_temps_k,
     ambient_temp_k,
@@ -314,6 +315,111 @@ def test_relax_parked_temp_k_zero_duration_returns_only_start_sample() -> None:
         start_t_s=0.0, duration_s=0.0,
     )
     assert samples == [(0.0, 300.0)]
+
+
+def test_relax_parked_temp_k_below_thermostat_reproduces_ambient_only_behavior() -> None:
+    """duty=0 below thermostat_temp_k -- the coolant path contributes nothing,
+    so this must be byte-identical to the pre-Q-0020 ambient-only call.
+    """
+    baseline = relax_parked_temp_k(
+        start_temp_k=300.0, tau_s=1000.0, ambient_fn=lambda _t: 290.0, start_t_s=0.0, duration_s=1000.0, step_s=500.0
+    )
+    with_coolant = relax_parked_temp_k(
+        start_temp_k=300.0,
+        tau_s=1000.0,
+        ambient_fn=lambda _t: 290.0,
+        start_t_s=0.0,
+        duration_s=1000.0,
+        step_s=500.0,
+        capacitance_j_per_k=1000.0,
+        coolant_resistance_k_per_w=0.02,
+        thermostat_temp_k=320.0,  # above start_temp_k -- duty stays 0 throughout
+        thermostat_full_open_temp_k=330.0,
+    )
+    assert with_coolant == baseline
+
+
+def test_relax_parked_temp_k_above_thermostat_relaxes_faster_with_coolant_path() -> None:
+    """Above thermostat_temp_k, the coolant path adds a parallel conductance,
+    so the pack must relax toward ambient strictly faster than the
+    ambient-only path alone -- confirms the mechanism actually engages, not
+    just that it doesn't break the no-coolant case.
+    """
+    ambient_only = relax_parked_temp_k(
+        start_temp_k=330.0,
+        tau_s=100_000.0,
+        ambient_fn=lambda _t: 290.0,
+        start_t_s=0.0,
+        duration_s=3600.0,
+        step_s=3600.0,
+    )
+    with_coolant = relax_parked_temp_k(
+        start_temp_k=330.0,
+        tau_s=100_000.0,
+        ambient_fn=lambda _t: 290.0,
+        start_t_s=0.0,
+        duration_s=3600.0,
+        step_s=3600.0,
+        capacitance_j_per_k=270_000.0,
+        coolant_resistance_k_per_w=0.02,
+        thermostat_temp_k=308.15,
+        thermostat_full_open_temp_k=313.15,  # start_temp_k=330 is well above this -- duty=1.0 throughout
+    )
+    assert with_coolant[-1][1] < ambient_only[-1][1]
+    ambient_conductance_w_per_k = 270_000.0 / 100_000.0  # capacitance / tau_ambient == 1/R_ambient
+    coolant_conductance_w_per_k = 1.0 / 0.02  # duty=1.0 / coolant_resistance
+    effective_tau_s = 270_000.0 / (ambient_conductance_w_per_k + coolant_conductance_w_per_k)
+    expected = 290.0 + (330.0 - 290.0) * math.exp(-3600.0 / effective_tau_s)
+    assert with_coolant[-1][1] == pytest.approx(expected)
+
+
+def test_relax_parked_temp_k_hand_computed_single_step_with_full_duty_coolant_path() -> None:
+    """duty=1.0 (start_temp_k >= thermostat_full_open_temp_k): the effective
+    tau is capacitance / (1/tau_ambient + 1/coolant_resistance) -- confirms
+    the parallel-resistance combination against a hand computation, not just
+    a directional check.
+    """
+    capacitance_j_per_k = 1000.0
+    tau_ambient_s = 1000.0  # implies R_ambient = tau_ambient_s / capacitance = 1.0 K/W
+    coolant_resistance_k_per_w = 0.5
+    expected_effective_tau_s = capacitance_j_per_k / (1.0 / 1.0 + 1.0 / coolant_resistance_k_per_w)
+
+    samples = relax_parked_temp_k(
+        start_temp_k=310.0, tau_s=tau_ambient_s, ambient_fn=lambda _t: 290.0,
+        start_t_s=0.0, duration_s=100.0, step_s=100.0,
+        capacitance_j_per_k=capacitance_j_per_k,
+        coolant_resistance_k_per_w=coolant_resistance_k_per_w,
+        thermostat_temp_k=300.0, thermostat_full_open_temp_k=305.0,
+    )
+    expected = 290.0 + (310.0 - 290.0) * math.exp(-100.0 / expected_effective_tau_s)
+    assert samples[1][1] == pytest.approx(expected)
+
+
+def test_pump_soc_decrement_only_counts_intervals_after_charge_event() -> None:
+    """Mirrors _parked_soc_trajectory's own reset-step convention exactly:
+    an interval wholly before, or straddling, the charge-reset boundary gets
+    wiped by the reset regardless of its own drain, so it must not
+    contribute here either -- only intervals starting at/after the reset do.
+    """
+    temp_samples = [(0.0, 320.0), (3600.0, 320.0), (7200.0, 320.0), (10800.0, 320.0)]
+    # charge_event_s=5000 falls inside the [3600, 7200) interval -- that interval
+    # and the [0, 3600) one before it must both be excluded.
+    decrement = _pump_soc_decrement(
+        temp_samples, charge_event_s=5000.0,
+        thermostat_temp_k=300.0, thermostat_full_open_temp_k=305.0,  # duty=1.0 at 320K
+        pump_decay_per_hour_at_full_duty=0.02,
+    )
+    assert decrement == pytest.approx(0.02)  # exactly one full hour ([7200, 10800)) at duty=1.0
+
+
+def test_pump_soc_decrement_is_zero_below_thermostat() -> None:
+    temp_samples = [(0.0, 290.0), (3600.0, 290.0)]
+    decrement = _pump_soc_decrement(
+        temp_samples, charge_event_s=0.0,
+        thermostat_temp_k=300.0, thermostat_full_open_temp_k=305.0,
+        pump_decay_per_hour_at_full_duty=0.02,
+    )
+    assert decrement == 0.0
 
 
 def test_parked_soc_trajectory_decays_linearly_with_no_charge_event_in_window() -> None:
