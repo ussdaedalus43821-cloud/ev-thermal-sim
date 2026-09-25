@@ -1998,3 +1998,138 @@ not just *what* happened.
   in `cooling.py` (see the milestone above) is the single biggest lever
   for making a future hot-climate MistakeCase's delta match real-world
   magnitudes.
+- **Milestone "Transition seam — gap 3 closed, first commercial-vehicle
+  profile" (done, 2026-09-25):** the first concrete step toward the
+  ev-thermal-sim ↔ Transition seam described in `docs/seam_reconnaissance.md`,
+  following that memo's own gap-closure assessment (§6): close the
+  cheapest gap (climate data) immediately, and scope the expensive gap
+  (shared vehicle classes) to one real, well-documented commercial vehicle
+  rather than both of Transition's vehicle classes at once. Per explicit
+  instruction, this was executed without opening any `docs/DESIGN_
+  QUESTIONS.md` entries — the profile-sourcing methodology was already
+  established by the six passenger-EV profiles, and no genuinely novel
+  design question (e.g. a thermal architecture the schema couldn't
+  express) came up.
+  **Gap 3 (Transition, real climate data):** `ClimateZone`
+  (`Transition/src/types.ts`) gained three real fields —
+  `meanAnnualTempF`/`seasonalAmplitudeF`/`dailyAmplitudeF` — populated with
+  real NOAA 1991-2020 climate normals (hand-derived from published monthly
+  high/low normals, not a single looked-up figure) for both presets:
+  Columbus, OH (School Bus Depot / AEP Ohio) and Cedar Rapids, IA (Tank
+  Wash / Alliant Energy). Stored in Fahrenheit, matching the source data
+  and Transition's own audience, with the F→K conversion formula (and the
+  "a temperature DIFFERENCE converts by ×5/9 only, no offset" caveat for
+  the two amplitude fields) documented in the field's own doc comment for
+  whoever eventually wires this into ev-thermal-sim's kelvin-based
+  `Climate` schema. Not yet consumed by any Transition mechanics — same
+  "added as data only" pattern already established for `targetElectrification
+  RateByYear20`. **Could not be verified two ways this session had no
+  access to**: Transition has no git repository (confirmed via `git
+  status` before touching anything), so nothing was literally "committed"
+  there, only written to disk; and this environment has no `node`/`npx`
+  installed, so `tsc --noEmit` could not be run to confirm the new fields
+  type-check, though they're simple, syntactically-unambiguous interface/
+  object-literal additions.
+  **Gap 1, scoped to one vehicle (ev-thermal-sim, first commercial-vehicle
+  profile):** new `configs/profiles_commercial/` directory — deliberately
+  NOT `configs/profiles/`, and NOT a "seventh" entry in `tests/
+  test_profiles.py`'s `PROFILE_STEMS`. That file's own module docstring
+  ("the six populated reference-vehicle profiles") and every "shared
+  across all six profiles by design" note throughout this project
+  (aging-coefficient sharing, the flagship comparison, the Monte Carlo
+  record) are all scoped specifically to the six-passenger-EV comparison;
+  quietly making a commercial vehicle its unannounced seventh member would
+  either falsify those "six" claims or silently fold an uncontrolled new
+  vehicle class into a comparison whose whole methodological point is
+  controlling for everything except thermal architecture. New parallel
+  track instead: `docs/research/commercial_profiles_v1.md` (its own
+  versioned research document, same discipline as `profiles_v1.md` but
+  explicitly not an addition to it) and `tests/test_profiles_commercial.py`
+  (mirrors `test_profiles.py`'s checks — sourced-field completeness,
+  gross≥usable kWh, positive motor specs, derate<max temp, cooling-loop
+  serves-name matching, a 60s scenario smoke test — duplicated rather than
+  imported, so the two tracks stay decoupled).
+  **First entry: Blue Bird Vision Electric (194 kWh pack generation,
+  2024+)**, a Type C electric school bus — chosen over the Lion Electric
+  Lion C because Blue Bird's own dated (2025-03-17) spec sheet and its
+  propulsion supplier's (Cummins/Accelera) separate BP97E battery-module
+  datasheet together gave real, disclosed figures the Lion C's public
+  documentation didn't (motor peak power/torque, pack voltage, operating
+  temperature range, C-rate limits) — a materially stronger starting point
+  for this project's per-field `Sourced[T]` methodology. Real, sourced
+  data used directly: 194kWh pack (170.7kWh usable, 88% per Blue Bird's
+  own figure), NMC/graphite chemistry, 620V nominal (583-689V range),
+  −40°C to 50°C operating range, peak/continuous charge and discharge
+  C-rates (all derived from the Accelera BP97E datasheet), 234.9kW/3254Nm
+  peak motor output (315hp/2400ft-lbs per Blue Bird's spec sheet, TM4 SUMO
+  motor family, exact variant undisclosed), liquid cooling (50/50 water/
+  ethylene glycol) with an active refrigerant chiller shared across
+  battery+motor+inverter via the Cummins PowerDrive 7000's single Thermal
+  Management Module, and preconditioning capability (per Blue Bird's own
+  marketing copy). Full details and every citation in `docs/research/
+  commercial_profiles_v1.md`.
+  **This is the first `chiller_present: true` profile in this project** —
+  every one of the six passenger-EV profiles has `chiller_present: false`
+  everywhere, so this profile is the first real vehicle CLAUDE.md's
+  existing "chiller path is not implemented in cooling.py" deferred-work
+  note (see the parked-period coolant-loop coupling milestone, above)
+  actually affects. `chiller_capacity_w` is a placeholder (no numeric
+  figure disclosed anywhere found) and currently has zero physics effect
+  regardless, since `cooling.py`'s chiller path doesn't exist yet.
+  **Two categories of field needed genuine re-derivation, not verbatim
+  reuse of the shared six-profile placeholder — found and fixed before
+  this landed, not left as latent bugs:**
+  1. Vehicle-dynamics fields (`curb_mass_kg`, `frontal_area_m2`,
+     `drag_coefficient`, `wheel_radius_m`, motor `mass_kg`) where the
+     passenger-EV placeholder would be physically implausible for a
+     33,000lb-GVWR bus (e.g. `curb_mass_kg: 1800.0` would make the
+     simulated vehicle accelerate like a sports car) — each re-estimated
+     from this vehicle's own real disclosed geometry/GVWR/tire size or
+     generic published heavy-vehicle engineering figures, confidence: low,
+     derivation shown in the YAML itself.
+  2. The battery `ocv_curve_v`, which had to be linearly rescaled to this
+     pack's real 583-689V range rather than reused verbatim from the
+     shared 300-395V curve — verbatim reuse would have placed the pack's
+     own documented `min_terminal_voltage_v` (583V) ABOVE the OCV curve's
+     maximum (395V), an internal contradiction within the same profile,
+     not just an unresearched placeholder. New regression test in `tests/
+     test_profiles_commercial.py` (`test_battery_min_voltage_below_ocv_
+     curve_max_and_max_voltage_above_ocv_curve_min`) guards against this
+     class of bug recurring for this or any future commercial profile.
+  Every other un-researched field (equivalent-circuit internals, all
+  seven aging-rate coefficients, the charge-current-limit curve,
+  control-strategy placeholders, most `AuxLoads` fields) is the SAME
+  shared, non-vehicle-specific placeholder value used across all six
+  passenger profiles, reused verbatim — consistent with, not a deviation
+  from, the existing six profiles' own methodology.
+  **Flagged explicitly, not silently inherited: the seven aging-rate
+  coefficients were calibrated against two PASSENGER-EV fleet anchors
+  (Leaf/Guam, Model3/Seattle) and have never been validated against any
+  commercial/heavy-duty vehicle's chemistry or duty cycle.** Reusing them
+  here follows this project's established "shared coefficients isolate
+  thermal architecture as the sole variable" convention, but that
+  convention's validity was established for six vehicles with broadly
+  similar passenger-EV chemistries and duty cycles — extending it to a
+  heavy-duty NMC/graphite pack on a school-bus duty cycle is untested.
+  Every one of this profile's aging-coefficient fields says so directly in
+  its own `source`/`note`. Do not treat this profile's SOH trajectory as
+  validated the way the six passenger profiles' are, and do not use it in
+  a published comparison without re-examining this gap first.
+  **Validation:** `uv run pytest tests/test_profiles_commercial.py` (9
+  tests, including a 60s `run_scenario` smoke test) passes; full suite
+  (267 tests), `mypy --strict`, and `ruff` all pass unchanged.
+  **What's still open, per `docs/seam_reconnaissance.md`'s own gap
+  ranking:** gap 2 (Transition route duty-cycle detail) remains
+  deliberately untouched — its payoff was already identified as gated
+  behind gap 1, and it's revisited as part of this profile's actual
+  integration into Transition, not populated speculatively ahead of that.
+  Transition-side wiring (a `manufacturerProfileKey`-style field on
+  `VehicleClass` pointing at this new profile, and the precomputed
+  SOH-delta table interface itself, per the memo's §5 shape) is not part
+  of this milestone — this milestone is the profile existing and being
+  real, not yet the seam being consumed. The second Transition vehicle
+  class (tank-wash truck) is explicitly deferred, per the original
+  decision, until the seam is proven on the primary (school bus) case.
+  See `docs/seam_reconnaissance.md`'s own §7 for whether the originally-
+  proposed interface shape (§5) still holds now that gap 3 is closed and a
+  real commercial profile exists.

@@ -1,0 +1,519 @@
+# ManufacturerProfile data for the Blue Bird Vision Electric (194 kWh pack
+# generation, 2024+), a Type C electric school bus.
+# Source: docs/research/commercial_profiles_v1.md — Blue Bird Vision Electric.
+# See src/ev_thermal/schema.py:ManufacturerProfile for the shape.
+#
+# NOT in configs/profiles/ alongside the six passenger-EV reference
+# vehicles, deliberately — this is the first entry in a separate commercial-
+# vehicle track (configs/profiles_commercial/), built for the Transition
+# seam's gap-1 closure (see docs/seam_reconnaissance.md §6/§7), not a
+# seventh member of "the six" this project's aging-coefficient-sharing
+# design, flagship comparisons, and Monte Carlo record are built around.
+# See tests/test_profiles_commercial.py, not tests/test_profiles.py.
+#
+# Same "isolate the researched variable" methodology as the six passenger
+# profiles: thermal-management fields and the electrical specs this
+# research actually covers are vehicle-specific; everything else is the
+# SAME shared, non-vehicle-specific placeholder value used across all six
+# passenger profiles, reused verbatim here too (per-field source notes say
+# so explicitly). Two categories of field could NOT simply reuse the
+# passenger-EV placeholder without producing a wrong or self-contradictory
+# profile — see commercial_profiles_v1.md's own "Fields intentionally NOT
+# re-derived" section for why: vehicle-dynamics fields that would make a
+# 33,000lb-GVWR bus behave like a car, and the battery OCV curve, which had
+# to be rescaled to this pack's real 583-689V operating range rather than
+# reused verbatim at the passenger-EV placeholder's 300-395V.
+#
+# model_year_range: research is specific to the 194kWh BP97E-based "new
+# standard" battery pack generation described in Blue Bird's dated
+# (2025-03-17) spec sheet; the exact model-year cutover to this pack
+# generation is not independently confirmed, so this range is an estimate
+# bracketing that spec sheet's publication.
+
+name: "Blue Bird Vision Electric (194 kWh pack)"
+model_year_range: [2024, 2026]
+
+vehicle_dynamics:
+  curb_mass_kg:
+    value: 12250.0
+    confidence: low
+    source: "estimated — docs/research/commercial_profiles_v1.md"
+    note: "No curb weight disclosed by Blue Bird anywhere found (searched specifically). Estimated from this vehicle's own real disclosed GVWR (33,000 lb) and battery mass (~1,100kg, see battery.mass_kg), against typical Type C school bus curb-weight-to-GVWR ratios (~75-80%) reported in general industry sources. NOT a passenger-EV placeholder reused verbatim — 1800kg (the shared six-profile value) would be physically implausible for this GVWR class and would make the simulated vehicle accelerate unrealistically."
+  drag_coefficient:
+    value: 0.65
+    confidence: low
+    source: "estimated — docs/research/commercial_profiles_v1.md"
+    note: "Typical published Cd range (~0.6-0.7) for boxy Type C/D school bus bodies; not wind-tunnel data for this specific model. Not reused from the passenger-EV placeholder (0.28) — a school bus's boxy frontal profile is a genuinely different aerodynamic shape class, not just an unresearched number."
+  frontal_area_m2:
+    value: 6.5
+    confidence: low
+    source: "estimated — docs/research/commercial_profiles_v1.md"
+    note: "Derived from this vehicle's own real disclosed exterior width (96in/2.44m) x overall height (123in/3.12m), reduced by a standard 0.85 shape factor for a boxy bus body (rounded roof, underbody ground clearance). Not reused from the passenger-EV placeholder (2.3 m^2) for the same reason as drag_coefficient above."
+  rolling_resistance_coefficient:
+    value: 0.01
+    confidence: low
+    source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"
+    note: "Shared six-profile placeholder, reused verbatim — heavy-truck tire rolling-resistance coefficients are reported in a similar order of magnitude (~0.006-0.01), unlike the vehicle-dynamics fields above where verbatim reuse would be implausible."
+  wheel_radius_m:
+    value: 0.51
+    confidence: medium
+    source: "derived from real 11R22.5 tire size — docs/research/commercial_profiles_v1.md"
+    note: "11R22.5 is this vehicle's actual disclosed tire size (Blue Bird spec sheet); overall diameter for that size is ~40.4in per standard commercial-tire tables, giving radius ~0.51m. Not independently confirmed against a loaded-radius measurement for this specific vehicle."
+  gear_ratio:
+    value: 9.0
+    confidence: low
+    source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"
+  driveline_efficiency:
+    value: 0.95
+    confidence: low
+    source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"
+  tire_road_friction_coefficient:
+    value: 0.9
+    confidence: low
+    source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"
+
+battery:
+  chemistry: "NMC/graphite (Li-ion NMC-A cells per Accelera; Blue Bird states NMC/G)"
+  capacity_kwh_nominal:
+    value: 194.0
+    confidence: high
+    source: "docs/research/commercial_profiles_v1.md — Blue Bird Vision Electric"
+  capacity_kwh_usable:
+    value: 170.7
+    confidence: high
+    source: "docs/research/commercial_profiles_v1.md — Blue Bird Vision Electric"
+    note: "derived from capacity_kwh_nominal * 0.88 (Blue Bird's own stated '88% usable capacity' for this pack generation)"
+  nominal_voltage_v:
+    value: 620.0
+    confidence: high
+    source: "docs/research/commercial_profiles_v1.md — Blue Bird Vision Electric"
+  internal_resistance_ohm:
+    value: 0.05
+    confidence: low
+    source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"
+    note: "shared six-profile placeholder, reused verbatim despite this pack's very different capacity/voltage — consistent with how the existing six profiles already share this exact value across differing capacities (66.7-215Ah)"
+  mass_kg:
+    value: 1100.0
+    confidence: medium
+    source: "docs/research/commercial_profiles_v1.md — Blue Bird Vision Electric"
+    note: "derived: 2x the Accelera BP97E module's own disclosed dry mass (550kg each), since the 194kWh system is functionally two 97kWh BP97E modules; exact multi-module integration for this specific application not independently confirmed"
+  specific_heat_j_per_kg_k:
+    value: 900.0
+    confidence: low
+    source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"
+  max_charge_c_rate:
+    value: 2.15
+    confidence: high
+    source: "docs/research/commercial_profiles_v1.md — Blue Bird Vision Electric"
+    note: "derived from the Accelera BP97E datasheet's peak charge rating (209kW at 50% SOC) / nominal module capacity (97kWh)"
+  max_discharge_c_rate:
+    value: 1.35
+    confidence: high
+    source: "docs/research/commercial_profiles_v1.md — Blue Bird Vision Electric"
+    note: "derived from the Accelera BP97E datasheet's peak discharge rating (131kW at 20% SOC) / nominal module capacity (97kWh)"
+  thermal_node:
+    name: "battery_pack"
+    capacitance_j_per_k:
+      value: 990000.0
+      confidence: low
+      source: "derived from mass_kg (1100.0, medium confidence) * placeholder specific_heat_j_per_kg_k (900.0, low confidence)"
+    resistance_to_coolant_k_per_w:
+      value: 0.02
+      confidence: low
+      source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"
+      note: "shared value from the existing actively-liquid-cooled profiles (e.g. Tesla Model 3), not the Leaf's passive-air 0.5 — this pack is genuinely actively liquid-cooled with a chiller, per research"
+    initial_temp_k: 298.15
+    max_temp_k:
+      value: 323.15
+      confidence: high
+      source: "docs/research/commercial_profiles_v1.md — Blue Bird Vision Electric"
+      note: "50C: the documented upper bound of the Accelera BP97E's real -40C to 50C operating range"
+    derate_temp_k:
+      value: 313.15
+      confidence: low
+      source: "estimated onset, per the derating-curve convention (docs/research/commercial_profiles_v1.md's own caveat section)"
+      note: "40C: no documented derate-onset threshold found; the 50C max_temp_k above is real, this onset point is an estimate"
+    resistance_to_ambient_k_per_w:
+      value: 2.0
+      confidence: low
+      source: "placeholder — estimated from physical plausibility, not sourced"
+      note: "weak secondary path alongside the dominant active coolant+chiller path, same convention as the four actively-cooled passenger profiles"
+  capacity_nominal_ah:
+    value: 312.9
+    confidence: high
+    source: "docs/research/commercial_profiles_v1.md — Blue Bird Vision Electric"
+    note: "derived from capacity_kwh_nominal * 1000 / nominal_voltage_v (194000/620)"
+  reference_temp_k:
+    value: 298.15
+    confidence: low
+    source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"
+  ocv_curve_v:
+    - [{value: 0.0, confidence: low, source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"},
+       {value: 583.0, confidence: medium, source: "docs/research/commercial_profiles_v1.md — Blue Bird Vision Electric (Accelera BP97E datasheet's real 583-689V operating range)"}]
+    - [{value: 0.1, confidence: low, source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"},
+       {value: 616.5, confidence: low, source: "linearly rescaled from the shared six-profile curve's shape onto this pack's real 583-689V endpoints — interior point, not independently sourced"}]
+    - [{value: 0.5, confidence: low, source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"},
+       {value: 636.6, confidence: low, source: "linearly rescaled from the shared six-profile curve's shape onto this pack's real 583-689V endpoints — interior point, not independently sourced"}]
+    - [{value: 0.9, confidence: low, source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"},
+       {value: 655.5, confidence: low, source: "linearly rescaled from the shared six-profile curve's shape onto this pack's real 583-689V endpoints — interior point, not independently sourced"}]
+    - [{value: 1.0, confidence: low, source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"},
+       {value: 689.0, confidence: medium, source: "docs/research/commercial_profiles_v1.md — Blue Bird Vision Electric (Accelera BP97E datasheet's real 583-689V operating range)"}]
+  docv_dt_v_per_k:
+    value: 0.0
+    confidence: low
+    source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"
+  r0_curve_ohm:
+    - [{value: 0.0, confidence: low, source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"},
+       {value: 0.09, confidence: low, source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"}]
+    - [{value: 0.5, confidence: low, source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"},
+       {value: 0.05, confidence: low, source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"}]
+    - [{value: 1.0, confidence: low, source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"},
+       {value: 0.10, confidence: low, source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"}]
+  r0_arrhenius_activation_temp_k:
+    value: 3000.0
+    confidence: low
+    source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"
+  r1_ohm:
+    value: 0.015
+    confidence: low
+    source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"
+  c1_farad:
+    value: 3000.0
+    confidence: low
+    source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"
+  min_terminal_voltage_v:
+    value: 583.0
+    confidence: high
+    source: "docs/research/commercial_profiles_v1.md — Blue Bird Vision Electric"
+  max_terminal_voltage_v:
+    value: 689.0
+    confidence: high
+    source: "docs/research/commercial_profiles_v1.md — Blue Bird Vision Electric"
+  min_operating_temp_k:
+    value: 233.15
+    confidence: high
+    source: "docs/research/commercial_profiles_v1.md — Blue Bird Vision Electric"
+    note: "-40C: the documented lower bound of the Accelera BP97E's real -40C to 50C operating range"
+  cold_derate_threshold_temp_k:
+    value: 283.15
+    confidence: low
+    source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"
+  cold_derate_activation_temp_k:
+    value: 1000.0
+    confidence: low
+    source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"
+  soc_floor:
+    value: 0.05
+    confidence: low
+    source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"
+  soc_floor_full_available_soc:
+    value: 0.1
+    confidence: low
+    source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"
+  cooling_mechanism:
+    value: "liquid-cooled (H2O/ethylene glycol 50:50) with an active refrigerant chiller, shared with motor/inverter via the Cummins PowerDrive 7000 Thermal Management Module"
+    confidence: high
+    source: "docs/research/commercial_profiles_v1.md — Blue Bird Vision Electric"
+  min_charge_temp_k: null  # not independently disclosed — BP97E's -40/50C range is one symmetric operating range, no separate charge-only cutoff found
+
+  calendar_aging_rate_per_s:
+    value: 4.4135e-10
+    confidence: low
+    source: "calibrated against two PASSENGER-EV fleet anchors (Leaf/Guam, Model3/Seattle) — see aging.py's module docstring 'Coefficient provenance'; reused verbatim per project convention, NOT validated for this vehicle's chemistry or duty cycle"
+    note: "flagged explicitly: this coefficient was never fit against any commercial/heavy-duty vehicle data. Reused because this project's methodology treats these coefficients as shared/non-vehicle-specific by design (isolating thermal architecture as the sole variable) — but that design's validity was established for six passenger EVs with broadly similar NMC/NCA/LMO chemistries and duty cycles, not for a heavy-duty NMC/graphite pack driven on a school-bus duty cycle. Do not treat this profile's SOH trajectory as validated the way the six passenger profiles' are."
+  calendar_aging_activation_temp_k:
+    value: 7457.4
+    confidence: low
+    source: "calibrated against two passenger-EV fleet anchors — see aging.py's module docstring 'Coefficient provenance'; reused verbatim, same caveat as calendar_aging_rate_per_s above"
+  calendar_aging_soc_sensitivity:
+    value: 1.0
+    confidence: low
+    source: "assumed (fixed choice, not fit) — see aging.py's module docstring 'Coefficient provenance'; reused verbatim, not vehicle-specific"
+  cycle_aging_rate_per_efc:
+    value: 1.350e-4
+    confidence: low
+    source: "calibrated against one passenger-EV fleet anchor, re-expressed in EFC — see aging.py's module docstring 'Coefficient provenance' and docs/DESIGN_QUESTIONS.md Q-0006/Q-0007; reused verbatim, same chemistry/duty-cycle caveat as calendar_aging_rate_per_s above"
+  cycle_aging_activation_temp_k:
+    value: 3728.7
+    confidence: low
+    source: "assumed as calendar_aging_activation_temp_k/2 — see aging.py's module docstring 'Coefficient provenance'; reused verbatim, not vehicle-specific"
+  cycle_aging_c_rate_sensitivity:
+    value: 1.0
+    confidence: low
+    source: "assumed (fixed choice, not fit) — see aging.py's module docstring 'Coefficient provenance'; reused verbatim, not vehicle-specific"
+  resistance_growth_per_soh_loss:
+    value: 1.0
+    confidence: low
+    source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"
+  cold_soak_offset_k:
+    value: 3.0
+    confidence: low
+    source: "placeholder — to be sourced from real-world soak data"
+  hot_soak_offset_k:
+    value: 8.0
+    confidence: low
+    source: "placeholder — to be sourced from real-world soak data"
+  charge_current_limit_curve:
+    - [{value: 0.0, confidence: low, source: "placeholder (shared six-profile curve, reused verbatim) — full C-rate to 60% SOC, linear taper 60%->95% down to 20% of max_charge_c_rate, constant 20% ceiling 95%->100%"},
+       {value: 1.0, confidence: low, source: "placeholder (shared six-profile curve, reused verbatim) — full C-rate to 60% SOC, linear taper 60%->95% down to 20% of max_charge_c_rate, constant 20% ceiling 95%->100%"}]
+    - [{value: 0.6, confidence: low, source: "placeholder (shared six-profile curve, reused verbatim) — full C-rate to 60% SOC, linear taper 60%->95% down to 20% of max_charge_c_rate, constant 20% ceiling 95%->100%"},
+       {value: 1.0, confidence: low, source: "placeholder (shared six-profile curve, reused verbatim) — full C-rate to 60% SOC, linear taper 60%->95% down to 20% of max_charge_c_rate, constant 20% ceiling 95%->100%"}]
+    - [{value: 0.95, confidence: low, source: "placeholder (shared six-profile curve, reused verbatim) — full C-rate to 60% SOC, linear taper 60%->95% down to 20% of max_charge_c_rate, constant 20% ceiling 95%->100%"},
+       {value: 0.2, confidence: low, source: "placeholder (shared six-profile curve, reused verbatim) — full C-rate to 60% SOC, linear taper 60%->95% down to 20% of max_charge_c_rate, constant 20% ceiling 95%->100%"}]
+    - [{value: 1.0, confidence: low, source: "placeholder (shared six-profile curve, reused verbatim) — full C-rate to 60% SOC, linear taper 60%->95% down to 20% of max_charge_c_rate, constant 20% ceiling 95%->100%"},
+       {value: 0.2, confidence: low, source: "placeholder (shared six-profile curve, reused verbatim) — full C-rate to 60% SOC, linear taper 60%->95% down to 20% of max_charge_c_rate, constant 20% ceiling 95%->100%"}]
+
+motors:
+  - motor_type: "TM4 SUMO family (exact variant not disclosed by Blue Bird or Cummins/Accelera)"
+    peak_power_kw:
+      value: 234.9
+      confidence: high
+      source: "docs/research/commercial_profiles_v1.md — Blue Bird Vision Electric"
+      note: "315 peak horsepower per Blue Bird's own spec sheet, converted (315 * 0.7457)"
+    continuous_power_kw:
+      value: 164.4
+      confidence: low
+      source: "estimated — docs/research/commercial_profiles_v1.md"
+      note: "no continuous rating disclosed anywhere found (unlike the Leaf, whose research gave both); estimated at 70% of peak, a generic traction-motor continuous/peak ratio, not vehicle-specific"
+    peak_torque_nm:
+      value: 3254.0
+      confidence: high
+      source: "docs/research/commercial_profiles_v1.md — Blue Bird Vision Electric"
+      note: "2,400 peak ft-lbs per Blue Bird's own spec sheet, converted (2400 * 1.35582)"
+    efficiency_peak:
+      value: 0.97
+      confidence: low
+      source: "docs/research/commercial_profiles_v1.md — TM4 SUMO family generic literature"
+      note: "generic SUMO-family peak-efficiency figure, not confirmed for the specific variant used in this application"
+    mass_kg:
+      value: 180.0
+      confidence: low
+      source: "estimated — docs/research/commercial_profiles_v1.md"
+      note: "no vendor mass figure found; the passenger-EV placeholder (70kg) would be implausibly light for a 235kW-peak heavy-duty traction motor, so this is a domain-appropriate estimate rather than a verbatim reuse"
+    max_winding_temp_k:
+      value: 453.15
+      confidence: low
+      source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"
+    thermal_node:
+      name: "motor"
+      capacitance_j_per_k:
+        value: 77000.0
+        confidence: low
+        source: "derived — docs/research/commercial_profiles_v1.md"
+        note: "scaled from the shared six-profile placeholder (30000 J/K at 70kg) by this motor's own estimated mass ratio (180kg/70kg), not independently measured"
+      resistance_to_coolant_k_per_w:
+        value: 0.03
+        confidence: low
+        source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"
+      initial_temp_k: 298.15
+      max_temp_k:
+        value: 453.15
+        confidence: low
+        source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"
+      derate_temp_k:
+        value: 383.15
+        confidence: low
+        source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"
+      resistance_to_ambient_k_per_w:
+        value: 2.0
+        confidence: low
+        source: "placeholder — estimated from physical plausibility, not sourced"
+        note: "weak secondary path alongside the dominant active coolant path (motor is liquid-cooled via the shared PowerDrive 7000 loop)"
+    winding_resistance_ref_ohm:
+      value: 0.05
+      confidence: low
+      source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"
+    winding_resistance_ref_temp_k:
+      value: 298.15
+      confidence: low
+      source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"
+    torque_constant_nm_per_a:
+      value: 1.0
+      confidence: low
+      source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"
+    iron_loss_coefficient_w_per_rad_per_s:
+      value: 0.4
+      confidence: low
+      source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"
+    mechanical_loss_coefficient_w_per_rad3_per_s3:
+      value: 3.0e-6
+      confidence: low
+      source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"
+    regen_extra_loss_fraction:
+      value: 0.15
+      confidence: low
+      source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"
+    cooling_mechanism:
+      value: "liquid-cooled, shares the Cummins PowerDrive 7000 system's central Thermal Management Module (pumps, heaters, A/C chiller) with the battery pack"
+      confidence: medium
+      source: "docs/research/commercial_profiles_v1.md — Blue Bird Vision Electric"
+
+inverter:
+  topology: "not specified in research"
+  peak_power_kw:
+    value: 234.9
+    confidence: low
+    source: "docs/research/commercial_profiles_v1.md — Blue Bird Vision Electric"
+    note: "derived: assumed to match the motor's peak_power_kw, not independently stated"
+  efficiency_peak:
+    value: 0.98
+    confidence: low
+    source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"
+  switching_frequency_hz:
+    value: 10000.0
+    confidence: low
+    source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"
+  max_junction_temp_k:
+    value: 423.15
+    confidence: low
+    source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"
+  mass_kg:
+    value: 15.0
+    confidence: low
+    source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"
+  thermal_node:
+    name: "inverter"
+    capacitance_j_per_k:
+      value: 3000.0
+      confidence: low
+      source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"
+    resistance_to_coolant_k_per_w:
+      value: 0.05
+      confidence: low
+      source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"
+    initial_temp_k: 298.15
+    max_temp_k:
+      value: 423.15
+      confidence: low
+      source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"
+    derate_temp_k:
+      value: 398.15
+      confidence: low
+      source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"
+    resistance_to_ambient_k_per_w:
+      value: 2.0
+      confidence: low
+      source: "placeholder — estimated from physical plausibility, not sourced"
+      note: "weak secondary path alongside the dominant active coolant path (inverter is liquid-cooled)"
+  peak_current_a:
+    value: 500.0
+    confidence: low
+    source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"
+  r_ds_on_ref_ohm:
+    value: 0.002
+    confidence: low
+    source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"
+  r_ds_on_ref_temp_k:
+    value: 298.15
+    confidence: low
+    source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"
+  r_ds_on_temp_coefficient_per_k:
+    value: 0.005
+    confidence: low
+    source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"
+  switching_energy_coefficient_j_per_v:
+    value: 0.00003
+    confidence: low
+    source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"
+
+thermal_architecture:
+  cooling_loops:
+    - name: "powertrain_and_battery_loop"
+      coolant_type: "50/50 water/ethylene glycol"
+      loop_volume_l:
+        value: 6.0
+        confidence: low
+        source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"
+        note: "shared six-profile placeholder; likely undersized for a bus-scale coolant loop, but no real figure found — not adjusted without a basis"
+      pump_max_flow_l_per_min:
+        value: 20.0
+        confidence: low
+        source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"
+      pump_power_w:
+        value: 80.0
+        confidence: low
+        source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"
+      radiator_ua_w_per_k:
+        value: 400.0
+        confidence: low
+        source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"
+      fan_power_w:
+        value: 150.0
+        confidence: low
+        source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"
+      chiller_present: true  # real — the PowerDrive 7000's Thermal Management Module explicitly includes an A/C chiller; the first chiller_present:true profile in this project (see CLAUDE.md's cooling.py chiller-path deferred-work note)
+      chiller_capacity_w:
+        value: 5000.0
+        confidence: low
+        source: "estimated — docs/research/commercial_profiles_v1.md"
+        note: "chiller presence is real and sourced (PowerDrive 7000 diagram), but no numeric capacity was disclosed anywhere found; this is a placeholder order-of-magnitude for an automotive-scale chiller, likely undersized for a bus-size battery pack. NOTE: cooling.py does not yet implement the chiller path at all (CLAUDE.md's own deferred-work note), so this value currently has no physics effect regardless."
+      serves: ["battery_pack", "motor", "inverter"]
+      coolant_specific_heat_j_per_kg_k:
+        value: 3600.0
+        confidence: low
+        source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"
+      coolant_density_kg_per_m3:
+        value: 1050.0
+        confidence: low
+        source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"
+      thermostat_temp_k:
+        value: 308.15
+        confidence: low
+        source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"
+      thermostat_full_open_temp_k:
+        value: 313.15
+        confidence: low
+        source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"
+      radiator_frontal_area_m2:
+        value: 0.25
+        confidence: low
+        source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"
+        note: "shared six-profile placeholder; likely undersized for a bus-scale radiator, but no real figure found"
+      fan_max_air_velocity_mps:
+        value: 6.0
+        confidence: low
+        source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"
+  thermal_network:
+    nodes: {}
+    edges: []
+    ambient_coupling: {}
+  shared_loop: true  # one loop serves battery + motor + inverter together, per the PowerDrive 7000's single Thermal Management Module
+  heat_pump_present: false  # research: no heat pump found; separate heater + A/C chiller components, not a reversible heat-pump architecture
+  heat_pump_type:
+    value: "resistive_ptc"
+    confidence: low
+    source: "docs/research/commercial_profiles_v1.md — Blue Bird Vision Electric"
+    note: "research states a base 90,000 BTU/h front heater and defroster (see aux_loads.cabin_heater_type for the electric-vs-combustion ambiguity), with a separate 'auxiliary fuel-fired heater' as an option; resistive PTC assumed as the conventional electric-heater technology, not independently confirmed — same convention as the Nissan Leaf profile's identical assumption"
+  heat_pump_recovers_powertrain_waste_heat: null  # not applicable — no heat pump system described
+  battery_preconditioning: true  # research: Blue Bird's own marketing copy states "advanced preconditioning" for this thermal system
+    # NOTE (medium confidence for this specific field): stated in dealer/marketing copy, not the primary spec sheet — see commercial_profiles_v1.md
+
+control_strategy:
+  derate_curve:
+    - [{value: 313.15, confidence: low, source: "estimated onset, per the derating-curve convention (docs/research/commercial_profiles_v1.md's own caveat section)"},
+       {value: 1.0, confidence: low, source: "estimated onset, per the derating-curve convention (docs/research/commercial_profiles_v1.md's own caveat section)"}]
+    - [{value: 323.15, confidence: medium, source: "docs/research/commercial_profiles_v1.md — real documented ceiling of the Accelera BP97E's -40C to 50C operating range"},
+       {value: 0.0, confidence: medium, source: "docs/research/commercial_profiles_v1.md — real documented ceiling of the Accelera BP97E's -40C to 50C operating range"}]
+  pump_control_policy: "not specified in research"
+  fan_control_policy: "not specified in research"
+  target_battery_temp_range_k:
+    value: [288.15, 308.15]
+    confidence: low
+    source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"
+
+aux_loads:
+  hvac_power_w:
+    value: 26380.0
+    confidence: low
+    source: "docs/research/commercial_profiles_v1.md — Blue Bird Vision Electric"
+    note: "derived from the spec sheet's disclosed 90,000 BTU/h front heater and defroster rating (90000 * 0.29307107 W per BTU/h), assuming electric-resistive conversion. Real, but ambiguous: unclear whether this BTU figure describes the base electric-resistive heater on this specific electric trim or is boilerplate carried over from a shared diesel/electric spec-sheet template (a separate 'auxiliary fuel-fired heater' is also listed as an option). Used anyway because a school bus's real cabin-heating load is a genuinely different order of magnitude than a passenger car's, and the shared six-profile placeholder (1000W) would be a much worse, silently-wrong stand-in for this vehicle class."
+  cabin_heater_type: "electric resistive (90,000 BTU/h front heater and defroster per spec sheet, ambiguous whether that figure is trim-specific — see hvac_power_w's note); auxiliary fuel-fired heater available as an option"
+  accessory_load_w:
+    value: 200.0
+    confidence: low
+    source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"
+    note: "shared six-profile placeholder; a school bus's real accessory loads (lighting, air brake compressor, stop-arm, doors, radio) are likely higher, but no sourced figure found — not adjusted without a basis"
+  dc_dc_converter_efficiency:
+    value: 0.9
+    confidence: low
+    source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"
