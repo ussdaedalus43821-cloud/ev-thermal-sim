@@ -36,7 +36,7 @@ choice, not an oversight: it isolates the thermal-architecture variable for
 cross-vehicle comparison, so that any divergence in a simulation run is
 attributable to the researched thermal fields, not to un-researched chassis
 or electrical differences. See `nissan_leaf.yaml`'s header comment for the
-full rationale, and CLAUDE.md's deferred-work notes for what a future
+full rationale, and docs/MILESTONES.md's deferred-work notes for what a future
 milestone would need to source to change this.
 
 Separately, **every** `derate_temp_k`/`max_temp_k` pair and
@@ -111,7 +111,7 @@ measurement:** `resistance_to_ambient_k_per_w` on the i3's battery
 (`configs/profiles/bmw_i3.yaml`) stands in for a refrigerant cooling loop
 that the schema does not yet support. It is NOT physically the ambient
 resistance. Real i3 battery thermal behavior requires Milestone D
-(refrigerant loop abstraction — see CLAUDE.md). Do not use i3-vs-Leaf
+(refrigerant loop abstraction — see docs/MILESTONES.md). Do not use i3-vs-Leaf
 battery comparisons for publication until Milestone D lands.
 
 ### Kia Niro EV (64 kWh, heat-pump trim, 2018+)
@@ -184,7 +184,7 @@ linear in time, with no saturation term, so any multi-year prediction
 beyond roughly 10 years is a linear extrapolation past both anchors'
 own calibration window, not a claim validated against fleet data at that
 horizon. This matters concretely, not just in principle: after the
-parked-SOC model fix (see the note below and CLAUDE.md's Known deferred
+parked-SOC model fix (see the note below and docs/MILESTONES.md's deferred
 work), a 20-year point-estimate run of the Leaf/Guam scenario predicts
 47.3% SOH — lower than a rough "55-70% credible" expectation set before
 running it. The most likely explanation is this same linear-extrapolation
@@ -200,7 +200,7 @@ own 5-10 year window is.
 SOC-sensitivity term now sees a real, time-varying SOC trajectory (decay
 while parked, one reset-to-`typical_end_soc` charge event per day) instead
 of a value snapped constant to `typical_end_soc` for the whole parked
-period. See CLAUDE.md's Known deferred work (Milestone "parked-SOC model")
+period. See docs/MILESTONES.md (Milestone "parked-SOC model")
 and `docs/DESIGN_QUESTIONS.md` Q-0012-Q-0016 for the full record, including
 why the snapped-constant version had to be replaced (it pinned SOC at the
 anchors' own worst-case 80% condition essentially permanently, fabricating
@@ -215,7 +215,7 @@ independent variable in any cross-vehicle SOH comparison this simulator
 produces — for calendar aging unconditionally, and for cycle aging once
 expressed in equivalent full cycles (EFC), per the fix described below —
 see `aging.py`'s docstring for the full reasoning. Per-vehicle
-chemistry-specific aging coefficients are deferred (see CLAUDE.md).
+chemistry-specific aging coefficients are deferred (see docs/MILESTONES.md).
 
 **Pack capacity was a second confounding variable for cycle aging
 specifically, found during Milestone E2e's first real Leaf-vs-Model 3

@@ -47,7 +47,7 @@ Format:
   the thermal solve: `advance_charging_step` calls the same `step_thermal_
   network` over the same combined network `advance_one_step` builds, with
   motor/inverter heat inputs at zero rather than a separate/divergent
-  thermal path. See CLAUDE.md's Known deferred work, Milestone E2e entry.
+  thermal path. See docs/MILESTONES.md, Milestone E2e entry.
 
 ## Q-0002 — Charge power profile / taper shape
 
@@ -81,7 +81,7 @@ Format:
   not a separate mechanism.** Scope call: the BMS current limit IS
   Milestone E2e, not deferred to a later E2e-2 — E2e is "the Leaf-in-Guam
   story," not just charge-mode plumbing. Full curve-shape design deferred
-  to the E2e plan revision (see CLAUDE.md's Known deferred work, Milestone
+  to the E2e plan revision (see docs/MILESTONES.md, Milestone
   E2e entry, for the ratified schema shape).
   **Dependency surfaced by this resolution:** Q-0001's `advance_charging_
   step` now has a third responsibility beyond "absorb current" and "run the
@@ -116,7 +116,7 @@ Format:
   if a second charger type is ever added, conflating "what the charger can
   deliver" with "what the vehicle can accept" in one field may need
   unwinding. Not addressed in E2e; noted for whoever adds a second charger
-  type. See CLAUDE.md's Known deferred work, Milestone E2e entry.
+  type. See docs/MILESTONES.md, Milestone E2e entry.
 
 ## Q-0004 — Preconditioning: model or defer?
 
@@ -165,7 +165,7 @@ Format:
   field. The real feature (preconditioning as thermal load + SOC draw +
   arrival-temp effect, contingent on a route/navigation concept this
   simulator doesn't have yet) is its own later milestone, not part of E2e.
-  See CLAUDE.md's Known deferred work, Milestone E2e entry.
+  See docs/MILESTONES.md, Milestone E2e entry.
 
 ## Q-0005 — Accept inert entropic heat for fast-charge?
 
@@ -180,7 +180,7 @@ Format:
 - Options considered:
   1. Accept the gap for E2e (irreversible I²R heat, the dominant term at
      high C-rate regardless, is already fully modeled); add emphasis in
-     both the new module's docstring and CLAUDE.md that this matters more
+     both the new module's docstring and docs/MILESTONES.md that this matters more
      here than the existing note implies; defer real `docv/dT` sourcing to
      the spec-sourcing milestone. (Claude's recommendation, matches the
      user's own stated instinct.)
@@ -198,7 +198,7 @@ Format:
   total heat generation shrinks as C-rate rises — real physics, not
   vehicle-specific data. The magnitude of the resulting SOH-loss bias is
   explicitly marked unknown/flagged, not estimated, since no real `docv/dT`
-  data exists for any of the six profiles to ground a number. See CLAUDE.md's
+  data exists for any of the six profiles to ground a number. See docs/MILESTONES.md's
   Known deferred work, Milestone E2e entry, and `docs/model_reference.md`
   directly for the full note.
 
@@ -266,7 +266,7 @@ Format:
   `schema.py` states this explicitly: normalized by `capacity_nominal_ah`
   (never the current SOH-scaled capacity), the feedback mechanism named as
   the reason, and the resulting trajectory flagged as a bounded
-  approximation valid at SOH >= 0.7. See CLAUDE.md's Known deferred work
+  approximation valid at SOH >= 0.7. See docs/MILESTONES.md
   for the implementation record.
 
 ## Q-0007 — Re-derivation source for `cycle_aging_rate_per_efc`
@@ -338,7 +338,7 @@ Format:
   the code via `test_cycle_aging_matches_throughput_anchor_within_one_
   percent` in `tests/test_aging.py`). Documented as a third stated
   assumption alongside the existing 370V/1C pair, same register, in
-  `aging.py`'s "Coefficient provenance" section. See CLAUDE.md's Known
+  `aging.py`'s "Coefficient provenance" section. See docs/MILESTONES.md's
   deferred work for the full implementation record and the corrected
   Leaf/Model3 comparison numbers.
 
@@ -347,7 +347,7 @@ Format:
 - Date: 2026-09-24
 - Context: `MCConfig`/`Confidence` are schema-only; `mc.py` is a stub. Full
   raw-physics Monte Carlo at N=500 over a 20-30 year horizon is intractable
-  (CLAUDE.md's own stated motivation for the Tier-1/Tier-2 split). Tier-1
+  (docs/MILESTONES.md's own stated motivation for the Tier-1/Tier-2 split). Tier-1
   characterization (`characterize_all_trips`) is reusable across samples
   only if none of the varied parameters feed into Tier-1's own physics —
   true for `BatterySpec`'s aging-rate coefficients (`calendar_aging_*`,
@@ -487,14 +487,14 @@ Format:
 
 ## Reproducibility (applies beyond any single Q-NNNN)
 
-Any comparison or Monte Carlo run whose numbers end up in CLAUDE.md's
+Any comparison or Monte Carlo run whose numbers end up in docs/MILESTONES.md's
 record must be committed as a script under `examples/` (or `scripts/`),
 with every scenario-defining parameter (profile paths, climate, scenario
 duration, and for Monte Carlo specifically: `n_runs`/`random_seed`) as an
 explicit, named argument — never run ad hoc and copy-pasted into a
 document. `examples/flagship_comparison.py` (landed alongside Q-0006/
 Q-0007's fix) is the first instance of this convention; the first Monte
-Carlo run that lands in CLAUDE.md's record must follow it, not repeat the
+Carlo run that lands in docs/MILESTONES.md's record must follow it, not repeat the
 gap that convention was built to close. Rationale: the simulator itself is
 deterministic (same seed, same inputs -> byte-identical output), but that
 guarantee only covers what's actually committed — an uncommitted
@@ -507,7 +507,7 @@ code it calls is.
 - Context: A first multi-year Monte Carlo run (Nissan Leaf / Guam, 20 years)
   was run as a pre-publication check, per this project's standing "check
   the actual numbers before committing" discipline, before any record
-  landed in CLAUDE.md. It surfaced implausible results: the UNPERTURBED
+  landed in docs/MILESTONES.md. It surfaced implausible results: the UNPERTURBED
   point-estimate run already predicts 40.9% SOH by year 20, and the MC
   coefficient-uncertainty band's p05 hits literal 0% SOH before year 20.
   Root cause, confirmed by directly dumping every checkpoint's
@@ -663,7 +663,7 @@ code it calls is.
   Until then, the anchors are idealized self-consistency tests, and
   realistic-trajectory predictions (e.g. this milestone's own multi-year
   point estimates) carry that systematic uncertainty as a documented
-  limitation. See CLAUDE.md's Known deferred work for the full record.
+  limitation. See docs/MILESTONES.md for the full record.
 
 ## Q-0014 — `typical_start_soc` semantics under the new SOC-trajectory model
 
@@ -768,7 +768,7 @@ code it calls is.
      `run_scenario`) still applies sim.py's full `aux_current_a`
      (`hvac_power_w + accessory_load_w`) during parked steps
      unconditionally (sim.py's own already-documented behavior — see
-     CLAUDE.md), while Tier-2's new decay model deliberately uses
+     docs/MILESTONES.md), while Tier-2's new decay model deliberately uses
      `accessory_load_w` alone. Closing that gap either means accepting a
      new, larger residual error source in the validation harness's own
      tolerance, or means changing `sim.py`'s core aux-draw behavior to be
@@ -790,7 +790,7 @@ code it calls is.
 ## Q-0017 — 47.3% vs. 55-70% multi-year SOH gate: accept as documented extrapolation limit, or investigate further?
 
 - Date: 2026-09-25
-- Context: The parked-SOC model milestone's own gate (CLAUDE.md, Milestone
+- Context: The parked-SOC model milestone's own gate (docs/MILESTONES.md, Milestone
   "parked-SOC model") explicitly held full multi-year Monte Carlo pending
   review of one finding: the unperturbed 20-year Leaf/Guam point estimate
   came back at 47.3% SOH, below a rough pre-run "55-70% credible"
@@ -836,7 +836,7 @@ code it calls is.
   to withhold the multi-year Monte Carlo milestone. It is carried forward
   as a deferred aging-model fidelity item (alongside per-vehicle chemistry
   coefficients, Milestone D's refrigerant-loop abstraction, and
-  preconditioning) rather than as a blocking gate. See CLAUDE.md's Known
+  preconditioning) rather than as a blocking gate. See docs/MILESTONES.md's
   deferred work, Milestone "parked-SOC model" entry, for the gate-cleared
   note. Any future multi-year SOH number presented outside a report should
   still carry the "extrapolation past the 5-10yr calibration window" caveat
@@ -847,7 +847,7 @@ code it calls is.
 ## Q-0018 — ForkPoint.overrides: what can a fork branch's counterfactual patch target?
 
 - Date: 2026-09-25
-- Context: Fork branching v1 (see CLAUDE.md's Known deferred work) needs to
+- Context: Fork branching v1 (see docs/MILESTONES.md) needs to
   turn `ForkPoint.overrides: dict[str, Any]` — schema-only until now, never
   populated or consumed by any code — into something a real resolver can
   apply to build a child `Scenario`. Nothing had ever defined what a path
@@ -902,13 +902,13 @@ code it calls is.
   (`tests/test_fork.py`). Note: `Scenario.overrides` (`schema.py`) is a
   separate, pre-existing, still-unused field with a narrower documented
   scope ("on top of `manufacturer_profile`" only) — not reused or unified
-  with this resolver in this milestone; see CLAUDE.md's Known deferred
+  with this resolver in this milestone; see docs/MILESTONES.md's deferred
   work for the flag.
 
 ## Q-0019 — Mistake library v1: how is the first MistakeCase's counterfactual_profile constructed?
 
 - Date: 2026-09-25
-- Context: Mistake library v1 (see CLAUDE.md's Known deferred work) needs a
+- Context: Mistake library v1 (see docs/MILESTONES.md) needs a
   first real `MistakeCase` instance. `MistakeCase`'s own docstring already
   settles the ARCHITECTURE question (two independent long-horizon runs
   sharing one `Scenario` context, not a `fork.py` branch, and not a
@@ -1050,14 +1050,14 @@ code it calls is.
   Arrhenius sensitivity to absolute cell temp), which only an active
   refrigerant CHILLER can address (can cool below ambient) — and
   `cooling.py`'s chiller path is explicitly unimplemented, a PRE-EXISTING
-  CLAUDE.md deferred-work item (`CoolingLoop.chiller_present`/
+  docs/MILESTONES.md deferred-work item (`CoolingLoop.chiller_present`/
   `chiller_capacity_w` exist in the schema but do nothing), not something
   this milestone introduced. **Decision (2026-09-25): accept the small
   delta, document the physical limit, do not implement the chiller path as
   part of closing this milestone or the mistake library** — chiller
   implementation is a materially bigger, separately-scoped physics
   addition (affects the full per-second model, not just Tier-2) that
-  deserves its own plan review. See CLAUDE.md's Known deferred work for
+  deserves its own plan review. See docs/MILESTONES.md for
   both this milestone's record and the mistake library's.
   **Re-validation required and completed — result was itself informative,
   not just a formality**: `examples/flagship_comparison.py`'s published
@@ -1068,7 +1068,7 @@ code it calls is.
   is milder than Guam, so if the thermostat gate barely engages in Guam, it
   engages even less in Seattle — Model 3's real battery-loop thermostat
   (318.15K/45°C) essentially never triggers in either climate under this
-  scenario's conditions. No numbers needed correcting in CLAUDE.md's
+  scenario's conditions. No numbers needed correcting in docs/MILESTONES.md's
   existing flagship-comparison record. `tests/
   test_long_horizon_validation.py`'s E2d harness was re-checked too — see
-  CLAUDE.md for its pass/fail status.
+  docs/MILESTONES.md for its pass/fail status.

@@ -96,7 +96,7 @@ intrinsic to the model's own Arrhenius/exponential structure, not an
 artifact of `sample_lognormal`'s implementation or of the parked-SOC model
 (`long_horizon.py`, Milestone "parked-SOC model") -- confirmed by direct
 investigation (`examples/mc_horizon_gap_investigation.py`, and see
-CLAUDE.md's "Multi-year Monte Carlo v1" entry for the full record): the gap
+docs/MILESTONES.md's "Multi-year Monte Carlo v1" entry for the full record): the gap
 is already present, smaller, at 90 days and 1 year, horizons where NO
 sample has come anywhere near the SOH floor, and it grows smoothly and
 monotonically with horizon (roughly 0.03% at 90 days -> 6.3% at 20 years

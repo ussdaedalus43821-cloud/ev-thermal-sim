@@ -3,13 +3,13 @@ demonstration: two vehicle profiles, each under its own climate, compared
 over the same simulated horizon via Milestone E2's Tier-1/Tier-2 long-horizon
 pipeline. Defaults to the Nissan Leaf in a hot climate (Guam-like) vs. the
 Tesla Model 3 in a mild climate (Seattle-like), the comparison referenced in
-CLAUDE.md's Known deferred work.
+docs/MILESTONES.md.
 
 Exists because an earlier one-off version of this comparison was run ad hoc
 and its exact script was not preserved, which meant a later re-run (after
 fixing the cycle-aging capacity-normalization gap) could not be checked
 against the original numbers under identical conditions -- only a
-reconstruction. See CLAUDE.md's Known deferred work for the full story. This
+reconstruction. See docs/MILESTONES.md for the full story. This
 script is the fix: every scenario parameter that defines a specific
 comparison run is an explicit, named argument here (CLI flag or a
 documented module-level builder function), not an inline literal buried in

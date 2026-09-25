@@ -6,7 +6,7 @@ THROWAWAY DEMO SCRIPT, not a permanent CLI: it exists so we can look at real
 numbers. The vehicle profile is real (see docs/research/profiles_v1.md), but
 the Scenario built around it (climate, usage/charging profile) is still a
 demo placeholder, same TODO(spec-sourcing) discipline as before — see
-CLAUDE.md for the running list of what's still a placeholder.
+docs/MILESTONES.md for the running list of what's still a placeholder.
 
 Usage:
     uv run python examples/first_run.py
@@ -83,7 +83,7 @@ def build_scenario(profile: ManufacturerProfile) -> Scenario:
 
 def target_speed_mps(t: float) -> float:
     """A little stop-and-go commute segment, not a real drive-cycle model
-    (that doesn't exist yet — see CLAUDE.md's driver.py scope note): ramp up
+    (that doesn't exist yet — see docs/MILESTONES.md's driver.py scope note): ramp up
     to cruise, a red-light stop partway through (shows regen braking), then
     back to cruise.
     """

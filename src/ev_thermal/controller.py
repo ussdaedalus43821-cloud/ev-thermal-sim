@@ -1,5 +1,5 @@
-"""Arbitration layer: this is where derating decisions live now (see CLAUDE.md's
-"Known deferred work" note this migration is completing). `motor.py`,
+"""Arbitration layer: this is where derating decisions live now (see
+docs/MILESTONES.md's note this migration is completing). `motor.py`,
 `inverter.py`, and `battery.py` no longer have the final word on how much
 torque/current is granted — they only expose an "available" ceiling callable
 (`motor.available_torque_nm`, `inverter.available_current_a`,
@@ -30,7 +30,7 @@ threshold. Genuinely per-loop as of the per-loop-duty milestone: `commanded_
 pump_duty`/`commanded_fan_duty` are `dict[str, float]` keyed by `CoolingLoop.
 name`, one entry per loop in `cooling_loops`, not one shared value broadcast
 to every loop (that was the prior milestone's deliberate, documented
-compromise — see CLAUDE.md). Neither goes below its own minimum duty — real
+compromise — see docs/MILESTONES.md). Neither goes below its own minimum duty — real
 pumps/fans idle rather than fully stopping. `pump_aggressiveness` (default
 1.0, matching the original unparameterized behavior) scales `DUTY_RAMP_SPAN_K`
 down for every loop's ramp uniformly (no per-loop aggressiveness knob):

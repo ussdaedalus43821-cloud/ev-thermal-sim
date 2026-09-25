@@ -83,18 +83,18 @@ def _generate_tier1_reference_soh(
        term (calculated live, every step, inside `advance_one_step`) sees
        that declining trajectory. Tier-2's `parked_calendar_aging` uses a
        single CONSTANT soc for an entire parked stretch (Tier-2 does not
-       model parked-period SOC depletion at all -- see CLAUDE.md's SOC-
+       model parked-period SOC depletion at all -- see docs/MILESTONES.md's SOC-
        snapping deferred-work note). A once-per-day patch only fixes the
        END-of-day snapshot; the within-day decline still biases the live
        calendar-aging integral low, since `calendar_aging_soc_sensitivity`
        makes lower SOC age slower. Patching hourly instead keeps the
        reference's SOC close to constant throughout, matching what Tier-2
        already assumes -- this is not a new approximation, it's applying the
-       SAME already-accepted SOC-snapping simplification (see CLAUDE.md) at
+       SAME already-accepted SOC-snapping simplification (see docs/MILESTONES.md) at
        the granularity needed for it to actually hold throughout a parked
        stretch, not just at its boundary. Without this, the reference
        exhibited a real ~60-70% calendar-aging-rate excess relative to
-       Tier-2 -- matching CLAUDE.md's own independent estimate of this
+       Tier-2 -- matching docs/MILESTONES.md's own independent estimate of this
        approximation's effect almost exactly, which is itself a form of
        cross-validation for that estimate.
 

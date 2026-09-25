@@ -5,7 +5,7 @@ steps into a sequence of `SimState`s, and collecting `CausalEvent`s as it goes.
 Scope for this milestone: short-duration runs (minutes to hours) via
 `run_scenario`. Long-horizon mode (weeks to years, adaptive soak steps,
 checkpointing), Monte Carlo, fork-branching UI, and file I/O are all
-out of scope here — see CLAUDE.md's deferred-work notes.
+out of scope here — see docs/MILESTONES.md's deferred-work notes.
 
 Step order within one dt, and why:
 
@@ -34,7 +34,7 @@ Step order within one dt, and why:
    `1/resistance_to_coolant_k_per_w` as edge conductance. A component no
    loop serves gets no coolant edge at all — it falls back to whatever
    `ThermalNode.resistance_to_ambient_k_per_w` path it has (see the
-   ambient-coupling milestone note in CLAUDE.md), or is fully adiabatic if
+   ambient-coupling milestone note in docs/MILESTONES.md), or is fully adiabatic if
    that's also unset. This is why steps 3-4 don't advance temperature
    themselves: a real coolant node needs all nodes integrated together, not
    isolated per-node solves. `coolant_flow_l_per_min=0.0` is passed to
@@ -49,7 +49,7 @@ Step order within one dt, and why:
    route/elevation profile (no per-position grade model exists), just a
    constant road slope for the dashboard's "road grade" control.
 8. Collect every component's `CausalEvent`s (controller's are authoritative;
-   motor/inverter/battery still emit their own too, per CLAUDE.md's note on
+   motor/inverter/battery still emit their own too, per docs/MILESTONES.md's note on
    the intentional redundancy — all are recorded here regardless).
 9. `sim_time_s += dt_s`.
 
@@ -85,7 +85,7 @@ Single-motor simplification: `profile.motors[0]` is treated as THE motor,
 regardless of dual-motor support in the schema. Dual-motor orchestration is
 deferred.
 
-Multi-loop topology (Milestones A-D documented in CLAUDE.md — A added
+Multi-loop topology (Milestones A-D documented in docs/MILESTONES.md — A added
 `resistance_to_ambient_k_per_w`, B made `CoolingLoop.serves` authoritative,
 this is C, D is the still-deferred refrigerant-loop abstraction):
 `_combined_thermal_network` builds one coolant `ThermalNode` per entry in
@@ -682,7 +682,7 @@ def advance_charging_step(
 ) -> SimStepRecord:
     """Milestone E2e: advance `state` by one step of an external DC charging
     session -- the charging-mode PEER to `advance_one_step`, not a variant of
-    it (see the module's Milestone E2e section, and CLAUDE.md's Known
+    it (see the module's Milestone E2e section, and docs/MILESTONES.md's
     deferred work, for the full reasoning this design was ratified against).
     No driver, no motor/inverter mechanical output, vehicle stationary.
 
@@ -695,7 +695,7 @@ def advance_charging_step(
     current_a`'s BMS current-limit curve with no further code needed here),
     `controller.step_controller` (called with a zero torque request purely
     for its cooling-duty output, verified independent of the torque-
-    arbitration path -- see CLAUDE.md), and `thermal.step_thermal_network`
+    arbitration path -- see docs/MILESTONES.md), and `thermal.step_thermal_network`
     over the same combined network, with motor/inverter heat inputs at zero.
 
     dt is NOT chosen via `_choose_target_dt_s`'s tier-selection logic --
@@ -737,7 +737,7 @@ def advance_charging_step(
 
     # cooling duty only -- torque-arbitration output unused, its independence
     # from driver_torque_request_nm was verified by reading step_controller's
-    # full body before this design was ratified (see CLAUDE.md)
+    # full body before this design was ratified (see docs/MILESTONES.md)
     controller_result = step_controller(
         0.0,
         motor_spec,
@@ -867,7 +867,7 @@ def run_scenario(
 
     `target_speed_mps` is a function of elapsed sim time (seconds) to target
     speed (m/s) — a temporary interface until drive-cycle generation exists
-    (see CLAUDE.md); pass e.g. `lambda t: 20.0` for a constant-speed cruise.
+    (see docs/MILESTONES.md); pass e.g. `lambda t: 20.0` for a constant-speed cruise.
 
     `initial_state`, if given, resumes from that state instead of building a
     fresh t=0 one (`initialize_sim_state`) — this is how fork replay works:

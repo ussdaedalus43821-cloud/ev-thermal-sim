@@ -42,7 +42,7 @@ still-unused field with narrower documented scope ("on top of
 manufacturer_profile" only, per its own field description) -- not reused
 or wired up here. This module's resolver operates directly on a `Scenario`
 and returns a new one; `Scenario.overrides` is untouched, flagged in
-CLAUDE.md as a follow-up rather than unified with this mechanism in this
+docs/MILESTONES.md as a follow-up rather than unified with this mechanism in this
 milestone.
 
 ## `state_id`/`scenario_id` divergence after a fork

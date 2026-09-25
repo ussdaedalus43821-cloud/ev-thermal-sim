@@ -13,7 +13,7 @@ This is a separate, versioned document from `profiles_v1.md`, not an
 addition to it — deliberately: `profiles_v1.md` documents the six passenger-
 EV reference vehicles that this project's aging-coefficient-sharing design,
 flagship comparisons, and Monte Carlo record are all built around (see
-CLAUDE.md's repeated "shared across all six profiles by design" rationale).
+docs/MILESTONES.md's repeated "shared across all six profiles by design" rationale).
 A commercial vehicle is a genuinely different vehicle class, not a revision
 or correction of that existing research, so it gets its own file and its own
 profile directory (`configs/profiles_commercial/`, not `configs/profiles/`)
@@ -109,7 +109,7 @@ together — most closely resembles the Kia Niro EV's integrated approach
 among the six existing passenger-EV profiles, not the Leaf's passive-air or
 the e-tron's four-independent-circuits design. This is the first profile in
 this project with `chiller_present: true` on a cooling loop — see
-CLAUDE.md's existing "chiller path is not implemented in cooling.py"
+docs/MILESTONES.md's existing "chiller path is not implemented in cooling.py"
 deferred-work note; this profile is the first real vehicle that gap
 actually affects (every one of the six passenger-EV profiles has
 `chiller_present: false` everywhere).

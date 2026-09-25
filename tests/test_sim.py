@@ -63,7 +63,7 @@ def _make_profile() -> ManufacturerProfile:
     produce unbounded temperature growth (confirmed: 302K -> 2544K over a
     5-year `simulate_long_horizon` run against this fixture as-is, vs. bounded
     289-309K against the real Nissan Leaf profile, which has ambient
-    coupling). See CLAUDE.md's Milestone E2c note.
+    coupling). See docs/MILESTONES.md's Milestone E2c note.
     """
     battery_spec = _make_battery_spec()
     thermal_architecture = ThermalArchitecture(
@@ -342,7 +342,7 @@ def test_zero_pump_duty_leaves_combined_network_with_no_escape_path() -> None:
     with pump_duty=0, to check the boundary case those functions describe:
     with the radiator path disabled (zero coolant flow -> zero heat
     rejection) and no ambient_coupling on any node (motor/inverter/battery
-    ambient coupling is still inert, per CLAUDE.md), the combined system has
+    ambient coupling is still inert, per docs/MILESTONES.md), the combined system has
     no path to ambient at all, so heat only redistributes among the four
     nodes and every temperature should monotonically rise together.
     """
@@ -484,10 +484,10 @@ def test_long_horizon_determinism_same_seed_gives_same_final_state() -> None:
     named, deliberately shrunk (short drive + a multi-day parked tail,
     rather than years) to keep this in the default test suite: a true
     multi-year run is still bottlenecked by the battery's own R1*C1 Euler-
-    stability cap on dt (see CLAUDE.md's deferred-work note on
+    stability cap on dt (see docs/MILESTONES.md's deferred-work note on
     `_stabilize_dt_s`), which the extended-parking tier's larger target dt
     gets clipped down to every step regardless of how long the vehicle has
-    been parked -- see this milestone's note in CLAUDE.md on that finding.
+    been parked -- see this milestone's note in docs/MILESTONES.md on that finding.
     """
 
     def target_speed_mps(t: float) -> float:

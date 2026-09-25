@@ -165,7 +165,7 @@ precedent at `types.ts:170-182`).
 work on Transition's side — `Route` (`types.ts:42-52`) would need
 something like an archetype-mix field alongside `dailyMiles`. But this
 gap's closure is only as useful as gap 1's: `TripType` characterization
-(`characterize_trip`, referenced in CLAUDE.md's Milestone E2b entry)
+(`characterize_trip`, referenced in docs/MILESTONES.md's Milestone E2b entry)
 runs a full `sim.run_scenario` against a real `ManufacturerProfile` — so
 a route's duty-cycle mix has nothing to be characterized against until a
 matching vehicle profile exists. Populating this field before gap 1
@@ -200,7 +200,7 @@ progress and low-risk, but doesn't by itself unblock a consumable table.
 ## 7. Revisiting §5's interface shape, now that gap 3 is closed and a real commercial profile exists
 
 Per the decision to close gap 3 fully and gap 1 scoped to one vehicle
-(Blue Bird Vision Electric — see CLAUDE.md's "Transition seam — gap 3
+(Blue Bird Vision Electric — see docs/MILESTONES.md's "Transition seam — gap 3
 closed, first commercial-vehicle profile" milestone for the full record).
 Checked directly against what actually landed, not assumed.
 

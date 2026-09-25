@@ -3,7 +3,7 @@
 checkpoint, and why that gap grows with horizon.
 
 This investigation was triggered by the first genuine 20-year Monte Carlo
-run of the Nissan Leaf / Guam scenario (see CLAUDE.md's "Multi-year Monte
+run of the Nissan Leaf / Guam scenario (see docs/MILESTONES.md's "Multi-year Monte
 Carlo v1" entry): its p50 at year 20 sat ~6.3% (relative) below the
 already-reviewed 20-year point estimate (47.279% SOH, see
 `docs/DESIGN_QUESTIONS.md` Q-0017), while the existing 90-day test

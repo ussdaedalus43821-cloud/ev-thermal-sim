@@ -15,7 +15,7 @@ applied as `rate * (|applied_current_a| * dt_s / 3600) / capacity_nominal_ah`
 than raw amp-hours — see "EFC normalization" below).
 
 Calendar and cycle deltas are simply summed (no interaction term) per
-CLAUDE.md's deliberate simplification for this milestone.
+docs/MILESTONES.md's deliberate simplification for this milestone.
 
 ## Coefficient provenance
 
@@ -135,7 +135,7 @@ teach. Holding aging coefficients constant across all six profiles makes
 thermal architecture the sole independent variable for calendar aging AND
 (after the EFC-normalization fix below) EFC-normalized cycle aging.
 Per-vehicle chemistry-specific aging coefficients are deferred work (see
-CLAUDE.md) until the thermal story has been demonstrated in isolation.
+docs/MILESTONES.md) until the thermal story has been demonstrated in isolation.
 
 **Cycle aging previously did NOT satisfy this claim — discovered during
 Milestone E2e's first real Leaf-vs-Model3 comparison, confirmed by direct

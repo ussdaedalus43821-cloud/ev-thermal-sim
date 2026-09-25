@@ -6,7 +6,7 @@ Single-RC-pair equivalent-circuit model: V = OCV(SOC, T) - I*R0(SOC, T) - V_RC,
 with V_RC a persistent state variable relaxing toward I*R1 with time constant
 R1*C1. OCV and R0 curves, the RC pair, and every temperature-correction
 coefficient on `BatterySpec` marked TODO(spec-sourcing) are physically-plausible
-placeholders, not measured chemistry curves, per CLAUDE.md's "don't invent
+placeholders, not measured chemistry curves, per docs/MILESTONES.md's "don't invent
 parameters" rule waived for this milestone.
 
 Sign convention: positive current is discharge, negative is charge (matches

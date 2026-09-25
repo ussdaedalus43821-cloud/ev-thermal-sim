@@ -441,12 +441,12 @@ thermal_architecture:
         value: 150.0
         confidence: low
         source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"
-      chiller_present: true  # real — the PowerDrive 7000's Thermal Management Module explicitly includes an A/C chiller; the first chiller_present:true profile in this project (see CLAUDE.md's cooling.py chiller-path deferred-work note)
+      chiller_present: true  # real — the PowerDrive 7000's Thermal Management Module explicitly includes an A/C chiller; the first chiller_present:true profile in this project (see docs/MILESTONES.md's cooling.py chiller-path deferred-work note)
       chiller_capacity_w:
         value: 5000.0
         confidence: low
         source: "estimated — docs/research/commercial_profiles_v1.md"
-        note: "chiller presence is real and sourced (PowerDrive 7000 diagram), but no numeric capacity was disclosed anywhere found; this is a placeholder order-of-magnitude for an automotive-scale chiller, likely undersized for a bus-size battery pack. NOTE: cooling.py does not yet implement the chiller path at all (CLAUDE.md's own deferred-work note), so this value currently has no physics effect regardless."
+        note: "chiller presence is real and sourced (PowerDrive 7000 diagram), but no numeric capacity was disclosed anywhere found; this is a placeholder order-of-magnitude for an automotive-scale chiller, likely undersized for a bus-size battery pack. NOTE: cooling.py does not yet implement the chiller path at all (docs/MILESTONES.md's own deferred-work note), so this value currently has no physics effect regardless."
       serves: ["battery_pack", "motor", "inverter"]
       coolant_specific_heat_j_per_kg_k:
         value: 3600.0

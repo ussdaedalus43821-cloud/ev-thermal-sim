@@ -17,7 +17,7 @@
 # APPROXIMATION, not physically the ambient resistance: the i3's real DX
 # (direct expansion) refrigerant cooling is an active loop to a colder-than-
 # air sink, and this schema doesn't yet support a refrigerant-loop
-# abstraction (see CLAUDE.md's Milestone D). See that field's own note for
+# abstraction (see docs/MILESTONES.md's Milestone D). See that field's own note for
 # the full caveat and docs/model_reference.md's BMW i3 section. Do not use
 # i3-vs-Leaf battery comparisons for publication until Milestone D lands.
 #

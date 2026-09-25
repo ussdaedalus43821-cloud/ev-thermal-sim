@@ -560,7 +560,7 @@ def test_sim_state_round_trip_with_rng_state() -> None:
 
 def test_sim_state_has_no_event_ids_field() -> None:
     # Milestone E2c-0: SimState.event_ids caused an O(n^2) per-step copy and was
-    # removed (see CLAUDE.md). RunResult.causal_events + SimState.fork_lineage
+    # removed (see docs/MILESTONES.md). RunResult.causal_events + SimState.fork_lineage
     # already reconstruct full causal history across a fork chain -- don't re-add
     # a cumulative event-id list to SimState as a shortcut for "what just happened."
     assert "event_ids" not in SimState.model_fields

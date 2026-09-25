@@ -116,7 +116,7 @@ def _speed_from_waypoints(waypoints: list[tuple[float, float]]) -> Callable[[flo
     return target_speed_mps
 
 
-# --- Archetype speed traces (see CLAUDE.md's Milestone E2b plan for the reasoning
+# --- Archetype speed traces (see docs/MILESTONES.md's Milestone E2b plan for the reasoning
 # behind each trace's shape, duration, and phase split) ---
 
 _COMMUTE_WAYPOINTS: list[tuple[float, float]] = [
@@ -539,7 +539,7 @@ bucket-interpolation purposes -- morning commute is the modal trip time, and
 a fixed hour keeps validation deterministic. Intra-day trip-time distribution
 is not modeled (a highway trip or a fast-charge session at a different hour
 gets the same 08:00 lookup as a commute). Revisit if trip-time-of-day
-variance is ever wanted. See CLAUDE.md's Milestone E2c note."""
+variance is ever wanted. See docs/MILESTONES.md's Milestone E2c note."""
 
 _START_OF_DAY_HOUR = 12.0
 """Hour used only for Tier-2 day-0's initial pack-temperature lookup (not for
@@ -689,7 +689,7 @@ def parked_calendar_aging(
     caller now passes a real per-hour trajectory from
     `_parked_soc_trajectory`, replacing the earlier single-scalar `soc`
     parameter that produced the SOC-snapping severity documented in
-    CLAUDE.md's Known deferred work.
+    docs/MILESTONES.md.
     """
     total = 0.0
     for (soc_t0, soc0), (soc_t1, _soc1), (_temp_t0, temp0) in zip(
@@ -803,11 +803,11 @@ def apply_trip_start_offset(
     more exact alternative (characterizing each trip type at several fixed
     pack-start offsets, interpolated like ambient buckets) exists but
     multiplies characterization cost 4x -- not adopted; revisit only if
-    validation shows offset error dominates (see CLAUDE.md).
+    validation shows offset error dominates (see docs/MILESTONES.md).
 
     Only the battery node's `final_node_temps_k` entry is shifted (motor/
     inverter aren't affected by the battery's own soak history, and Tier-2
-    doesn't track them between trips anyway -- see CLAUDE.md).
+    doesn't track them between trips anyway -- see docs/MILESTONES.md).
     """
     assumed_start_temp_k = _archetype_assumed_start_temp_k(
         characterization.trip_type, characterization.ambient_bucket_temp_k, spec
@@ -895,11 +895,11 @@ def simulate_long_horizon(
     toward ambient for the whole day (`relax_parked_temp_k`). Battery-only:
     motor/inverter are not tracked between trips (no aging model consumes
     their trajectory, and they re-equilibrate to near-ambient within minutes
-    of any real parked period -- see CLAUDE.md).
+    of any real parked period -- see docs/MILESTONES.md).
 
     SOC is a real per-hour trajectory, not a snapped constant (Milestone
     "parked-SOC model" -- see docs/DESIGN_QUESTIONS.md Q-0012, and
-    CLAUDE.md's Known deferred work for why the previous instantaneous-snap-
+    docs/MILESTONES.md for why the previous instantaneous-snap-
     to-typical_end_soc behavior had to be replaced): a trip applies its own
     actual SOC delta (`characterization.final_soc - charging_profile.
     typical_start_soc`, i.e. `typical_start_soc` is the reference point

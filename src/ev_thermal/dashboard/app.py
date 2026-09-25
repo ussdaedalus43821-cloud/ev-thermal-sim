@@ -166,7 +166,7 @@ def build_scenario(profile: ManufacturerProfile, ambient_temp_k: float) -> Scena
 def target_speed_mps(t: float) -> float:
     """Same stop-and-go commute segment as examples/first_run.py: ramp to
     cruise, a red-light stop partway through (shows regen braking), then
-    back to cruise. Not a real drive-cycle model (see CLAUDE.md).
+    back to cruise. Not a real drive-cycle model (see docs/MILESTONES.md).
     """
     if t < 30.0:
         return CRUISE_SPEED_MPS * (t / 30.0)
