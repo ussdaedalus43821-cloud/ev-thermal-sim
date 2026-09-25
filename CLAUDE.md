@@ -1009,7 +1009,8 @@ not just *what* happened.
     SOH-loss bias magnitude is explicitly marked unknown/flagged, not
     estimated, since no real `dOCV/dT` data exists for any profile to
     ground a number.
-    **Implementation plan (ratified, not yet coded):**
+    **Implementation plan (ratified, not yet coded), with four review flags
+    resolved before implementation, per the design protocol:**
     - **`battery.available_charge_current_a` gains a new ceiling term,
       integrated into its existing `min(...)`** — not a new clamp applied
       elsewhere. New `BatterySpec.charge_current_limit_curve:
@@ -1017,24 +1018,46 @@ not just *what* happened.
       factor on `max_charge_c_rate`, same shape/interpolation convention as
       `ocv_curve_v`/`r0_curve_ohm`, reusing the existing `_interpolate`
       helper): `soc_charge_limit_a = _interpolate(spec.charge_current_
-      limit_curve, soc) * c_rate_limit_a`, then `return min(c_rate_limit_a,
-      voltage_limit_a, soc_charge_limit_a) * thermal_scale`. Deliberately
-      named without "fast_charge" — this is a general BMS charge-current
-      ceiling that applies to every charge path, including regen (a real
-      BMS limits charge current at high SOC regardless of source, which is
-      why EVs show reduced-regen warnings near full charge); scoping the
-      name to fast-charge-only would mislead a future reader into thinking
-      it's unreachable outside E2e. Behavioral check performed before
-      committing to this: no existing test asserts a regen/charge current
-      magnitude at SOC >= 60% — the two direct charge-direction unit tests
-      and the controller regen sign-check all run at `soc=0.5`, below the
-      curve's plateau threshold, confirmed by reading each test body
-      directly, not assumed. Full suite (default + slow) still gets
-      re-run after implementation as final confirmation.
-      Field docstring must state, explicitly, two things:
+      limit_curve, soc) * c_rate_limit_a`, then **`return min(voltage_
+      limit_a, soc_charge_limit_a) * thermal_scale`** — `c_rate_limit_a`
+      itself is DROPPED from the `min(...)` (review flag: since
+      `charge_current_limit_curve` values are constrained to `<=1.0`,
+      `soc_charge_limit_a <= c_rate_limit_a` always, making the flat term
+      permanently dead; keeping it would be ambiguous — silently correct by
+      accident rather than by design, and would silently ignore any future
+      curve value `>1.0` instead of surfacing it as the data error it would
+      be). The field's docstring must state the `<=1.0` constraint as an
+      explicit invariant the curve is trusted to satisfy (same trust
+      convention as every other unvalidated `Sourced` curve in this file --
+      `ocv_curve_v`, `r0_curve_ohm` -- not a new validation mechanism).
+      Deliberately named without "fast_charge" — this is a general BMS
+      charge-current ceiling that applies to every charge path, including
+      regen (a real BMS limits charge current at high SOC regardless of
+      source, which is why EVs show reduced-regen warnings near full
+      charge); scoping the name to fast-charge-only would mislead a future
+      reader into thinking it's unreachable outside E2e.
+      **Behavioral check performed before committing to this** (not
+      assumed): read every regen/charge-direction test body directly. The
+      two direct charge-direction unit tests (`test_charge_increases_soc_
+      and_terminal_voltage_exceeds_ocv`, `test_charge_at_0c_is_limited_
+      more_than_charge_at_25c`) and the controller regen sign-check
+      (`test_battery_current_demand_matches_commanded_torque_direction`)
+      all run at `soc=0.5`, below the curve's 60% plateau threshold — none
+      assert a value this change would move. Full suite (default + slow)
+      still gets re-run after implementation as final confirmation. Note
+      in the eventual commit message: once live, driving downhill at high
+      SOC will emit new `BATTERY_LIMIT_TRIGGERED` regen-limiting events
+      that didn't fire before — correct behavior, not a regression, but a
+      visible change to existing dashboard runs that shouldn't be mistaken
+      for one.
+      Field docstring must state, explicitly, three things (a third was
+      added on review):
       1. **Separable approximation**: SOC and temperature contributions
-         multiply (`soc_charge_limit_a` times the existing `hot_scale`/
-         `cold_scale`, not a joint 2D table). Real BMS limits can be
+         multiply (`soc_charge_limit_a` times the function's existing
+         `thermal_scale` -- itself `hot_scale * cold_scale`, or 0.0 below
+         `min_operating_temp_k` -- applied via the SAME final multiplication
+         the function already does for its other two `min()` terms, not a
+         new or separate multiplication step). Real BMS limits can be
          non-separable, particularly where the taper knee shifts with pack
          temperature. Revisit if sourced curves become available.
       2. **Identical across all six profiles by design, same reason as
@@ -1047,6 +1070,8 @@ not just *what* happened.
          the throttle effect its own thermal design already produces and
          break the causal attribution this comparison exists to
          demonstrate.
+      3. **`<=1.0` is a trusted invariant, not runtime-validated** — see
+         the dropped-`c_rate_limit_a` reasoning above.
       Placeholder curve, `TODO(spec-sourcing)` like every other coefficient,
       one fixed set of numbers, not a range: `(soc=0.0, scale=1.0)`,
       `(0.6, 1.0)`, `(0.95, 0.2)`, `(1.0, 0.2)` — full ceiling to 60% SOC,
@@ -1062,6 +1087,8 @@ not just *what* happened.
       abstraction and a per-vehicle max-acceptance-rate field, since real
       effective charge rate is `min(charger.max_kw, vehicle.max_
       acceptance_kw)` — revisit whoever adds a second charger type.
+      `charge_power_request_w` (referenced below) is explicitly
+      `charging_profile.dc_charge_power_kw.value * 1000.0`.
     - **`sim.advance_charging_step`**, peer to `advance_one_step`, reusing
       `SimStepRecord`/`SimState` unchanged (driving-specific fields --
       `speed_mps`, `requested_torque_nm`, etc. -- just stay 0.0/unchanged,
@@ -1069,25 +1096,41 @@ not just *what* happened.
       (1) `charge_current_request_a = -charge_power_request_w /
       state.battery_voltage_v` (negative = charging, constant-power
       request, same conversion convention `advance_one_step` already uses
-      elsewhere); (2) `battery.compute_battery_electrical_step` — the SAME
-      call `advance_one_step` makes, unchanged, which already routes
-      through the newly-extended `available_charge_current_a` with no
-      further code needed for the BMS limit to apply; (3) `aging.
-      compute_aging_step` — charging ages the battery too (cycle aging
-      from real throughput, calendar aging from real temp/soc), same call
-      as driving; (4) `controller.step_controller` called with
-      `driver_torque_request_nm=0.0`, `speed_rad_per_s=0.0` for cooling
-      duty only — its torque-arbitration output is unused, only pump/fan
-      duty matters, reusing existing thermostat-driven logic rather than
-      writing a second cooling-duty function; (5) `step_cooling` per loop,
-      then one combined `step_thermal_network` solve over the SAME network
-      `advance_one_step` builds, with motor/inverter heat inputs at zero;
-      (6) no vehicle-speed advance (`speed_mps` stays 0.0 always), no
-      odometer change. dt: reuse `scenario.dt_policy.min_dt_s` throughout,
-      stability-checked via the existing `_stabilize_dt_s` (reused
-      unchanged) but WITHOUT `_choose_target_dt_s`'s tier-selection logic —
-      charging has only one regime (actively charging), not a driving-vs-
-      parked choice to make.
+      elsewhere; `state.battery_voltage_v` is the step-START terminal
+      voltage, same convention `voltage_limit_a` and every other per-step
+      ceiling already uses -- there is no step-end value available yet);
+      (2) `battery.compute_battery_electrical_step` — the SAME call
+      `advance_one_step` makes, unchanged, which already routes through the
+      newly-extended `available_charge_current_a` (itself called with the
+      step-start `soc`, same convention) with no further code needed for
+      the BMS limit to apply; (3) `aging.compute_aging_step` — charging
+      ages the battery too (cycle aging from real throughput, calendar
+      aging from real temp/soc), same call as driving; (4) `controller.
+      step_controller` called with `driver_torque_request_nm=0.0`,
+      `speed_rad_per_s=0.0` for cooling duty only — **verified before
+      committing to this plan, not assumed**: read `step_controller`'s
+      full body. Its cooling-duty block (`commanded_pump_duty`/
+      `commanded_fan_duty`) depends only on `component_temps_k` (a
+      parameter built from `motor_winding_temp_k`/`inverter_junction_
+      temp_k`/`battery_cell_temp_k`, all passed in, not derived from
+      arbitration), `loop.serves`, `loop.thermostat_temp_k`, `coolant_
+      temps_k` (also a parameter), and `pump_aggressiveness` — nothing in
+      that block reads `driver_torque_request_nm`, `commanded_torque_nm`,
+      or any ceiling/arbitration result computed earlier in the function.
+      Cooling duty is genuinely thermostat-driven and independent of the
+      torque-arbitration path; a zero torque request produces correct,
+      non-zero cooling response when a component is actually hot. The
+      torque-arbitration output (`commanded_torque_nm`, `battery_current_
+      demand_a`) is unused by `advance_charging_step`, which computes its
+      own `charge_current_request_a` directly rather than reading `battery_
+      current_demand_a`; (5) `step_cooling` per loop, then one combined
+      `step_thermal_network` solve over the SAME network `advance_one_step`
+      builds, with motor/inverter heat inputs at zero; (6) no vehicle-speed
+      advance (`speed_mps` stays 0.0 always), no odometer change. dt: reuse
+      `scenario.dt_policy.min_dt_s` throughout, stability-checked via the
+      existing `_stabilize_dt_s` (reused unchanged) but WITHOUT `_choose_
+      target_dt_s`'s tier-selection logic — charging has only one regime
+      (actively charging), not a driving-vs-parked choice to make.
     - **`sim.run_charging_session`**, peer to `run_scenario`, looping
       `advance_charging_step` for a FIXED `duration_s` (not an open-ended
       "until target SOC reached" condition) — matches every other
@@ -1100,22 +1143,57 @@ not just *what* happened.
       `characterize_trip`, calling `run_charging_session` at one constant
       pinned ambient bucket (same convention as `characterize_trip`),
       producing the SAME `TripCharacterization` shape so `simulate_long_
-      horizon`/`apply_trip_start_offset`/`_interpolate_characterization`
-      need zero changes to consume it (`_archetype_assumed_start_temp_k`'s
-      existing `else` branch already returns plain `ambient_bucket_temp_k`
-      for any type that isn't `COLD_START_COMMUTE`/`HOT_SOAK_COMMUTE`,
-      which already correctly covers `FAST_CHARGE_SESSION` with no code
-      change). `characterize_all_trips` gets one added call for this
-      function, merged into the same returned dict — `FAST_CHARGE_SESSION`
-      is NOT added to `_ARCHETYPES`/`characterize_trip`'s dispatch table,
-      since it needs its own charging-mode pipeline, not the driving one.
-      Two phases (`ramp`, `taper`), boundary at the SOC curve's 60% knee —
-      since phase boundaries for every other archetype are fixed TIME
-      values but this one is SOC-triggered, `characterize_fast_charge_
-      session` scans the run's time series for when SOC crosses 0.6 and
-      converts that to a time boundary, then feeds it into the existing,
-      unchanged `_phase_aging` (which only takes time boundaries) — no new
-      phase-aggregation mechanism needed.
+      horizon`/`apply_trip_start_offset` need zero changes to consume it.
+      `characterize_all_trips` gets one added call for this function,
+      merged into the same returned dict — `FAST_CHARGE_SESSION` is NOT
+      added to `_ARCHETYPES`/`characterize_trip`'s dispatch table, since it
+      needs its own charging-mode pipeline, not the driving one.
+      **Arrival temp caveat (review flag, replacing an earlier overclaim):**
+      `_archetype_assumed_start_temp_k`'s existing `else` branch returns
+      plain `ambient_bucket_temp_k` for `FAST_CHARGE_SESSION` with no code
+      change needed, but this is an APPROXIMATION, not something to claim
+      as "correctly covering" the real case. A real fast-charge session
+      arrives with the pack elevated by the preceding drive, not at
+      ambient. The characterization's docstring must say so explicitly:
+      *"Arrival pack temp for a fast-charge session is physically elevated
+      by the preceding drive, not at ambient. This characterization
+      assumes ambient-bucket start temp for consistency with every other
+      archetype's linear-offset replay scheme; the real arrival-temp effect
+      is absorbed by `apply_trip_start_offset` at replay time and is
+      therefore approximate. Revisit if offset error is shown to dominate
+      the fast-charge thermal signature specifically."*
+      **Phase structure — two phases (`ramp`, `taper`), boundary at the SOC
+      curve's 60% knee, with explicit edge-case handling (review flag: the
+      plan was silent on this and a naive implementation would crash).**
+      SOC is monotonically non-decreasing across a charging session (
+      `advance_charging_step` always requests negative/charging current;
+      the applied magnitude only ever shrinks, never flips sign, since
+      every ceiling in `available_charge_current_a` is non-negative by
+      construction) — so a 60%-crossing, if it exists, exists exactly once;
+      the "starts and ends above the knee with a dip below" case the
+      reviewer raised as hypothetical cannot occur here, confirmed by this
+      reasoning, not just empirically. Two real edge cases remain: a
+      session that starts at/above 60% SOC (no crossing; everything is
+      really "taper"), and one whose fixed `duration_s` never reaches 60%
+      SOC (no crossing; everything is really "ramp"). **`TripCharacterization.
+      phases` must always have exactly 2 entries regardless — found while
+      tracing the actual consumer, not just the two cases named above**:
+      `_interpolate_characterization` zips `lo.phases`/`hi.phases` with
+      `strict=True`, so if one ambient bucket's session crosses the knee and
+      a different bucket's doesn't (plausible -- colder buckets charge more
+      slowly), producing a variable-length phase list per bucket would crash
+      bucket interpolation the first time two adjacent buckets disagree on
+      phase count, not just on some single-session edge case. Resolution:
+      always construct both phases. When a real crossing exists, both
+      `_phase_aging` calls run unchanged over `[0, boundary_s)` and
+      `[boundary_s, duration_s)`. When no crossing exists, the phase with no
+      real duration is a DEGENERATE zero-duration phase built directly from
+      the boundary sample's own instantaneous values (`duration_s=0.0`,
+      `throughput_ah=0.0`, temp/soc/c_rate taken from that single sample) —
+      not routed through `_phase_aging`, which raises on an empty window by
+      design (`covered_s <= 0.0`) and should keep doing so for a genuine
+      empty-time-series bug elsewhere, not be loosened to silently accept
+      this specific degenerate case.
       Session start/end SOC: reuses `charging_profile.typical_start_soc`/
       `typical_end_soc` (no new field) — flagged as a real simplification,
       not fully realistic (real fast-charge sessions often start from a
