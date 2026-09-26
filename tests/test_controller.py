@@ -10,9 +10,9 @@ from __future__ import annotations
 from ev_thermal.battery import available_discharge_current_a
 from ev_thermal.controller import step_controller
 from ev_thermal.motor import available_torque_nm
-from ev_thermal.schema import Confidence, Sourced, VehicleDynamics
+from ev_thermal.schema import Confidence, ControllerStepResult, Sourced, VehicleDynamics
 from tests.test_battery import _make_battery_spec
-from tests.test_cooling import _make_cooling_loop
+from tests.test_cooling import _make_chiller_loop, _make_cooling_loop
 from tests.test_inverter import _make_inverter_spec
 from tests.test_motor import _make_motor_spec
 
@@ -173,3 +173,54 @@ def test_battery_ceiling_matches_available_discharge_current_a_via_power_convers
     expected_current_ceiling_a = available_discharge_current_a(battery_spec, 0.5, 330.0, 0.0)
     expected_torque_ceiling_nm = (expected_current_ceiling_a * _BATTERY_VOLTAGE_V) / speed_rad_per_s
     assert abs(result.commanded_torque_nm - expected_torque_ceiling_nm) < 1e-6
+
+
+# --- Q-0021: commanded_chiller_duty ---
+
+
+def _step_with_chiller_loop(coolant_temp_k: float) -> ControllerStepResult:
+    chiller_loop = _make_chiller_loop()
+    return step_controller(
+        100.0,
+        _make_motor_spec(),
+        _make_inverter_spec(),
+        _make_battery_spec(),
+        _make_vehicle_dynamics(),
+        [chiller_loop],
+        _NOMINAL_TEMP_K,
+        _NOMINAL_TEMP_K,
+        0.5,
+        _NOMINAL_TEMP_K,
+        0.0,
+        _BATTERY_VOLTAGE_V,
+        100.0,
+        {chiller_loop.name: coolant_temp_k},
+        sim_time_s=0.0,
+    )
+
+
+def test_chiller_duty_is_zero_for_a_loop_without_a_chiller() -> None:
+    result = _step(coolant_temp_k=340.0)  # far above any reasonable threshold
+
+    assert result.commanded_chiller_duty[_LOOP_NAME] == 0.0
+
+
+def test_chiller_duty_is_zero_at_or_below_thermostat_full_open_even_with_a_chiller() -> None:
+    chiller_loop = _make_chiller_loop()
+    result = _step_with_chiller_loop(coolant_temp_k=chiller_loop.thermostat_full_open_temp_k.value)
+
+    assert result.commanded_chiller_duty[chiller_loop.name] == 0.0
+    # Genuinely a SECOND stage: fan is already actively ramping here (past
+    # its own MIN_FAN_DUTY floor), while chiller hasn't engaged at all yet.
+    assert result.commanded_fan_duty[chiller_loop.name] > 0.1
+
+
+def test_chiller_duty_ramps_up_above_thermostat_full_open() -> None:
+    chiller_loop = _make_chiller_loop()
+    threshold_k = chiller_loop.thermostat_full_open_temp_k.value
+    mild = _step_with_chiller_loop(coolant_temp_k=threshold_k + 5.0)
+    hot = _step_with_chiller_loop(coolant_temp_k=threshold_k + 20.0)
+
+    assert 0.0 < mild.commanded_chiller_duty[chiller_loop.name] < 1.0
+    assert hot.commanded_chiller_duty[chiller_loop.name] == 1.0
+    assert hot.commanded_chiller_duty[chiller_loop.name] > mild.commanded_chiller_duty[chiller_loop.name]

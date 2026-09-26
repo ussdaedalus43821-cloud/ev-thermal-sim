@@ -602,6 +602,7 @@ def make_sim_step_record() -> SimStepRecord:
         battery_ocv_power_w=680.0,
         pump_duty={"battery_loop": 0.4},
         fan_duty={"battery_loop": 0.3},
+        chiller_duty={"battery_loop": 0.0},
         heat_rejected_w=200.0,
         motor_loss_w=50.0,
         inverter_loss_w=10.0,
@@ -636,7 +637,9 @@ def test_sim_time_series_round_trip_with_requested_torque() -> None:
         node_temps_k={"battery_pack": [298.15, 298.2]},
         pump_duty=[{"battery_loop": 0.2}, {"battery_loop": 0.4}],
         fan_duty=[{"battery_loop": 0.1}, {"battery_loop": 0.3}],
+        chiller_duty=[{"battery_loop": 0.0}, {"battery_loop": 0.5}],
         heat_rejected_w=[0.0, 200.0],
+        chiller_heat_removed_w=[0.0, 300.0],
         active_limit_event_types=[[], ["MOTOR_LIMIT_TRIGGERED"]],
     )
     restored = SimTimeSeries.model_validate_json(series.model_dump_json())
@@ -644,6 +647,8 @@ def test_sim_time_series_round_trip_with_requested_torque() -> None:
     assert restored.requested_torque_nm == [200.0, 150.0]
     assert restored.battery_current_a == [0.0, 140.0]
     assert restored.charging == [False, True]
+    assert restored.chiller_duty == [{"battery_loop": 0.0}, {"battery_loop": 0.5}]
+    assert restored.chiller_heat_removed_w == [0.0, 300.0]
 
 
 # --- ForkPoint / CausalEvent ---

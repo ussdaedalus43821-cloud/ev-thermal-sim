@@ -8,9 +8,28 @@ it, via thermal.py's per-component calls) — this module doesn't itself
 consume a separate heat-load number; that's only used by tests to pick a
 steady-state operating point and check `heat_rejected_w` against it.
 
-Chiller behavior (`CoolingLoop.chiller_present`/`chiller_capacity_w`) is out
-of scope for this milestone — only the radiator/thermostat/pump/fan path is
-modeled here.
+Chiller (`CoolingLoop.chiller_present`/`chiller_capacity_w`/`chiller_power_w`,
+Q-0021): a separate additive heat-removal term, not folded into the
+epsilon-NTU radiator calculation. This is deliberate — the radiator can only
+ever reject heat TOWARD ambient (`heat_rejected_w` is capped at
+`c_min * (coolant_inlet_temp_k - ambient_temp_k)`, zero or negative if
+coolant is already at/below ambient), while a real refrigerant chiller is
+the one mechanism that can pull coolant BELOW ambient, which is the entire
+physical reason this path matters (see docs/DESIGN_QUESTIONS.md Q-0021 and
+docs/MILESTONES.md's chiller-path deferred-work history). `chiller_duty` is
+commanded independently of pump/fan duty (controller.py gates it as a
+second-stage response, once the radiator/fan path alone is saturated — see
+that module's docstring), and chiller heat removal applies to the loop's
+FULL coolant flow, not routed through the thermostat's bypass valve the way
+the radiator branch is: a chiller sits on its own branch of a real
+integrated thermal-management module (e.g. Blue Bird's Cummins PowerDrive
+7000), not behind the same bypass valve as the radiator. Still requires
+nonzero coolant flow (pump running) — a stopped loop has nothing for the
+chiller to extract heat from, same gating the radiator branch already uses.
+`chiller_power_w * chiller_duty` is real electrical draw, returned
+alongside `pump_power_w`/`fan_power_w` for the caller to charge to the
+battery the same way (Q-0021's own pre-existing-gap fix, in sim.py, not
+this module).
 
 Air-side and radiator-frontal-area coefficients on `CoolingLoop` marked
 TODO(spec-sourcing) are physically-plausible placeholders, not measured
@@ -49,6 +68,21 @@ def _effectiveness_counterflow(ntu: float, c_r: float) -> float:
     return numerator / denominator
 
 
+def _chiller_step(spec: CoolingLoop, chiller_duty: float, coolant_flowing: bool) -> tuple[float, float]:
+    """Returns (chiller_heat_removed_w, chiller_power_w). Zero for both unless
+    the loop has a chiller, duty is positive, and coolant is actually flowing
+    (a stopped loop has nothing for the chiller to extract heat from -- same
+    gating the radiator branch already uses). See this module's docstring for
+    why this is a separate additive term, not folded into the radiator's
+    epsilon-NTU calculation.
+    """
+    if not spec.chiller_present or chiller_duty <= 0.0 or not coolant_flowing:
+        return 0.0, 0.0
+    chiller_heat_removed_w = spec.chiller_capacity_w.value * chiller_duty if spec.chiller_capacity_w else 0.0
+    chiller_power_w = spec.chiller_power_w.value * chiller_duty if spec.chiller_power_w else 0.0
+    return chiller_heat_removed_w, chiller_power_w
+
+
 def step_cooling(
     spec: CoolingLoop,
     coolant_inlet_temp_k: float,
@@ -56,6 +90,7 @@ def step_cooling(
     vehicle_speed_mps: float,
     pump_duty: float,
     fan_duty: float,
+    chiller_duty: float = 0.0,
 ) -> CoolingStepResult:
     """Compute one instantaneous cooling-loop state; no persistent state of its own.
 
@@ -73,12 +108,15 @@ def step_cooling(
     fan_power_w = spec.fan_power_w.value * fan_duty**2
 
     if coolant_mass_flow_kg_per_s <= 0.0:
+        chiller_heat_removed_w, chiller_power_w = _chiller_step(spec, chiller_duty, coolant_flowing=False)
         return CoolingStepResult(
             coolant_outlet_temp_k=coolant_inlet_temp_k,
             heat_rejected_w=0.0,
+            chiller_heat_removed_w=chiller_heat_removed_w,
             coolant_mass_flow_kg_per_s=0.0,
             pump_power_w=pump_power_w,
             fan_power_w=fan_power_w,
+            chiller_power_w=chiller_power_w,
             thermostat_open_fraction=0.0,
         )
 
@@ -111,11 +149,15 @@ def step_cooling(
         open_fraction * radiator_outlet_temp_k + (1.0 - open_fraction) * coolant_inlet_temp_k
     )
 
+    chiller_heat_removed_w, chiller_power_w = _chiller_step(spec, chiller_duty, coolant_flowing=True)
+
     return CoolingStepResult(
         coolant_outlet_temp_k=coolant_outlet_temp_k,
         heat_rejected_w=heat_rejected_w,
+        chiller_heat_removed_w=chiller_heat_removed_w,
         coolant_mass_flow_kg_per_s=coolant_mass_flow_kg_per_s,
         pump_power_w=pump_power_w,
         fan_power_w=fan_power_w,
+        chiller_power_w=chiller_power_w,
         thermostat_open_fraction=open_fraction,
     )

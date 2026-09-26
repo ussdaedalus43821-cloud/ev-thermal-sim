@@ -90,13 +90,19 @@ later, or left undecided) is tracked in `docs/ROADMAP.md`. This section is
 just the handful of gaps load-bearing enough to know before touching
 related code:
 
-- **Refrigerant chiller physics are not implemented in `cooling.py`** —
-  `CoolingLoop.chiller_present`/`chiller_capacity_w` exist in the schema
-  but do nothing yet. Affects the BMW i3 (don't use i3-vs-Leaf battery
-  comparisons for publication) and the first commercial profile (Blue
-  Bird Vision Electric), which is the first to set `chiller_present:
-  true`.
-  See `docs/ROADMAP.md`'s "Thermal / cooling physics" section.
+- **Refrigerant chiller physics ARE implemented (Q-0021) but don't yet
+  visibly change any published number.** `cooling.py`/`controller.py`/
+  `sim.py`/`long_horizon.py` all have real, unit-tested chiller behavior
+  now — confirmed correct in isolation (it engages and cools below
+  ambient when conditions warrant). But for Blue Bird Vision Electric (the
+  only `chiller_present: true` profile), the coolant loop never actually
+  crosses the engagement threshold under any tested climate, including a
+  synthetic Guam-like one — a real, confirmed finding, not a bug. Making
+  the chiller matter for a real comparison needs further work (see
+  `docs/ROADMAP.md`'s "Thermal / cooling physics" section for what).
+  Milestone D (BMW i3's standalone DX-refrigerant abstraction) is
+  unaffected and separate — still don't use i3-vs-Leaf battery comparisons
+  for publication.
 - **Preconditioning is deferred entirely, not approximated** (`docs/
   DESIGN_QUESTIONS.md` Q-0004) — every fast-charge characterization is
   equally pessimistic across all profiles; this is the single biggest

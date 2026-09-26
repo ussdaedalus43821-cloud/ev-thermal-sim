@@ -144,6 +144,15 @@ class CoolingLoop(BaseModel):
     chiller_capacity_w: Sourced[float] | None = Field(
         default=None, description="Chiller heat-removal capacity, in watts, if chiller_present."
     )
+    chiller_power_w: Sourced[float] | None = Field(
+        default=None,
+        description=(
+            "Electrical power the chiller itself draws at full duty, in watts, if chiller_present. "
+            "Distinct from chiller_capacity_w (how much heat it can remove) -- a real refrigerant "
+            "chiller's own running cost, charged to the battery the same way pump_power_w/fan_power_w "
+            "are (see cooling.step_cooling)."
+        ),
+    )
     serves: list[str] = Field(
         ..., description="Names of components this loop cools, e.g. ['battery'] or ['motor', 'inverter']."
     )
@@ -1163,10 +1172,23 @@ class CoolingStepResult(BaseModel):
     coolant_outlet_temp_k: float = Field(
         ..., description="Coolant temperature leaving the radiator/bypass mix, in kelvin."
     )
-    heat_rejected_w: float = Field(..., description="Heat rejected to ambient air at the radiator, in watts.")
+    heat_rejected_w: float = Field(
+        ..., description="Heat rejected to ambient air at the RADIATOR only, in watts (chiller is separate)."
+    )
+    chiller_heat_removed_w: float = Field(
+        default=0.0,
+        description=(
+            "Heat actively removed by the chiller, in watts -- 0.0 if chiller_present is False or "
+            "chiller_duty is 0. Unlike heat_rejected_w, not capped at (coolant_temp - ambient): this "
+            "is the one mechanism that can pull coolant below ambient."
+        ),
+    )
     coolant_mass_flow_kg_per_s: float = Field(..., description="Total loop coolant mass flow, in kg/s.")
     pump_power_w: float = Field(..., description="Pump parasitic electrical power draw, in watts.")
     fan_power_w: float = Field(..., description="Fan parasitic electrical power draw, in watts.")
+    chiller_power_w: float = Field(
+        default=0.0, description="Chiller's own electrical power draw this step, in watts (chiller_power_w * duty)."
+    )
     thermostat_open_fraction: float = Field(
         ..., description="Fraction of coolant flow routed through the radiator vs. bypassed, 0-1."
     )
@@ -1221,6 +1243,14 @@ class ControllerStepResult(BaseModel):
     commanded_fan_duty: dict[str, float] = Field(
         ..., description="CoolingLoop.name -> commanded radiator fan duty, 0-1, for that loop."
     )
+    commanded_chiller_duty: dict[str, float] = Field(
+        ...,
+        description=(
+            "CoolingLoop.name -> commanded chiller duty, 0-1, for that loop. 0.0 for any loop with "
+            "chiller_present=False. A genuine second stage (Q-0021), not a scaled copy of fan duty — "
+            "see controller.py's module docstring."
+        ),
+    )
     battery_current_demand_a: float = Field(
         ...,
         description=(
@@ -1245,7 +1275,19 @@ class EnergyTotals(BaseModel):
     inverter_loss_j: float = Field(..., description="Sum of inverter conduction+switching loss over the run.")
     battery_loss_j: float = Field(..., description="Sum of battery irreversible+entropic heat over the run.")
     radiator_rejected_j: float = Field(..., description="Sum of heat rejected at the radiator over the run.")
+    chiller_rejected_j: float = Field(
+        default=0.0, description="Sum of heat actively removed by any loop's chiller over the run."
+    )
     aux_j: float = Field(..., description="Sum of auxiliary (HVAC/accessory) electrical draw over the run.")
+    cooling_parasitic_j: float = Field(
+        default=0.0,
+        description=(
+            "Sum of cooling-loop parasitic electrical draw (pump+fan+chiller) over the run, charged "
+            "to the battery the same way aux_j is. Q-0021: this closes a pre-existing gap where "
+            "pump/fan draw was computed by step_cooling but never charged to battery_current_request_a "
+            "or tracked here."
+        ),
+    )
 
 
 class SimTimeSeries(BaseModel):
@@ -1284,7 +1326,11 @@ class SimTimeSeries(BaseModel):
     fan_duty: list[dict[str, float]] = Field(
         default_factory=list, description="Per-step CoolingLoop.name -> commanded fan duty, 0-1."
     )
-    heat_rejected_w: list[float] = Field(default_factory=list)
+    chiller_duty: list[dict[str, float]] = Field(
+        default_factory=list, description="Per-step CoolingLoop.name -> commanded chiller duty, 0-1."
+    )
+    heat_rejected_w: list[float] = Field(default_factory=list, description="Radiator-only, see SimStepRecord.")
+    chiller_heat_removed_w: list[float] = Field(default_factory=list)
     active_limit_event_types: list[list[str]] = Field(
         default_factory=list, description="controller.py CausalEvent.event_types active at each step."
     )
@@ -1328,11 +1374,22 @@ class SimStepRecord(BaseModel):
     )
     pump_duty: dict[str, float]
     fan_duty: dict[str, float]
-    heat_rejected_w: float
+    chiller_duty: dict[str, float]
+    heat_rejected_w: float = Field(..., description="Radiator-only, summed across loops (chiller is separate).")
+    chiller_heat_removed_w: float = Field(
+        default=0.0, description="Heat actively removed by any loop's chiller this step, summed across loops."
+    )
     motor_loss_w: float
     inverter_loss_w: float
     battery_loss_w: float
     aux_power_w: float
+    cooling_parasitic_w: float = Field(
+        default=0.0,
+        description=(
+            "Pump+fan+chiller electrical draw this step, summed across loops, in watts. Charged to "
+            "the battery the same way aux_power_w is (Q-0021's pre-existing-gap fix)."
+        ),
+    )
     active_limit_event_types: list[str] = Field(
         default_factory=list, description="controller.py's CausalEvent.event_types active this step."
     )

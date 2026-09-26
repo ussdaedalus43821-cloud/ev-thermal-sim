@@ -2193,6 +2193,120 @@ whole history to find.
   mean the seven aging-rate coefficients are validated for this vehicle
   class — that gap (flagged in the original commercial-profile milestone)
   is unaffected by this validation pass and remains open.
+- **Milestone "Chiller path implementation" (done, 2026-09-25, per
+  `docs/DESIGN_QUESTIONS.md` Q-0021):** closes the single most-repeated
+  open item in this project's history — `CoolingLoop.chiller_present`/
+  `chiller_capacity_w` finally do something. Full plan reviewed and
+  approved before implementation (Q-0021); built exactly as scoped there.
+  **What was built:**
+  1. **Schema**: `CoolingLoop.chiller_power_w` (electrical draw at full
+     duty — `chiller_capacity_w` alone only says how much heat it can
+     remove, not what it costs). `CoolingStepResult.chiller_heat_removed_w`/
+     `chiller_power_w`. `ControllerStepResult.commanded_chiller_duty`.
+     `EnergyTotals.chiller_rejected_j`/`cooling_parasitic_j`.
+  2. **`cooling.py`**: `step_cooling` gains `chiller_duty`. Chiller heat
+     removal is a separate additive term, not folded into the radiator's
+     epsilon-NTU calculation — the one mechanism that can pull coolant
+     BELOW ambient, gated only on nonzero coolant flow (not routed through
+     the thermostat bypass valve, since a real chiller sits on its own
+     branch of the TMM).
+  3. **`controller.py`**: `commanded_chiller_duty` per loop is a genuine
+     SECOND STAGE — ramps against `thermostat_full_open_temp_k` (where the
+     radiator/fan path is already saturated), not a scaled copy of fan
+     duty, per Q-0021's approved design.
+  4. **`sim.py` — a pre-existing gap fixed as an in-scope prerequisite**:
+     scoping this surfaced that `pump_power_w`/`fan_power_w` were already
+     computed by `step_cooling` but never charged to the battery or
+     tracked in `EnergyTotals` in the full per-second model —
+     `battery_current_request_a` was computed BEFORE `step_cooling` ran.
+     Fixed by moving cooling ahead of the battery step in both
+     `advance_one_step` and `advance_charging_step` (step_cooling depends
+     only on `controller_result` and start-of-step state, so this changes
+     no physics, just sequencing) and folding pump+fan+chiller draw into
+     the battery's actual current request — closing the exact "models the
+     effect without the mechanism" gap Q-0004/Q-0020 already rejected for
+     this shape of problem. `advance_charging_step` nets cooling parasitic
+     draw against the charger's power budget too (real fast-charging runs
+     active thermal management) but deliberately does NOT extend to
+     aux/HVAC draw during charging, a separate, pre-existing, untouched
+     simplification (new `docs/ROADMAP.md` item).
+  5. **`long_horizon.py`**: `relax_parked_temp_k` gained a chiller-aware
+     term for Tier-2's parked model. NOT another parallel conductance like
+     Q-0020's coolant-path addition (a conductance can only speed
+     convergence toward ambient, never past it) — modeled as a constant
+     duty-scaled heat-extraction rate that shifts the interval's
+     relaxation TARGET itself (`ambient - Q/G`), matching cooling.py's own
+     constant-heat-sink treatment. New `_chiller_soc_decrement` mirrors
+     `_pump_soc_decrement`'s energy-cost-consistency treatment exactly.
+     **A design question resolved during implementation, not before**:
+     since `thermostat_full_open_temp_k > thermostat_temp_k` always, the
+     coolant conductance is already saturated (duty=1.0) by the time the
+     chiller's own duty becomes positive — a G=0-while-chiller-active edge
+     case is mathematically unreachable given this ordering, confirmed
+     analytically and by direct testing, so no special-case handling for
+     it was added (would have been dead code).
+  **Validation**: full suite (282 tests, up from 269), the two
+  `@pytest.mark.slow` cases, `mypy --strict`, and `ruff` all pass. New
+  targeted tests: `test_cooling.py` (chiller below-ambient removal,
+  no-flow gating, linear duty scaling), `test_controller.py` (second-stage
+  gating against `thermostat_full_open_temp_k`, zero for
+  `chiller_present=False`), `test_long_horizon.py` (chiller settles below
+  ambient directionally + one hand-computed single-step closed-form
+  check), `test_sim.py` (end-to-end: chiller engages and cools below
+  ambient in a full-fidelity run; the existing energy-balance test was
+  tightened to include `cooling_parasitic_w`, since it was passing "by
+  accident" without it once that draw became real).
+  **Re-validation of previously-published numbers**: `flagship_comparison.py`
+  (90-day and 20-year, neither passenger profile has a chiller) moved by
+  <0.02 percentage points in every case — confirms the pump/fan
+  energy-accounting fix, while a real correctness improvement, doesn't
+  invalidate any existing published passenger-fleet number. The mistake
+  library's Leaf case similarly moved by <0.001pp (+0.0628pp → +0.0626pp)
+  — expected, since neither its failure nor counterfactual profile has a
+  chiller either.
+  **The Blue Bird profile's own numbers** (the only `chiller_present:
+  true` profile): 90-day total loss 0.5306% → 0.5309%; 20-year 57.3854% →
+  57.3981% — both changes are noise-level, NOT the meaningful reduction
+  the chiller was built to provide. `chiller_power_w: 2000.0` (placeholder,
+  derived from `chiller_capacity_w` at an assumed automotive-refrigerant
+  COP of ~2.5, documented in the YAML) was added so the chiller's own
+  draw is real, not free.
+  **The actual finding, surfaced rather than chased toward a bigger
+  number**: direct investigation (comparing chiller-on vs. chiller-off
+  Tier-1 characterizations for the SAME trip, and separately under a
+  synthetic Guam-like climate for Blue Bird) confirmed the chiller
+  mechanism itself is correct — it engages and produces real below-ambient
+  cooling in a direct `sim.py`-level test with an artificially hot
+  ambient — but it does NOT engage in ANY currently-tested real scenario,
+  including Blue Bird under a Guam-like climate, because the coolant
+  loop's own temperature never crosses the shared placeholder
+  `thermostat_full_open_temp_k` threshold (40°C, the same value used by
+  every actively-cooled profile). Two compounding reasons, both confirmed
+  directly rather than assumed: (1) Tier-1's hot-soak initial condition
+  (`characterize_trip`) only patches the BATTERY node's starting
+  temperature, not the coolant node's — so even a trip that starts with a
+  44°C-hot-soaked cell begins with coolant still near ambient, and the
+  trip's own duration (1200s for `HOT_SOAK_COMMUTE`) isn't long enough for
+  that heat to raise coolant past 40°C (measured coolant range: 35.8-38.3°C
+  for a 36°C-ambient-bucket hot-soak trip, never crossing the threshold).
+  (2) Under sustained parked conditions (Tier-2), Q-0020's own earlier
+  finding already established that a radiator-coupled pack under Guam-like
+  ambient tracks within ~1K of ambient (~30-33°C) — nowhere near 40°C
+  either. **Not tuned away**: the threshold, the hot-soak initialization
+  convention, and the climate scenarios tested are all pre-existing,
+  independently-motivated choices, not adjusted to produce this result.
+  **What this milestone does and does NOT establish**: the chiller path is
+  now real, physically correct, and unit-tested machinery — no longer the
+  "does nothing" placeholder CLAUDE.md described. It does NOT yet visibly
+  change the BMW i3-vs-Leaf caveat (out of scope — Milestone D, a
+  different schema abstraction) or make Blue Bird's published numbers
+  meaningfully less conservative under any climate tested so far. Whether
+  that requires a lower/re-derived `thermostat_full_open_temp_k` (currently
+  an unsourced shared placeholder, same status it always had), a coolant-
+  node hot-soak initialization fix, or a genuinely hotter test climate than
+  Guam's own mild seasonal amplitude is an open question for whoever next
+  wants the chiller to matter for a specific comparison — not decided or
+  guessed at here.
 - **Milestone "Blue Bird Vision Electric — 20-year point estimate" (done,
   2026-09-25):** the follow-on the prior milestone deliberately left open —
   that pass validated physical plausibility over 90 days only. This

@@ -37,6 +37,7 @@ import numpy as np
 
 from ev_thermal.aging import compute_aging_step
 from ev_thermal.battery import ocv_v as battery_ocv_v
+from ev_thermal.controller import DUTY_RAMP_SPAN_K
 from ev_thermal.schema import (
     AnnualDayTypeMix,
     BatterySpec,
@@ -589,6 +590,15 @@ def shuffle_day_type_schedule(
     return schedule[:n_days]
 
 
+def _chiller_duty(temp_k: float, thermostat_full_open_temp_k: float) -> float:
+    """Second-stage ramp, mirroring controller.py's commanded_chiller_duty
+    exactly (same threshold, thermostat_full_open_temp_k, and the same
+    DUTY_RAMP_SPAN_K span) -- see that module's docstring for why this is a
+    genuine second stage, not a scaled copy of the coolant-path duty above.
+    """
+    return min(1.0, max(0.0, (temp_k - thermostat_full_open_temp_k) / DUTY_RAMP_SPAN_K))
+
+
 def relax_parked_temp_k(
     start_temp_k: float,
     tau_s: float | None,
@@ -600,6 +610,8 @@ def relax_parked_temp_k(
     coolant_resistance_k_per_w: float | None = None,
     thermostat_temp_k: float | None = None,
     thermostat_full_open_temp_k: float | None = None,
+    chiller_present: bool = False,
+    chiller_capacity_w: float | None = None,
 ) -> list[tuple[float, float]]:
     """Exact per-interval exponential relaxation toward ambient, treating ambient
     as piecewise-constant within each `step_s` interval -- NOT a single closed-
@@ -634,6 +646,32 @@ def relax_parked_temp_k(
     byte-identical to the pre-Q-0020 ambient-only function -- every existing
     call site that doesn't pass them is unaffected.
 
+    ## Chiller (see docs/DESIGN_QUESTIONS.md Q-0021)
+
+    `chiller_present`/`chiller_capacity_w` require `coolant_path_active`
+    (a chiller sits on the coolant loop, same as `cooling.py`'s real model)
+    -- ignored otherwise. Deliberately NOT another parallel conductance term
+    like the coolant path above: a conductance can only ever speed
+    convergence TOWARD ambient, never past it, which is exactly the
+    limitation a real chiller exists to overcome (see cooling.py's module
+    docstring and Q-0021's own context). Modeled instead as a constant
+    (duty-scaled) heat-extraction rate Q, which shifts the interval's
+    exponential-relaxation TARGET itself: for an RC system with ambient
+    coupling conductance G and a constant applied sink Q, the steady state
+    is `ambient - Q/G`, not `ambient` -- allowing the pack to settle below
+    ambient when the chiller is engaged, matching the constant-heat-input
+    treatment cooling.py's real per-second model already uses (chiller_
+    heat_removed_w applied as a heat_inputs_w sink, not folded into any
+    conductance there either). Duty is `_chiller_duty` (second-stage ramp
+    against `thermostat_full_open_temp_k`, same threshold and span as
+    controller.py's `commanded_chiller_duty` -- see that function). Since
+    `thermostat_full_open_temp_k > thermostat_temp_k` always, the coolant
+    conductance term is already saturated (duty=1.0, G>0) by the time the
+    chiller's own duty becomes positive -- G is never zero while the
+    chiller is actually contributing, so no separate G=0 case is needed
+    here (unlike the ambient-only branch below, which already handles
+    tau_s=None on its own).
+
     Returns `[(elapsed_t_s, pack_temp_k), ...]` at each step boundary, including
     the starting point, for calendar-aging quadrature (`parked_calendar_aging`).
     """
@@ -643,6 +681,7 @@ def relax_parked_temp_k(
         and thermostat_full_open_temp_k is not None
         and capacitance_j_per_k is not None
     )
+    chiller_active = chiller_present and chiller_capacity_w is not None and coolant_path_active
     samples: list[tuple[float, float]] = [(start_t_s, start_temp_k)]
     if duration_s <= 0.0:
         return samples
@@ -662,7 +701,12 @@ def relax_parked_temp_k(
             total_conductance_w_per_k = ambient_conductance_w_per_k + coolant_conductance_w_per_k
             if total_conductance_w_per_k > 0.0:
                 effective_tau_s = capacitance_j_per_k / total_conductance_w_per_k
-                temp_k = ambient + (temp_k - ambient) * math.exp(-dt / effective_tau_s)
+                target_k = ambient
+                if chiller_active:
+                    assert chiller_capacity_w is not None  # narrows for mypy; chiller_active already guarantees this
+                    chiller_heat_removed_w = chiller_capacity_w * _chiller_duty(temp_k, thermostat_full_open_temp_k)
+                    target_k = ambient - chiller_heat_removed_w / total_conductance_w_per_k
+                temp_k = target_k + (temp_k - target_k) * math.exp(-dt / effective_tau_s)
         elif tau_s is not None:
             temp_k = ambient + (temp_k - ambient) * math.exp(-dt / tau_s)
         elapsed_s += dt
@@ -728,6 +772,26 @@ def _pump_soc_decrement(
             continue
         duty = min(1.0, max(0.0, (temp0 - thermostat_temp_k) / (thermostat_full_open_temp_k - thermostat_temp_k)))
         total += duty * pump_decay_per_hour_at_full_duty * ((t1 - t0) / 3600.0)
+    return total
+
+
+def _chiller_soc_decrement(
+    temp_samples: list[tuple[float, float]],
+    charge_event_s: float,
+    thermostat_full_open_temp_k: float,
+    chiller_decay_per_hour_at_full_duty: float,
+) -> float:
+    """Chiller's own electrical draw during a parked period (Q-0021), same
+    treatment and same reset-step exclusion as `_pump_soc_decrement` (see
+    that function's docstring) -- the two are separate sums, not merged,
+    since they use different duty ramps (`_chiller_duty`, not the pump's).
+    """
+    total = 0.0
+    for (t0, temp0), (t1, _temp1) in zip(temp_samples[:-1], temp_samples[1:], strict=True):
+        if t0 < charge_event_s:
+            continue
+        duty = _chiller_duty(temp0, thermostat_full_open_temp_k)
+        total += duty * chiller_decay_per_hour_at_full_duty * ((t1 - t0) / 3600.0)
     return total
 
 
@@ -929,6 +993,11 @@ def simulate_long_horizon(
         if battery_loop is None
         else (battery_loop.pump_power_w.value / pack_voltage_v) / spec.capacity_nominal_ah.value
     )
+    chiller_decay_per_hour_at_full_duty = (
+        0.0
+        if battery_loop is None or not battery_loop.chiller_present or battery_loop.chiller_power_w is None
+        else (battery_loop.chiller_power_w.value / pack_voltage_v) / spec.capacity_nominal_ah.value
+    )
 
     day0 = start_day_of_year if start_day_of_year is not None else _default_start_day_of_year()
     pack_temp_k = ambient_temp_k(climate, day0, _START_OF_DAY_HOUR)
@@ -983,6 +1052,7 @@ def simulate_long_horizon(
         if battery_loop is None:
             temp_samples = relax_parked_temp_k(pack_temp_k, tau_s, ambient_fn, parked_start_s, parked_duration_s)
             pump_loss_soc = 0.0
+            chiller_loss_soc = 0.0
         else:
             coolant_resistance_k_per_w = (
                 spec.thermal_node.resistance_to_coolant_k_per_w.value + 1.0 / battery_loop.radiator_ua_w_per_k.value
@@ -997,6 +1067,10 @@ def simulate_long_horizon(
                 coolant_resistance_k_per_w=coolant_resistance_k_per_w,
                 thermostat_temp_k=battery_loop.thermostat_temp_k.value,
                 thermostat_full_open_temp_k=battery_loop.thermostat_full_open_temp_k.value,
+                chiller_present=battery_loop.chiller_present,
+                chiller_capacity_w=(
+                    battery_loop.chiller_capacity_w.value if battery_loop.chiller_capacity_w is not None else None
+                ),
             )
             pump_loss_soc = _pump_soc_decrement(
                 temp_samples,
@@ -1004,6 +1078,12 @@ def simulate_long_horizon(
                 battery_loop.thermostat_temp_k.value,
                 battery_loop.thermostat_full_open_temp_k.value,
                 pump_decay_per_hour_at_full_duty,
+            )
+            chiller_loss_soc = _chiller_soc_decrement(
+                temp_samples,
+                charge_event_s,
+                battery_loop.thermostat_full_open_temp_k.value,
+                chiller_decay_per_hour_at_full_duty,
             )
         soc_samples = _parked_soc_trajectory(
             soc,
@@ -1017,7 +1097,7 @@ def simulate_long_horizon(
         calendar_loss_cumulative += parked_loss
         soh = max(0.0, soh - parked_loss)
         pack_temp_k = temp_samples[-1][1]
-        soc = max(0.0, soc_samples[-1][1] - pump_loss_soc)
+        soc = max(0.0, soc_samples[-1][1] - pump_loss_soc - chiller_loss_soc)
 
         checkpoints.append(
             LongHorizonCheckpoint(

@@ -46,7 +46,7 @@ from ev_thermal.sim import (
 from ev_thermal.thermal import step_thermal_network
 from tests.test_battery import _make_battery_spec
 from tests.test_controller import _make_vehicle_dynamics
-from tests.test_cooling import _make_cooling_loop
+from tests.test_cooling import _make_chiller_loop, _make_cooling_loop
 from tests.test_inverter import _make_inverter_spec
 from tests.test_motor import _make_motor_spec
 
@@ -171,6 +171,7 @@ def test_energy_balance_within_2_percent() -> None:
     inverter_loss_j = 0.0
     battery_loss_j = 0.0
     aux_j = 0.0
+    cooling_parasitic_j = 0.0
 
     total_duration_s = 60.0
     while state.sim_time_s < total_duration_s:
@@ -182,11 +183,51 @@ def test_energy_balance_within_2_percent() -> None:
         inverter_loss_j += record.inverter_loss_w * dt_s
         battery_loss_j += record.battery_loss_w * dt_s
         aux_j += record.aux_power_w * dt_s
+        cooling_parasitic_j += record.cooling_parasitic_w * dt_s
         state = record.new_state
 
-    predicted_j = motor_mechanical_work_j + motor_loss_j + inverter_loss_j + battery_loss_j + aux_j
+    # Q-0021: cooling_parasitic_j (pump/fan/chiller draw) is now part of the
+    # battery's actual current request (see sim.py's advance_one_step), so it
+    # must be included here too, or this test would pass "by accident" —
+    # verifying a balance that no longer matches what the battery actually draws.
+    predicted_j = (
+        motor_mechanical_work_j + motor_loss_j + inverter_loss_j + battery_loss_j + aux_j + cooling_parasitic_j
+    )
     relative_error = abs(battery_ocv_output_j - predicted_j) / abs(predicted_j)
     assert relative_error < 0.02
+
+
+def test_chiller_engages_and_cools_below_ambient_in_full_fidelity_run() -> None:
+    """End-to-end (Q-0021): a chiller-equipped loop, held parked at a hot
+    ambient long enough for the coolant to saturate the radiator/fan path,
+    must show the chiller actually engaging (commanded_chiller_duty > 0,
+    chiller_heat_removed_w > 0) and pulling the coolant node below ambient --
+    the one thing the radiator-only path (test_energy_balance's fixture,
+    chiller_present=False) cannot do. Also confirms the chiller's own
+    electrical draw shows up in cooling_parasitic_w, not just the thermal
+    side.
+    """
+    profile = _make_profile()
+    chiller_loop = _make_chiller_loop()
+    profile = profile.model_copy(
+        update={
+            "thermal_architecture": profile.thermal_architecture.model_copy(
+                update={"cooling_loops": [chiller_loop]}
+            )
+        }
+    )
+    hot_ambient_k = chiller_loop.thermostat_full_open_temp_k.value + 30.0
+    scenario = _make_scenario(profile, ambient_temp_k=hot_ambient_k)
+    result = run_scenario(profile, scenario, duration_s=1800.0, target_speed_mps=lambda _t: 0.0)
+
+    chiller_duties = [step[chiller_loop.name] for step in result.time_series.chiller_duty]
+    assert max(chiller_duties) > 0.0
+    assert max(result.time_series.chiller_heat_removed_w) > 0.0
+    assert result.energy_totals.chiller_rejected_j > 0.0
+    assert result.energy_totals.cooling_parasitic_j > 0.0
+
+    coolant_node = coolant_node_name(chiller_loop.name)
+    assert min(result.time_series.node_temps_k[coolant_node]) < hot_ambient_k
 
 
 def test_determinism_same_seed_gives_same_final_state_and_events() -> None:

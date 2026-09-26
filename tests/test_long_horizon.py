@@ -395,6 +395,101 @@ def test_relax_parked_temp_k_hand_computed_single_step_with_full_duty_coolant_pa
     assert samples[1][1] == pytest.approx(expected)
 
 
+# --- Q-0021: chiller-aware relax_parked_temp_k ---
+
+
+def test_relax_parked_temp_k_chiller_absent_converges_to_ambient_not_below() -> None:
+    samples = relax_parked_temp_k(
+        start_temp_k=330.0,
+        tau_s=None,
+        ambient_fn=lambda _t: 313.15,
+        start_t_s=0.0,
+        duration_s=3600.0 * 50,
+        step_s=3600.0,
+        capacitance_j_per_k=400_000.0,
+        coolant_resistance_k_per_w=0.05,
+        thermostat_temp_k=308.15,
+        thermostat_full_open_temp_k=313.15,
+    )
+    assert samples[-1][1] == pytest.approx(313.15, abs=0.01)
+
+
+def test_relax_parked_temp_k_chiller_present_settles_below_ambient() -> None:
+    """The one behavior a chiller exists to provide and a plain coolant-path
+    conductance cannot: pulling the pack below ambient, not just toward it
+    faster (see relax_parked_temp_k's own Q-0021 docstring section).
+    """
+    samples = relax_parked_temp_k(
+        start_temp_k=330.0,
+        tau_s=None,
+        ambient_fn=lambda _t: 313.15,
+        start_t_s=0.0,
+        duration_s=3600.0 * 50,
+        step_s=3600.0,
+        capacitance_j_per_k=400_000.0,
+        coolant_resistance_k_per_w=0.05,
+        thermostat_temp_k=308.15,
+        thermostat_full_open_temp_k=313.15,
+        chiller_present=True,
+        chiller_capacity_w=5000.0,
+    )
+    assert samples[-1][1] < 313.15 - 1.0
+
+
+def test_relax_parked_temp_k_chiller_hand_computed_single_step_at_full_duty() -> None:
+    """One step, start_temp_k chosen >= thermostat_full_open_temp_k +
+    DUTY_RAMP_SPAN_K so BOTH the coolant path's duty and the chiller's own
+    duty are unambiguously 1.0 -- checked against the exact closed form
+    (target_k = ambient - Q/G), not an approximate multi-step "steady
+    state" (which a piecewise-constant-duty scheme doesn't cleanly have,
+    since duty itself shifts every step as temp falls -- see the directional
+    "settles below ambient" test above for that longer-horizon behavior).
+    """
+    capacitance_j_per_k = 400_000.0
+    coolant_resistance_k_per_w = 0.05
+    chiller_capacity_w = 5000.0
+    ambient_k = 290.0
+    start_temp_k = 335.0  # thermostat_full_open_temp_k(313.15) + DUTY_RAMP_SPAN_K(15) + margin
+
+    total_conductance_w_per_k = 1.0 / coolant_resistance_k_per_w  # tau_s=None -- ambient term is 0
+    expected_target_k = ambient_k - chiller_capacity_w / total_conductance_w_per_k
+    expected_tau_s = capacitance_j_per_k / total_conductance_w_per_k
+    expected = expected_target_k + (start_temp_k - expected_target_k) * math.exp(-3600.0 / expected_tau_s)
+
+    samples = relax_parked_temp_k(
+        start_temp_k=start_temp_k,
+        tau_s=None,
+        ambient_fn=lambda _t: ambient_k,
+        start_t_s=0.0,
+        duration_s=3600.0,
+        step_s=3600.0,
+        capacitance_j_per_k=capacitance_j_per_k,
+        coolant_resistance_k_per_w=coolant_resistance_k_per_w,
+        thermostat_temp_k=308.15,
+        thermostat_full_open_temp_k=313.15,
+        chiller_present=True,
+        chiller_capacity_w=chiller_capacity_w,
+    )
+    assert samples[1][1] == pytest.approx(expected)
+
+
+def test_relax_parked_temp_k_chiller_requires_coolant_path() -> None:
+    """chiller_present/chiller_capacity_w are ignored without an active
+    coolant path -- a chiller sits on the coolant loop, same gating
+    cooling.py's real model uses.
+    """
+    no_coolant_path = relax_parked_temp_k(
+        start_temp_k=330.0, tau_s=1000.0, ambient_fn=lambda _t: 290.0,
+        start_t_s=0.0, duration_s=3600.0, step_s=3600.0,
+        chiller_present=True, chiller_capacity_w=5000.0,
+    )
+    ambient_only = relax_parked_temp_k(
+        start_temp_k=330.0, tau_s=1000.0, ambient_fn=lambda _t: 290.0,
+        start_t_s=0.0, duration_s=3600.0, step_s=3600.0,
+    )
+    assert no_coolant_path == ambient_only
+
+
 def test_pump_soc_decrement_only_counts_intervals_after_charge_event() -> None:
     """Mirrors _parked_soc_trajectory's own reset-step convention exactly:
     an interval wholly before, or straddling, the charge-reset boundary gets

@@ -17,27 +17,34 @@ file holds the items that are genuinely discrete standalone work items.
 
 ## Thermal / cooling physics
 
-- **Refrigerant chiller path is not implemented in `cooling.py`.**
-  `CoolingLoop.chiller_present`/`chiller_capacity_w` exist in the schema
-  but do nothing — a loop with `chiller_present=True` gets no extra heat
-  rejection. This is the single most-repeated open item in the project's
-  history (surfaced independently in the original cooling.py milestone,
-  the BMW i3's DX-cooling approximation note, the Tier-2 parked-period
-  coolant-loop investigation, the mistake library's first entry, and the
-  Blue Bird school-bus profile — which is the first profile to actually
-  set `chiller_present: true`). Root physical reason it keeps mattering:
-  a radiator-only loop can only reject heat toward ambient, never below
-  it; real hot-climate degradation is driven by sustained high ambient
-  temperature itself, which only an active chiller can address. This is
-  the single biggest lever for (a) making the BMW i3's battery-thermal
-  modeling non-approximated (see Milestone D below), and (b) making a
-  future hot-climate `MistakeCase`'s delta match real-world magnitudes
-  (the current Leaf passive-vs-active-cooling case reports +0.06pp SOH
-  over 5 years, far below the ~20%-loss-in-12-months real-world citation,
-  precisely because of this gap). A materially bigger, separately-scoped
-  physics addition (affects the full per-second model, not just Tier-2)
-  deserving its own plan review — deliberately not implemented opportunistically
-  inside any of the milestones that ran into it.
+- **Refrigerant chiller path IS now implemented (`docs/DESIGN_QUESTIONS.md`
+  Q-0021, `docs/MILESTONES.md`'s "Chiller path implementation" milestone)
+  — but it doesn't yet visibly change any published number.**
+  `CoolingLoop.chiller_present`/`chiller_capacity_w`/`chiller_power_w` are
+  now real, unit-tested physics in `cooling.py`/`controller.py`/`sim.py`/
+  `long_horizon.py` (confirmed correct: a direct test with artificially
+  hot ambient shows the chiller engaging and cooling below ambient — the
+  one thing a radiator-only loop can never do). **What's still open**: the
+  chiller does NOT engage in any currently-tested REAL scenario, including
+  Blue Bird (the only `chiller_present: true` profile) under both its
+  native climate and a synthetic Guam-like test, because the coolant
+  loop's own temperature never crosses the shared placeholder
+  `thermostat_full_open_temp_k` (40°C) — confirmed root cause: Tier-1's
+  hot-soak initial condition only patches the battery node, not the
+  coolant node, so a short trip doesn't have time to heat coolant past the
+  threshold; and Q-0020's own earlier finding already showed a
+  radiator-coupled pack under sustained Guam-like ambient tracks within
+  ~1K of ambient, well below 40°C. Making the chiller actually matter for
+  a real comparison needs one of: a re-derived (currently unsourced)
+  `thermostat_full_open_temp_k`, a coolant-node hot-soak initialization
+  fix, or a genuinely hotter test climate than Guam's mild seasonal
+  amplitude — none decided or attempted here, per this project's "surface
+  it, don't tune toward correct-looking" discipline. This is still the
+  single biggest lever for (a) making the BMW i3's battery-thermal
+  modeling non-approximated (see Milestone D below — a separate, larger
+  schema question, unaffected by this milestone) and (b) making a future
+  hot-climate `MistakeCase`'s delta match real-world magnitudes, once
+  whichever of the above unblocks it.
 - **Milestone D (scheduled but not next): refrigerant-loop schema
   abstraction.** The schema has no way to represent an active refrigerant
   loop (the BMW i3's DX system, or a battery chiller circuit) as anything
@@ -269,6 +276,14 @@ seam" milestone.
   means making `sim.py`'s aux-draw driving-state-aware — a real
   core-physics change (not a test-harness fix), deserving its own plan
   review, not attempted opportunistically inside Q-0016's resolution.
+- **`advance_charging_step` doesn't model cabin HVAC/accessory draw during
+  a charging session at all** — found while wiring the chiller's own
+  parasitic draw into the charge current request (Q-0021): cooling-loop
+  draw (pump/fan/chiller) now nets against the charger's power budget, but
+  `aux_power_w` (hvac/accessory) is a separate, pre-existing simplification
+  this fix deliberately did not touch. A real DC fast-charge session with
+  cabin conditioning running would draw against the same charger budget.
+  Revisit alongside a real charger model.
 
 ## Physics simplifications flagged for eventual replacement
 

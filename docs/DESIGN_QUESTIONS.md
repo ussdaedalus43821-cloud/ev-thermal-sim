@@ -988,6 +988,123 @@ code it calls is.
   claim that this specific hypothetical edit reproduces any one of those
   vehicles' exact numbers.
 
+## Q-0021 — Chiller path implementation: control gating and pump/fan energy-accounting prerequisite
+
+- Date: 2026-09-25
+- Context: `cooling.py`'s chiller path (`CoolingLoop.chiller_present`/
+  `chiller_capacity_w`) has been a known deferred item since the original
+  cooling.py milestone, repeatedly re-surfaced (BMW i3's DX approximation,
+  Q-0020's parked-period investigation, the mistake library's Leaf case,
+  the Blue Bird profile) and explicitly deferred each time as "a
+  materially bigger, separately-scoped physics addition... deserving its
+  own plan review." This is that plan review, requested directly.
+  **Scope**: `CoolingLoop`-level chiller (bolted onto an existing glycol
+  loop — Blue Bird's shared PowerDrive 7000 TMM). Explicitly NOT Milestone
+  D (the BMW i3's standalone DX refrigerant system, which has no
+  `CoolingLoop` at all) — the i3-vs-Leaf publication caveat is unaffected
+  by this milestone.
+  **A pre-existing gap found while scoping, not assumed**: `step_cooling`
+  already computes `pump_power_w`/`fan_power_w`, but in `sim.py`'s full
+  per-second model this draw is never charged to the battery
+  (`battery_current_request_a` is computed at step 4, before `step_cooling`
+  runs at step 5) and never appears in `EnergyTotals` (no field for it).
+  Predates this milestone entirely. A chiller's own electrical draw would
+  inherit the identical flaw if not addressed — repeating the exact
+  "models the effect without the mechanism" shortcut Q-0004 (preconditioning)
+  and Q-0020 (parked pump draw) already explicitly rejected.
+- Options considered (chiller control gating):
+  1. **Second-stage thermostat ramp**: chiller engages only once the
+     radiator/fan alone can't hold the loop below `thermostat_full_open_temp_k`
+     — real BMS logic avoids running a chiller when the radiator would do.
+     (Approved — see resolution.)
+  2. **Always-on alongside fan**: simpler, same ramp as fan duty, no
+     second-stage gating. Rejected: doesn't reflect real chiller usage
+     patterns and likely overstates SOC cost.
+- Options considered (pump/fan energy-accounting gap):
+  1. **Fix as an in-scope prerequisite.** The chiller would otherwise
+     inherit the same flaw; direct Q-0004/Q-0020 precedent. Touches
+     `EnergyTotals`'s schema and re-validates every profile's existing
+     energy balance (small magnitude, but touches published numbers).
+     (Approved — see resolution.)
+  2. **Defer, ship chiller with the same known gap, flagged.** Rejected
+     given the direct precedent this project has twice already applied to
+     an identical shape of problem.
+- Blocking: yes
+- **Resolution (2026-09-25): Option 1 for both, approved by the user.**
+  Implementation plan:
+  1. **Schema**: `CoolingLoop.chiller_power_w: Sourced[float] | None`
+     (electrical draw at full chiller duty — `chiller_capacity_w` alone
+     only says how much heat it can remove, not what it costs). Only Blue
+     Bird's YAML needs a real value (placeholder, `TODO(spec-sourcing)`,
+     matching every other unresearched field's convention). New
+     `EnergyTotals.cooling_parasitic_j` (pump+fan+chiller electrical draw
+     summed over a run) closes the pre-existing gap.
+  2. **`cooling.py`**: `step_cooling` gains `chiller_duty: float = 0.0`.
+     Chiller heat removal is the one mechanism that can pull coolant BELOW
+     ambient (the radiator term is capped at `coolant_temp - ambient`;
+     chiller isn't) — modeled as a separate additive term, not folded into
+     the epsilon-NTU radiator calculation. `chiller_power_w * chiller_duty`
+     is real electrical draw, fed through the same path as pump/fan.
+  3. **`controller.py`**: new `commanded_chiller_duty: dict[str, float]`
+     per loop. Gated on `_duty_ramp` evaluated against
+     `thermostat_full_open_temp_k` (not `thermostat_temp_k`) as its own
+     threshold — i.e. reuses the existing ramp shape, shifted to the point
+     where the radiator/fan path is already saturated, per Option 1 above.
+  4. **`sim.py`**: wire `commanded_chiller_duty` through; fold
+     pump+fan+chiller draw into `battery_current_request_a` (moving that
+     computation after `step_cooling`, or restructuring the step order —
+     exact mechanics decided during implementation) and into
+     `EnergyTotals.cooling_parasitic_j`.
+  5. **`long_horizon.py`**: `relax_parked_temp_k` gains a chiller-aware
+     term for Tier-2's parked model, mirroring Q-0020's thermostat-gated-
+     ramp-plus-SOC-decrement pattern — but a chiller pulls temperature
+     toward a setpoint BELOW ambient, not just faster toward it, so it
+     cannot be represented as another parallel resistance the way Q-0020's
+     coolant path was; needs its own mechanism, prototyped carefully rather
+     than assumed by analogy.
+  **Validation plan**: full suite + new unit tests (cooling.py chiller
+  term, controller.py gating, energy-balance-with-chiller-draw). Re-run
+  and re-record: Blue Bird's already-published 90-day/20-year numbers
+  (expect LESS conservative results this time — the existing chiller-gap
+  caveat already told readers to expect this) and the mistake library's
+  Leaf case (the original motivating example — Q-0020's own finding was
+  that the chiller is the single biggest lever for its +0.0628pp-vs-
+  ~20%-real-world-citation gap). `examples/flagship_comparison.py`'s
+  numbers are NOT expected to change (none of the six passenger profiles
+  set `chiller_present: true`) but will be re-run to confirm.
+  **Out of scope**: Milestone D (i3 DX abstraction), real COP-based
+  refrigerant thermodynamics (placeholder capacity/power values, same
+  convention as every other unsourced field), any profile besides Blue
+  Bird (the only one with `chiller_present: true` today).
+- **Implementation complete (2026-09-25). Full record in
+  `docs/MILESTONES.md`'s "Chiller path implementation" milestone.** Built
+  exactly per the resolution above (schema, `cooling.py`, `controller.py`,
+  `sim.py` including the pump/fan energy-accounting prerequisite fix,
+  `long_horizon.py`), 282 tests passing (13 new), the two `@pytest.mark.
+  slow` cases, `mypy --strict`, `ruff` all clean. **A real finding
+  surfaced by re-validation, not chased toward a bigger number**: the
+  chiller mechanism is confirmed correct in isolation (a direct `sim.py`
+  test with artificially hot ambient shows it engaging and cooling below
+  ambient), but it does not engage in ANY currently-tested real scenario
+  — including Blue Bird under both its native Columbus, OH climate and a
+  synthetic Guam-like test climate — because the coolant loop's own
+  temperature never crosses the shared `thermostat_full_open_temp_k`
+  placeholder (40°C). Root cause, confirmed directly: Tier-1's hot-soak
+  initial condition only patches the battery node, not the coolant node
+  (so a short hot-soak trip doesn't have time to heat coolant past the
+  threshold even when the cell itself starts pre-heated), and Q-0020's own
+  earlier finding already established that a radiator-coupled pack under
+  sustained Guam-like ambient tracks within ~1K of ambient, nowhere near
+  40°C either. Blue Bird's own 90-day/20-year numbers moved by
+  noise-level amounts (<0.02pp), not the reduction the chiller was built
+  to provide. Neither the threshold, the hot-soak initialization
+  convention, nor the test climates were adjusted to produce a bigger
+  effect — this is reported as-is, per this project's explicit "surface
+  it, don't tune toward correct-looking" discipline. What would actually
+  make the chiller matter for a real comparison (a re-derived threshold, a
+  coolant-node hot-soak fix, or a hotter test climate) is left as an open
+  question, not decided here.
+
 ## Q-0020 — Tier-2 parked-period coolant-loop coupling: physics model and energy-cost consistency
 
 - Date: 2026-09-25

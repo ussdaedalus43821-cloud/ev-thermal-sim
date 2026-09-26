@@ -39,6 +39,16 @@ thermostat (a more eager response), a lower value spreads the same ramp
 over a wider window. It's a multiplier on an already-placeholder shape, not
 a real calibrated control law.
 
+`commanded_chiller_duty` (Q-0021) is a genuine SECOND STAGE, not a scaled
+copy of fan duty: it ramps against the loop's own coolant temperature too,
+but the ramp's threshold is `thermostat_full_open_temp_k` (where the
+fan/radiator path is already fully engaged), not `thermostat_temp_k` —
+real BMS logic avoids running a chiller when the radiator alone would do,
+since it has a real running cost. `min_duty=0.0` (unlike pump/fan's nonzero
+floors): a real refrigerant compressor genuinely idles at zero, it doesn't
+need to keep spinning below its engagement point. Always `0.0` for a loop
+with `chiller_present=False`.
+
 `coolant_temps_k` and the `serves`-matching below are keyed by `CoolingLoop.
 name`/`ThermalNode.name`, never by sim.py's internal `coolant_{loop_name}`
 node-naming convention — this module's interface is loop-level, staying
@@ -227,6 +237,7 @@ def step_controller(
 
     commanded_pump_duty: dict[str, float] = {}
     commanded_fan_duty: dict[str, float] = {}
+    commanded_chiller_duty: dict[str, float] = {}
     for loop in cooling_loops:
         thermostat_temp_k = loop.thermostat_temp_k.value
         served_temps_k = [component_temps_k[name] for name in loop.serves if name in component_temps_k]
@@ -237,11 +248,17 @@ def step_controller(
         commanded_fan_duty[loop.name] = _duty_ramp(
             coolant_temps_k[loop.name], thermostat_temp_k, effective_span_k, MIN_FAN_DUTY
         )
+        commanded_chiller_duty[loop.name] = (
+            _duty_ramp(coolant_temps_k[loop.name], loop.thermostat_full_open_temp_k.value, effective_span_k, 0.0)
+            if loop.chiller_present
+            else 0.0
+        )
 
     return ControllerStepResult(
         commanded_torque_nm=commanded_torque_nm,
         commanded_pump_duty=commanded_pump_duty,
         commanded_fan_duty=commanded_fan_duty,
+        commanded_chiller_duty=commanded_chiller_duty,
         battery_current_demand_a=battery_current_demand_a,
         causal_events=causal_events,
     )
