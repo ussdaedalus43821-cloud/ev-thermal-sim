@@ -15,7 +15,10 @@ exists in tests/test_profiles_commercial.py and is not repeated here.
 This profile did not previously have a UsageProfile/ChargingProfile/Climate
 of its own (docs/ROADMAP.md's "Transition seam" section flagged this as
 blocking) -- this script builds them here, from real sources wherever one
-exists:
+exists. As of Q-0022 (docs/DESIGN_QUESTIONS.md), the UsageProfile/
+ChargingProfile/day_type_mix built here are this profile's CANONICAL
+usage/charging data, not scaffolding scoped to this validation pass alone
+-- they now feed the Transition-seam SOH-delta table too.
 
 - Climate: real NOAA 1991-2020 normals for Columbus, OH (the School Bus
   Depot preset's real location in Transition/src/constants.ts), the same
@@ -31,24 +34,47 @@ exists:
   -- not invented, but Transition's own preset data is itself flagged there
   as "not a real ridership study," so this remains a placeholder one level
   removed from field research, same as every other profile's UsageProfile.
-- ChargingProfile: charge_power_kw=11.0 matches Transition's real
+- ChargingProfile (Q-0022): charge_power_kw=11.0 matches Transition's real
   chargingDemandPerVehicleKWPlaceholder for this preset (overnight L2,
   single depot). dc_fast_charge_fraction=0.0 -- a depot-charged school bus
   fleet has no real DC fast-charging usage pattern to model, consistent
   with Transition's own L2-only assumption for this preset.
-  typical_start_soc/typical_end_soc reuse the flagship comparison's own
-  0.5/0.8 convention rather than being tuned to this vehicle's real
-  ~150-mile range and ~74mi/day usage -- a known simplification, flagged,
-  not blocking this validation pass's actual purpose (catching gross
-  physical implausibility, not producing a usage-accurate published
-  number).
-- day_type_mix: COLD_START_COMMUTE/HOT_SOAK_COMMUTE/CITY_STOP_AND_GO split
-  evenly across Transition's real ~180 school-days-per-year figure, no
+  typical_end_soc=1.0 (a real depot-charged fleet with no opportunity
+  charging to plan a lower target around charges to full overnight) and
+  typical_start_soc=1.0-70/150~=0.5333 (end-of-route SOC after the real
+  ~70mi/day usage against this vehicle's own real ~150mi range) -- derived
+  from this vehicle's own disclosed numbers, not the passenger-car 0.5/0.8
+  convention reused before Q-0022. **Extrapolation caveat, same class as
+  the 20-year time-horizon one**: typical_end_soc=1.0 sits OUTSIDE the
+  calendar-aging coefficients' own calibration range (aging.py's two fleet
+  anchors were derived under constant 80%/60% SOC, never 100%) -- any SOH
+  number from this profile should carry this caveat alongside
+  docs/model_reference.md's existing "Validated time horizon" one.
+- day_type_mix (Q-0022): COLD_START_COMMUTE/HOT_SOAK_COMMUTE/
+  CITY_STOP_AND_GO split, computed LIVE (not a hardcoded magic number) by
+  classifying every calendar day in a real US public-school academic-year
+  window (Aug 15 - May 31) against Columbus's own already-sourced climate,
+  using ambient_temp_k's existing sinusoidal model at each archetype's own
+  more physically relevant hour: TRIP_HOUR_OF_DAY (8:00, morning, the cold
+  proxy) for COLD_START_COMMUTE, DIURNAL_PEAK_HOUR (15:00, afternoon, the
+  hot proxy) for HOT_SOAK_COMMUTE, against round thresholds (cold <5C,
+  hot >25C) -- then scaled to Transition's real 180-day annual total. No
   HIGHWAY occurrences (school bus routes are local, not highway-speed) and
   no FAST_CHARGE_SESSION occurrences (matches the charging-profile
-  assumption above). This specific 60/60/60 split is a reasonable,
-  clearly-flagged assumption for a first validation pass, not a
-  researched usage claim.
+  assumption above). Replaces the pre-Q-0022 even 60/60/60 split with a
+  climate-grounded one (cold=79, hot=16, neutral=85) -- **checked, not
+  assumed**: this does NOT land "heavy" on HOT_SOAK_COMMUTE (16/180, LESS
+  than the old even split's 60/180), but the COLD-leaning classification
+  (79/180) already sees real Columbus winter mornings as cold as ~4.5C,
+  BELOW aging.py's 20-40C calibrated envelope -- a pre-existing exposure
+  (the old 60/60/60 split already included 60 COLD_START_COMMUTE days
+  seeing the same real winters), not newly introduced here, but now
+  flagged explicitly rather than left implicit. This reclassification only
+  changes the SPLIT among the real 180 trip days -- it does not change the
+  180 trip / ~185 fully-parked split itself, and does not affect how
+  Tier-2 computes calendar aging for the non-trip days, which already
+  independently uses each real day's own seasonal ambient regardless of
+  day_type_mix's archetype split.
 
 A real, separately-flagged limitation this script does NOT attempt to fix:
 the underlying archetype speed traces in long_horizon.py's characterization
@@ -69,7 +95,13 @@ from __future__ import annotations
 import argparse
 import math
 
-from ev_thermal.long_horizon import characterize_all_trips, simulate_long_horizon
+from ev_thermal.long_horizon import (
+    DIURNAL_PEAK_HOUR,
+    TRIP_HOUR_OF_DAY,
+    ambient_temp_k,
+    characterize_all_trips,
+    simulate_long_horizon,
+)
 from ev_thermal.profile_loader import load_profile
 from ev_thermal.schema import (
     AnnualDayTypeMix,
@@ -128,31 +160,78 @@ def columbus_climate() -> Climate:
     )
 
 
+SCHOOL_YEAR_START_DAY_OF_YEAR = 227
+"""Aug 15 -- start of a real US public-school academic-year window used to
+classify day_type_mix (Q-0022). Wraps around New Year's via SCHOOL_YEAR_END."""
+
+SCHOOL_YEAR_END_DAY_OF_YEAR = 151
+"""May 31 -- end of the academic-year window (see SCHOOL_YEAR_START_DAY_OF_YEAR)."""
+
+COLD_MORNING_THRESHOLD_K = 278.15
+"""5C -- below this, TRIP_HOUR_OF_DAY (8:00) ambient classifies a day as
+COLD_START_COMMUTE-leaning (Q-0022)."""
+
+HOT_AFTERNOON_THRESHOLD_K = 298.15
+"""25C -- above this, DIURNAL_PEAK_HOUR (15:00) ambient classifies a day as
+HOT_SOAK_COMMUTE-leaning (Q-0022)."""
+
+REAL_SCHOOL_DAYS_PER_YEAR = 180
+"""Transition's real SCHOOL_BUS_DEPOT_PRESET annual-mileage derivation
+(70mi/day x ~180 school days/year)."""
+
+
+def _school_year_days_of_year() -> list[int]:
+    return list(range(SCHOOL_YEAR_START_DAY_OF_YEAR, 366)) + list(range(1, SCHOOL_YEAR_END_DAY_OF_YEAR + 1))
+
+
 def school_bus_day_type_mix() -> list[AnnualDayTypeMix]:
-    """Split evenly across Transition's real ~180-school-day-per-year figure
-    (SCHOOL_BUS_DEPOT_PRESET.fleet.vehicleClasses[0].avgAnnualMileage's own
-    "70mi/day x ~180 school days/year" derivation). No HIGHWAY occurrences
-    (school bus routes are local); no FAST_CHARGE_SESSION occurrences
-    (depot L2 charging only, matching the charging profile below).
+    """Computed LIVE against Columbus's own already-sourced climate (Q-0022),
+    not a hardcoded split -- classifies every calendar day in a real US
+    public-school academic-year window (Aug 15 - May 31) by each archetype's
+    own more physically relevant hour: TRIP_HOUR_OF_DAY (8:00, morning, the
+    cold proxy) for COLD_START_COMMUTE, DIURNAL_PEAK_HOUR (15:00, afternoon,
+    the hot proxy) for HOT_SOAK_COMMUTE -- then scales the resulting
+    proportions to Transition's real 180-day annual total. No HIGHWAY
+    occurrences (school bus routes are local); no FAST_CHARGE_SESSION
+    occurrences (depot L2 charging only, matching the charging profile
+    below). See this module's own docstring and docs/DESIGN_QUESTIONS.md
+    Q-0022 for the full reasoning, including why this does NOT land "heavy"
+    on HOT_SOAK_COMMUTE despite Columbus's real summers, and the separate
+    calendar-aging-envelope caveat the COLD-leaning days carry.
     """
+    climate = columbus_climate()
+    cold_days = 0
+    hot_days = 0
+    for day_of_year in _school_year_days_of_year():
+        morning_k = ambient_temp_k(climate, day_of_year, TRIP_HOUR_OF_DAY)
+        afternoon_k = ambient_temp_k(climate, day_of_year, DIURNAL_PEAK_HOUR)
+        if morning_k < COLD_MORNING_THRESHOLD_K:
+            cold_days += 1
+        elif afternoon_k > HOT_AFTERNOON_THRESHOLD_K:
+            hot_days += 1
+    total_days = len(_school_year_days_of_year())
+
+    cold_occurrences = round(REAL_SCHOOL_DAYS_PER_YEAR * cold_days / total_days)
+    hot_occurrences = round(REAL_SCHOOL_DAYS_PER_YEAR * hot_days / total_days)
+    neutral_occurrences = REAL_SCHOOL_DAYS_PER_YEAR - cold_occurrences - hot_occurrences
+
+    derivation_source = (
+        "computed from Columbus's own real NOAA-normal climate (Q-0022, docs/DESIGN_QUESTIONS.md) -- "
+        "classified against Aug15-May31 real school-year window, TRIP_HOUR_OF_DAY/DIURNAL_PEAK_HOUR "
+        "morning/afternoon proxies, cold<5C / hot>25C thresholds, scaled to the real 180-day total"
+    )
     return [
         AnnualDayTypeMix(
             trip_type=TripType.COLD_START_COMMUTE,
-            occurrences_per_year=_sourced(
-                60, "1/3 of Transition's real ~180 school-days/year figure -- assumption, not independently researched"
-            ),
+            occurrences_per_year=_sourced(cold_occurrences, derivation_source),
         ),
         AnnualDayTypeMix(
             trip_type=TripType.HOT_SOAK_COMMUTE,
-            occurrences_per_year=_sourced(
-                60, "1/3 of Transition's real ~180 school-days/year figure -- assumption, not independently researched"
-            ),
+            occurrences_per_year=_sourced(hot_occurrences, derivation_source),
         ),
         AnnualDayTypeMix(
             trip_type=TripType.CITY_STOP_AND_GO,
-            occurrences_per_year=_sourced(
-                60, "1/3 of Transition's real ~180 school-days/year figure -- assumption, not independently researched"
-            ),
+            occurrences_per_year=_sourced(neutral_occurrences, derivation_source),
         ),
     ]
 
@@ -193,12 +272,16 @@ def school_bus_charging_profile() -> ChargingProfile:
             11.0, "Transition SCHOOL_BUS_DEPOT_PRESET.fleet.vehicleEconomics.chargingDemandPerVehicleKWPlaceholder"
         ),
         typical_start_soc=_sourced(
-            0.5,
-            "reused from flagship_comparison.py -- not tuned to this vehicle, a known simplification (see docstring)",
+            1.0 - 70.0 / 150.0,
+            "Q-0022, docs/DESIGN_QUESTIONS.md -- end-of-route SOC after the real ~70mi/day usage "
+            "(SCHOOL_BUS_DEPOT_PRESET) against this vehicle's own real ~150mi range (commercial_profiles_v1.md)",
         ),
         typical_end_soc=_sourced(
-            0.8,
-            "reused from flagship_comparison.py -- not tuned to this vehicle, a known simplification (see docstring)",
+            1.0,
+            "Q-0022, docs/DESIGN_QUESTIONS.md -- a real depot-charged fleet with no opportunity charging to plan "
+            "a lower target around charges to full overnight. CAVEAT: outside aging.py's calendar-aging "
+            "calibration range (anchors are 80%/60% constant SOC, never 100%) -- carries the same class of "
+            "extrapolation caveat as the 20-year time-horizon one (docs/model_reference.md)",
         ),
         dc_fast_charge_fraction=_sourced(
             0.0,

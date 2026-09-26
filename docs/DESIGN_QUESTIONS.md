@@ -1211,3 +1211,89 @@ code it calls is.
   existing flagship-comparison record. `tests/
   test_long_horizon_validation.py`'s E2d harness was re-checked too — see
   docs/MILESTONES.md for its pass/fail status.
+
+## Q-0022 — Promoting Blue Bird's UsageProfile/ChargingProfile from validation-scaffolding to canonical: SOC convention and day_type_mix methodology
+
+- Date: 2026-09-25
+- Context: `docs/ROADMAP.md`'s "Transition seam" section flagged that
+  Blue Bird's `UsageProfile`/`ChargingProfile`/`day_type_mix` (built in
+  `examples/validate_blue_bird_vision_electric.py`) were "constructed for
+  this validation pass, not yet formally adopted as the profile's
+  canonical usage/charging data for a published Transition-seam
+  comparison." Promoting them to canonical (feeding the seam table) meets
+  this project's escalation bar directly: it determines numbers that will
+  be published and reused elsewhere (Q-0021's own autonomy-scope memory,
+  test 2). Two specific choices needed ratifying, not silent adoption:
+  1. `typical_start_soc`/`typical_end_soc` currently reuse
+     `flagship_comparison.py`'s passenger-car convention (0.5/0.8),
+     explicitly flagged "not tuned to this vehicle" — despite Blue Bird's
+     own real range (~150mi) and Transition's own real usage (70mi/day,
+     single-depot overnight charging) being disclosed and already used
+     elsewhere in this same profile.
+  2. `day_type_mix` splits Transition's real ~180 school-days/year evenly
+     60/60/60 across `COLD_START_COMMUTE`/`HOT_SOAK_COMMUTE`/
+     `CITY_STOP_AND_GO`, flagged "a reasonable assumption, not a
+     researched usage claim."
+- Options considered (SOC convention):
+  1. **Derive from Blue Bird's own real range/usage.**
+     `typical_end_soc=1.0` (real depot fleets charge to full overnight —
+     no opportunity charging to plan a lower target around) and
+     `typical_start_soc = 1.0 - 70/150 ≈ 0.5333` (end-of-route SOC after
+     the real ~70mi day against the real ~150mi range). Grounded in this
+     vehicle's own disclosed numbers, not a reused passenger-car
+     assumption. (Approved, with an added requirement — see resolution.)
+  2. **Keep 0.5/0.8, flagged as a permanent simplification.** Simpler,
+     matches flagship's own convention for cross-profile comparability,
+     but the seam table would publish an SOC pair inconsistent with this
+     vehicle's own disclosed range. Rejected.
+- Options considered (day_type_mix methodology):
+  1. **Derive from Columbus's real seasonal climate**, using the SAME
+     `ambient_temp_k` sinusoidal model and `columbus_climate()` object
+     already sourced for this profile (no new data invented) — classify
+     each calendar day in a real US public-school academic-year window
+     (Aug 15 – May 31) by its own morning (`TRIP_HOUR_OF_DAY`=8:00, cold
+     proxy) and afternoon (`DIURNAL_PEAK_HOUR`=15:00, hot proxy) ambient
+     against round thresholds (cold <5°C, hot >25°C), then scale the
+     resulting proportions to the real 180-day total. (Approved — see
+     resolution.)
+  2. **Keep the even 60/60/60 split, flagged as permanent.** Avoids
+     inventing a seasonal-classification methodology; an even split isn't
+     inherently unreasonable (a school year spans all seasons). Rejected
+     — grounding in the real, already-sourced climate was judged worth
+     the extra methodology work.
+- Blocking: yes
+- **Resolution (2026-09-25): Option 1 for both, approved by the user, each
+  with an explicit added requirement.**
+  1. **SOC**: `typical_end_soc=1.0`, `typical_start_soc=1.0 - 70/150 ≈
+     0.5333`. **Added requirement**: `typical_end_soc=1.0` sits OUTSIDE
+     the calendar-aging coefficients' own calibration range (the two
+     fleet anchors — see `aging.py`'s "Coefficient provenance" — were
+     derived under constant 80%/60% SOC, never 100%) — this must be
+     flagged as carrying the same class of extrapolation caveat as the
+     already-established 20-year time-horizon caveat
+     (`docs/model_reference.md`'s "Validated time horizon" section), not
+     silently treated as within-range just because it's real.
+  2. **day_type_mix**: computed via the approved Option 1 methodology —
+     **cold=79, hot=16, neutral(`CITY_STOP_AND_GO`)=85** (of 180 real
+     school days; see `examples/validate_blue_bird_vision_electric.py`'s
+     `school_bus_day_type_mix` for the live, reproducible computation, not
+     a hardcoded magic number). **Added requirement, checked directly**:
+     does this land "heavy" on `HOT_SOAK_COMMUTE` (only 16/180, actually
+     LESS than the prior even split's 60/180) — no, but the COLD-leaning
+     classification (79/180) already routinely sees mornings as cold as
+     ~4.5°C within the real school-year window, which is below `aging.py`'s
+     20-40°C calibrated envelope (a pre-existing exposure, not newly
+     introduced by this reclassification — the prior 60/60/60 split
+     already included 60 `COLD_START_COMMUTE` days seeing the same real
+     Columbus winter mornings). Flagged alongside the SOC caveat, not
+     silently absorbed. **Second added requirement, verified by
+     construction, not just claimed**: this reclassification only changes
+     the SPLIT among the real 180 trip days — it does not change the trip
+     day / parked day split itself (180 trip / ~185 fully-parked, both
+     unchanged) and does not affect how Tier-2 computes calendar aging for
+     the ~185 non-trip days, which already independently accrues using
+     each real day's own seasonal ambient regardless of day_type_mix's
+     archetype split.
+  Full record, including the re-validated 90-day/20-year Blue Bird numbers
+  under this canonical data, in `docs/MILESTONES.md`'s corresponding
+  milestone.

@@ -49,7 +49,7 @@ Transition — see `docs/seam_reconnaissance.md`.
   decision to do so; it would break the causal attribution these
   comparisons exist to demonstrate.
 - **Don't invent parameters.** If a value, field, or model isn't specified,
-  ask before adding it rather than guessing a plausible-sounding number or
+  research the answers or ask before adding it rather than guessing a plausible-sounding number or
   shape.
 
 ## Coding standards

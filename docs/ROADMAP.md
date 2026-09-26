@@ -224,17 +224,24 @@ seam" milestone.
   Altitude is a trivial per-location lookup; a generic peak-irradiance
   placeholder (the passenger profiles all use one) would suffice for a
   first version.
-- **Done: the Blue Bird profile now has a real `UsageProfile`/
-  `ChargingProfile` and has been run through a real Tier-1 characterization
-  and a 90-day Tier-2 trajectory** — see `docs/MILESTONES.md`'s "Blue Bird
-  Vision Electric validation" milestone for the full record, including a
-  real causal-event bug this validation caught and fixed (affecting all
-  seven profiles, not just this one) and a second implausible-placeholder
-  fix specific to this profile (`inverter.peak_current_a`). Still open: the
-  `UsageProfile`/`ChargingProfile` built for this were constructed for this
-  validation pass, not yet formally adopted as the profile's canonical
-  usage/charging data for a published Transition-seam comparison — revisit
-  once that comparison is actually being built.
+- **Done: the Blue Bird profile has a real `UsageProfile`/`ChargingProfile`,
+  now CANONICAL (`docs/DESIGN_QUESTIONS.md` Q-0022, not scaffolding scoped
+  to a single validation pass), run through a real Tier-1 characterization
+  and both 90-day and 20-year Tier-2 trajectories, under both its native
+  climate and a real hot-climate stress test.** See `docs/MILESTONES.md`'s
+  "Blue Bird Vision Electric validation," "Chiller path implementation,"
+  "Hot climate chiller investigation," "Source real chiller_capacity_w
+  data," and "Promote Blue Bird's UsageProfile/ChargingProfile to
+  canonical" milestones for the full record — including a real causal-
+  event bug fixed across all seven profiles, an implausible-placeholder
+  fix (`inverter.peak_current_a`), a real chiller-path implementation, and
+  a canonical SOC convention (`typical_end_soc=1.0`, `typical_start_soc≈
+  0.5333`, both derived from this vehicle's own disclosed range/usage —
+  carries an extrapolation caveat, since 1.0 sits outside `aging.py`'s
+  80%/60% calendar-aging calibration range) and `day_type_mix` (cold=79,
+  hot=16, neutral=85, derived live from Columbus's own real climate, not
+  an even split). This is now the most thoroughly validated profile in
+  the project.
 - **The second Transition vehicle class (tank-wash truck) is explicitly
   deferred** until the seam is proven end-to-end on the primary (school
   bus) case.

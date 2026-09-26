@@ -2727,3 +2727,64 @@ whole history to find.
   aggregate already reflects both paths together, correctly.
   Full suite (285 tests), both `@pytest.mark.slow` cases, `mypy --strict`,
   `ruff` all pass unchanged.
+- **Milestone "Promote Blue Bird's UsageProfile/ChargingProfile to
+  canonical" (done, 2026-09-25, `docs/DESIGN_QUESTIONS.md` Q-0022, step 1
+  of the seam-table plan the user laid out directly):** closes
+  `docs/ROADMAP.md`'s own flagged gap — this profile's usage/charging data
+  was "constructed for this validation pass, not yet formally adopted...
+  for a published Transition-seam comparison." Two choices needed
+  ratifying before promotion, not silent adoption; both resolved by the
+  user directly (Option 1 in both cases, each with an added requirement —
+  full record in Q-0022).
+  **SOC convention**: `typical_end_soc` 0.8 → 1.0 (a real depot-charged
+  fleet with no opportunity charging charges to full overnight);
+  `typical_start_soc` 0.5 → 1.0-70/150 ≈ 0.5333 (end-of-route SOC after
+  the real ~70mi/day usage against this vehicle's real ~150mi range) —
+  both now derived from Blue Bird's own disclosed numbers, not reused from
+  `flagship_comparison.py`'s passenger-car convention. **Extrapolation
+  caveat, carried in the field's own `source` note, not left implicit**:
+  `typical_end_soc=1.0` sits outside `aging.py`'s calendar-aging
+  calibration range (the two fleet anchors were derived under constant
+  80%/60% SOC, never 100%) — same class of caveat as the already-
+  established 20-year time-horizon one.
+  **day_type_mix methodology**: replaced the even 60/60/60 split with a
+  LIVE computation (`school_bus_day_type_mix`, not a hardcoded number) —
+  classifies every calendar day in a real US public-school academic-year
+  window (Aug 15 – May 31) against Columbus's own already-sourced climate,
+  using `ambient_temp_k`'s existing sinusoidal model at each archetype's
+  more physically relevant hour (`TRIP_HOUR_OF_DAY`/8:00 morning for the
+  cold proxy, `DIURNAL_PEAK_HOUR`/15:00 afternoon for the hot proxy)
+  against round thresholds (cold <5°C, hot >25°C), scaled to Transition's
+  real 180-day annual total. **Result: cold=79, hot=16,
+  neutral(`CITY_STOP_AND_GO`)=85** — genuinely different from the old even
+  split, not a cosmetic reshuffle. **Checked, not assumed, per the
+  ratification's own added requirements**: (1) this does NOT land "heavy"
+  on `HOT_SOAK_COMMUTE` (16/180, actually less than the old 60/180); (2)
+  the COLD-leaning classification (79/180) already sees real Columbus
+  winter mornings as cold as ~4.5°C, below `aging.py`'s 20-40°C calibrated
+  envelope — a pre-existing exposure (the old split already had 60 such
+  days), now flagged explicitly rather than left implicit; (3) verified by
+  construction that this reclassification only changes the SPLIT among
+  the real 180 trip days — the 180-trip/~185-parked split itself is
+  unchanged, and Tier-2's parked-day calendar aging already independently
+  uses each real day's own seasonal ambient regardless of this split.
+  **Re-validated, not just swapped in**: 90-day total SOH loss 0.5328% →
+  0.6861% (calendar-dominated, consistent with the higher average SOC now
+  correctly ageing faster per `calendar_aging_soc_sensitivity`); 20-year
+  57.9756% → 74.0392% (SOH 42.0% → 26.0% remaining) — a substantial,
+  expected move in the correct direction, now compounding TWO documented
+  extrapolations (20-year time horizon 2-4x past the 5-10yr calibration
+  window, AND SOC=1.0 outside the 60-80% calibration range) rather than
+  one. Still finite and monotonically non-increasing, not degenerate.
+  `examples/chiller_hot_climate_investigation.py` re-run for consistency:
+  its own chiller-effect finding (the actual subject of that
+  investigation) is unchanged in magnitude (0.00048pp/0.0116% relative,
+  vs. 0.00039pp/0.0111% before this profile-data change) — confirming
+  that finding was robust to this unrelated canonical-data promotion, as
+  expected, since it's about the chiller's own thermal mechanism, not the
+  charging convention.
+  Full suite (285 tests), both `@pytest.mark.slow` cases, `mypy --strict`,
+  `ruff` all pass unchanged. **What's next, per the user's own plan**:
+  close the two `Climate` fields on Transition's own `ClimateZone` (a
+  cross-repo, mechanical step), then the actual table-generation script —
+  neither done in this milestone.
