@@ -90,16 +90,18 @@ later, or left undecided) is tracked in `docs/ROADMAP.md`. This section is
 just the handful of gaps load-bearing enough to know before touching
 related code:
 
-- **Refrigerant chiller physics ARE implemented (Q-0021, plus a hot-soak
-  coolant-initialization follow-up).** `cooling.py`/`controller.py`/
-  `sim.py`/`long_horizon.py` all have real, unit-tested chiller behavior —
-  confirmed engaging under at least one real (not synthetic) condition
-  (Blue Bird's hottest hot-soak commute). Blue Bird's own numbers still
-  moved by well under 1 percentage point (the coolant cools faster than
-  the chiller offsets within one short trip), but **Tesla Model 3's
-  flagship-comparison 20-year number moved materially (14.35% → 14.84%
-  total loss, ~3.4% relative)** since it also has an active battery
-  coolant loop — don't cite the old Model3/Seattle figure. See
+- **Refrigerant chiller physics ARE implemented (Q-0021, plus two
+  follow-ups: hot-soak coolant initialization, and a real-climate
+  investigation).** `cooling.py`/`controller.py`/`sim.py`/`long_horizon.py`
+  all have real, unit-tested chiller behavior — confirmed engaging at FULL
+  capacity under a real, NOAA-sourced hot climate (Phoenix, AZ). The
+  remaining blocker is now specific: `chiller_capacity_w` (5000W
+  placeholder, already flagged as likely undersized) is too small relative
+  to the pack's own thermal mass to matter within a single trip, not an
+  engagement-timing problem. **Tesla Model 3's flagship-comparison 20-year
+  number moved materially (14.35% → 14.84% total loss, ~3.4% relative)**
+  from the hot-soak fix, since it has an active battery coolant loop —
+  don't cite the old Model3/Seattle figure. See
   `docs/ROADMAP.md`'s "Thermal / cooling physics" section for what's still
   open (threshold re-derivation, hotter test climates).
   Milestone D (BMW i3's standalone DX-refrigerant abstraction) is

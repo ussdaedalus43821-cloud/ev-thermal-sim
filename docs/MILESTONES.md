@@ -2591,3 +2591,55 @@ whole history to find.
   serve_the_battery`, `test_hot_soak_coolant_patch_lets_chiller_engage_
   where_battery_only_patch_would_not`. Full suite (285 tests, up from
   282), both `@pytest.mark.slow` cases, `mypy --strict`, `ruff` all pass.
+- **Milestone "Hot climate chiller investigation" (done, 2026-09-25, the
+  second of the three candidate causes the chiller milestone identified —
+  a genuinely hotter test climate than Guam's mild seasonal amplitude —
+  tried directly, at the user's request):** new
+  `examples/chiller_hot_climate_investigation.py`, the committed,
+  reproducible runner.
+  **Real, sourced climate, not invented**: NOAA NCEI 1991-2020 normals for
+  Phoenix Sky Harbor Intl AP, AZ (station USW00023183), same derivation
+  convention already used for Blue Bird's own Columbus, OH climate —
+  annual mean 75.6°F, hottest month (July) mean 95.5°F, coolest month
+  (January) mean 56.8°F, average monthly diurnal range 22.95°F. Genuinely
+  different SHAPE from the Guam-like test climate, not just a hotter
+  version of it: Phoenix's annual mean (24.2°C) is actually LOWER than
+  Guam's (30°C, Phoenix has real winters), but its amplitude is far
+  larger (seasonal 10.75K, daily 12.75K vs. Guam's 2K/4K), so its implied
+  peak ambient (47.7°C) is well above both Guam's (36°C) and the chiller's
+  40°C engagement threshold, where Guam's peak never got close.
+  **Result, in two parts, found by actually running it rather than
+  reasoning about it in the abstract:**
+  1. **The chiller DOES engage, dramatically, confirmed by direct
+     time-series inspection**: `commanded_chiller_duty` reaches 1.0 (full
+     5000W draw) throughout Blue Bird's `HOT_SOAK_COMMUTE` archetype at
+     the hottest (47.7°C) ambient bucket — closing this candidate cause
+     with a real, positive answer, not another null result like Guam's.
+  2. **But even running at full capacity for the entire ~1200s trip, the
+     chiller only shaves 0.03-0.35K off the battery's own mean cell
+     temperature** (measured phase by phase: warm_up 0.025K,
+     cruise_and_stops 0.187K, final_decel 0.350K) — because
+     `chiller_capacity_w` (5000W, a placeholder already flagged in Blue
+     Bird's own YAML as "likely undersized for a bus-size battery pack,"
+     see the original commercial-profile milestone) is small relative to
+     the pack's own thermal capacitance (990,000 J/K): even a full
+     6,000,000J of chiller work over the trip's duration is a small
+     fraction of what it would take to move a thermal mass that large by
+     a meaningful amount in 20 minutes. The resulting 1-year Tier-2
+     aggregate SOH effect is correspondingly negligible: 0.00027818
+     percentage points absolute (3.51090196% total loss with the chiller
+     vs. 3.51118014% without), 0.007923% relative.
+  **This is a materially more specific finding than "not tested hot
+  enough," and closes the "hotter test climate" candidate cause with a
+  real, evidence-based answer rather than leaving it untried**: the
+  remaining blocker on making the chiller matter for a published
+  comparison is `chiller_capacity_w`'s own magnitude, not chiller
+  engagement timing, the coolant/threshold interaction (both already
+  fixed and confirmed working), or climate choice. Re-deriving that
+  placeholder against a real bus-scale automotive chiller spec (not
+  attempted here — no such source was found during the original profile
+  research either) is the natural next candidate cause, not yet tried.
+  Not tuned toward a bigger effect at any point in this investigation —
+  the negligible result is reported exactly as measured.
+  Full suite (285 tests), `mypy --strict`, `ruff` all pass unchanged (this
+  milestone added one new example script, no source or test changes).
