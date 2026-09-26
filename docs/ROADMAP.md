@@ -69,6 +69,28 @@ file holds the items that are genuinely discrete standalone work items.
   forward as a deferred aging-model fidelity item — any multi-year SOH
   number presented outside `docs/MILESTONES.md`'s own record should still
   carry `docs/model_reference.md`'s "Validated time horizon" caveat.
+- **Neither calendar-aging calibration anchor was ever run against a
+  climate with real seasonal amplitude** (Leaf/Guam: 2K seasonal, 4K
+  daily; Model3/Seattle: 8K/6K; both anchors themselves were constant-
+  temperature, zero-amplitude single-condition benchmarks — see `aging.py`'s
+  "Coefficient provenance"). The Blue Bird's 20-year point estimate
+  (`docs/MILESTONES.md`'s "Blue Bird Vision Electric — 20-year point
+  estimate" milestone) surfaced this concretely, not just theoretically:
+  Columbus, OH's 12.5K seasonal / 5.11K daily amplitude produced HIGHER
+  calendar-aging loss (56.14% over 20 years) than the Leaf's near-constant
+  ~30C Guam climate (49.29%), despite Columbus's much milder annual mean
+  and this profile's active liquid cooling vs. the Leaf's passive air
+  cooling — the opposite of the pre-run expectation. Likely mechanism
+  (evidence-consistent, not chased down or fixed): the calendar term's
+  Arrhenius exponential is convex in temperature, so a climate whose hot
+  half reaches Guam-like peaks while its cold half drops well below it
+  does not average out to "milder than Guam" in aging-rate terms — real
+  physics, but never tested against an anchor with this much seasonal
+  swing. Re-deriving or bounding the calendar-aging coefficients against a
+  realistic seasonal-amplitude range (not just a realistic mean
+  temperature) is open, unscoped future work — not attempted opportunistically
+  inside the milestone that found it, same discipline as the chiller-path
+  gap above.
 - **Anchor calibration sensitivity to assumed constant-SOC conditions**
   (from the parked-SOC model milestone): the two calendar-aging
   coefficients were calibrated against anchors stated under constant

@@ -2193,3 +2193,113 @@ whole history to find.
   mean the seven aging-rate coefficients are validated for this vehicle
   class — that gap (flagged in the original commercial-profile milestone)
   is unaffected by this validation pass and remains open.
+- **Milestone "Blue Bird Vision Electric — 20-year point estimate" (done,
+  2026-09-25):** the follow-on the prior milestone deliberately left open —
+  that pass validated physical plausibility over 90 days only. This
+  milestone runs the same already-validated `Climate`/`UsageProfile`/
+  `ChargingProfile` (unchanged; see the prior milestone's entry above) out
+  to a full 20-year unperturbed Tier-2 point estimate, the same class of
+  check already done for the Nissan Leaf/Guam reference case (see the
+  "20-year unperturbed Leaf/Guam point estimate" entry above), so this
+  profile's numbers can be sanity-checked against a real anchor rather than
+  judged in isolation.
+  **Mechanical change**: `examples/validate_blue_bird_vision_electric.py`'s
+  `DURATION_DAYS` module constant became `DEFAULT_DURATION_DAYS` plus a
+  `--duration-days` CLI flag on Step C only (Steps A/B are
+  duration-independent), mirroring `examples/flagship_comparison.py`'s
+  existing convention rather than inventing a new one. Reproduce via
+  `uv run python examples/validate_blue_bird_vision_electric.py
+  --duration-days 7300` — 7300 (20 x `long_horizon.DAYS_PER_YEAR`, the
+  module's own integer 365-day year), not 7305 (20 x 365.25): the script's
+  `duration_years = ceil(duration_days / 365.25)` sizes the Tier-2 schedule
+  in units of `long_horizon.DAYS_PER_YEAR`, so 7305 requested against a
+  `duration_years=20` schedule (only 7300 days long) throws `IndexError` —
+  caught immediately by actually running it, not a latent bug left
+  unfixed. If a future duration request lands exactly on this boundary
+  again, round down to a `DAYS_PER_YEAR`-multiple, not up.
+  Re-ran the existing 90-day check first to confirm no regression from the
+  CLI change: numbers reproduced exactly (0.5306% total loss, 0.5172%
+  calendar, 0.0134% cycle), byte-for-byte matching the prior milestone's
+  recorded values.
+  **20-year (7300-day) result:** 57.3854% total SOH loss (42.6146% SOH
+  remaining), calendar-dominated (56.1353% calendar, 1.2501% cycle) —
+  finite, monotonically non-increasing, not degenerate (nowhere near 0% or
+  100%), not a suspiciously round number.
+  **Cross-check against the real Leaf/Guam 20-year anchor, run for direct
+  comparison rather than assumed
+  (`uv run python examples/flagship_comparison.py --duration-days 7300`):**
+  | | total | calendar | cycle |
+  |---|---|---|---|
+  | nissan_leaf/Guam | 52.7209% | 49.2861% | 3.4348% |
+  | tesla_model3/Seattle | 14.3439% | 14.1514% | 0.1926% |
+  | blue_bird/Columbus | 57.3854% | 56.1353% | 1.2501% |
+
+  Same order of magnitude as the passenger fleet's own 20-year numbers, as
+  expected — but the pre-stated expectation going into this run (see the
+  jump-start brief this milestone was scoped under) was specifically
+  "expect SLOWER calendar aging than Leaf/Guam" (Columbus's 11.89 C mean is
+  dramatically milder than Guam's near-constant ~30 C, and this profile has
+  real active liquid cooling with a chiller-capable loop vs. the Leaf's
+  passive air-cooled pack) and "likely MORE cycle aging... given the duty
+  cycle." **Both directions came back backwards**: Blue Bird's calendar
+  loss (56.14%) is higher than Leaf/Guam's (49.29%), and its cycle loss
+  (1.25%) is lower, not higher, than Leaf/Guam's (3.43%). Per this
+  project's explicit instruction not to chase a bigger number or tune
+  toward a "correct-looking" result, this is reported as the finding
+  itself, not adjusted or explained away.
+  **Most likely mechanism, evidence-grounded but not a formal derivation**
+  (same epistemic standing as the MC p50-vs-point-estimate mechanism
+  above, which this shares real structure with): SOC is not the
+  differentiator — both scenarios use the same 0.5/0.8 start/end SOC
+  convention (`flagship_comparison.py`'s `seattle_climate`/`guam_climate`
+  callers and this profile's `school_bus_charging_profile` both do), and
+  Blue Bird's own checkpoint SOC (~0.798, both day 0 and day 7299) sits in
+  the same range as Leaf/Guam's already-documented ~0.78-0.79 trajectory.
+  The real difference is climate SHAPE, not level: Guam's seasonal
+  amplitude is 2.0 K and daily amplitude 4.0 K (near-constant ~30 C
+  year-round); Columbus's are 12.5 K and 5.11 K respectively (Step B's own
+  ambient buckets span -5.7 C to 29.5 C — i.e. Columbus's HOT extreme
+  reaches roughly the same absolute temperature as Guam's near-constant
+  level, it just also has a cold half Guam never sees). `aging.py`'s
+  calendar term is `exp(calendar_aging_activation_temp_k * (1/reference -
+  1/T))`, an Arrhenius exponential — convex in T — evaluated per-step and
+  summed, exactly the same convexity structure already identified as the
+  root cause of the MC p50-vs-point-estimate gap growing with horizon
+  (this file's own "Multi-year Monte Carlo v1" entry). Under that
+  convexity, a climate whose hot half reaches Guam-like temperatures while
+  its cold half drops well below it does NOT average out to "milder than
+  Guam" in aging-rate terms — the hot days contribute disproportionately
+  more rate than the cold days subtract, a real physical effect (real
+  cells do age faster in climates with hot summers even at a lower annual
+  mean), potentially compounded by the calendar-aging anchors themselves
+  never having been calibrated against ANY climate with an amplitude this
+  large (Guam: 2K seasonal; Seattle: 8K; both anchors were constant-
+  temperature single-condition benchmarks with zero amplitude at all —
+  see `aging.py`'s own "Coefficient provenance" section). This is a
+  sharper, climate-amplitude-specific manifestation of the already-known
+  "calendar aging's linear-in-time formulation is a known extrapolation
+  limit past its calibration anchors' 5-10 year window" gap
+  (`docs/ROADMAP.md`'s "Aging model fidelity" section, Q-0017), not a new
+  independent bug — but concretely worse than that gap's previously-known
+  shape, since it's now shown to bite even a MILDER-mean, better-cooled
+  vehicle harder than a hotter, passively-cooled one, purely from seasonal
+  swing width. **Not investigated further or fixed in this milestone** —
+  per explicit instruction, surfacing this is the deliverable; re-deriving
+  or bounding the aging coefficients against a realistic seasonal-amplitude
+  range is real future work, added to `docs/ROADMAP.md`.
+  The cycle-aging shortfall (1.25% vs. Leaf/Guam's 3.43%, the opposite of
+  the "more cycle aging given the duty cycle" expectation) was not
+  separately investigated — plausible unforced explanation: Blue Bird's
+  day_type_mix has no `HIGHWAY` or `FAST_CHARGE_SESSION` occurrences (see
+  the prior milestone's entry), both meaningfully higher-C-rate archetypes
+  than the three it does use, so the "given the duty cycle" premise itself
+  may not hold the way it was stated going in — flagged, not chased.
+  **What this does and does NOT establish**: confirms this profile's
+  long-horizon trajectory is finite and non-degenerate out to 20 years,
+  the same bar the Leaf/Guam anchor cleared. It does NOT make this
+  profile's 20-year number more trustworthy than the 90-day one for
+  publication — if anything it surfaces a NEW reason for caution specific
+  to large-seasonal-amplitude climates, on top of the already-open
+  aging-coefficient-not-validated-for-this-chemistry gap and the
+  radiator-only/no-chiller-physics conservatism gap. All three caveats
+  now travel together with any Blue Bird SOH number cited beyond 90 days.

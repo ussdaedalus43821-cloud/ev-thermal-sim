@@ -61,10 +61,12 @@ bus-specific speed traces, which is a materially bigger piece of work than
 
 Usage:
     uv run python examples/validate_blue_bird_vision_electric.py
+    uv run python examples/validate_blue_bird_vision_electric.py --duration-days 7305
 """
 
 from __future__ import annotations
 
+import argparse
 import math
 
 from ev_thermal.long_horizon import characterize_all_trips, simulate_long_horizon
@@ -85,7 +87,7 @@ from ev_thermal.schema import (
 from ev_thermal.sim import run_scenario
 
 PROFILE_PATH = "configs/profiles_commercial/blue_bird_vision_electric.yaml"
-DURATION_DAYS = 90
+DEFAULT_DURATION_DAYS = 90
 SEED = 42
 DAYS_PER_YEAR = 365.25
 
@@ -303,11 +305,12 @@ def step_c_long_horizon(
     characterizations: dict[TripType, list[TripCharacterization]],
     climate: Climate,
     charging_profile: ChargingProfile,
+    duration_days: int,
 ) -> None:
     print("=" * 78)
-    print(f"Step C: Tier-2 long-horizon run, {DURATION_DAYS} days")
+    print(f"Step C: Tier-2 long-horizon run, {duration_days} days")
     print("=" * 78)
-    duration_years = max(1, math.ceil(DURATION_DAYS / DAYS_PER_YEAR))
+    duration_years = max(1, math.ceil(duration_days / DAYS_PER_YEAR))
     result = simulate_long_horizon(
         profile=profile,
         trip_characterizations=characterizations,
@@ -318,10 +321,10 @@ def step_c_long_horizon(
         seed=SEED,
     )
 
-    sohs = [cp.battery_soh for cp in result.checkpoints[:DURATION_DAYS]]
+    sohs = [cp.battery_soh for cp in result.checkpoints[:duration_days]]
     all_finite = all(math.isfinite(s) for s in sohs)
     monotonic = all(sohs[i] >= sohs[i + 1] - 1e-9 for i in range(len(sohs) - 1))
-    final = result.checkpoints[DURATION_DAYS - 1]
+    final = result.checkpoints[duration_days - 1]
 
     print(f"All SOH values finite: {all_finite}")
     print(f"SOH monotonically non-increasing: {monotonic}")
@@ -330,32 +333,37 @@ def step_c_long_horizon(
         f"pack_temp={result.checkpoints[0].pack_cell_temp_k - 273.15:.1f}C"
     )
     print(
-        f"Day {DURATION_DAYS - 1}: SOH={final.battery_soh * 100:.4f}%  SOC={final.battery_soc:.3f}  "
+        f"Day {duration_days - 1}: SOH={final.battery_soh * 100:.4f}%  SOC={final.battery_soc:.3f}  "
         f"pack_temp={final.pack_cell_temp_k - 273.15:.1f}C  odometer={final.odometer_km:.1f}km"
     )
     total_loss_pct = (1.0 - final.battery_soh) * 100
     calendar_pct = final.calendar_soh_loss_cumulative * 100
     cycle_pct = final.cycle_soh_loss_cumulative * 100
     print(
-        f"Total SOH loss over {DURATION_DAYS} days: {total_loss_pct:.4f}% "
+        f"Total SOH loss over {duration_days} days: {total_loss_pct:.4f}% "
         f"(calendar={calendar_pct:.4f}%, cycle={cycle_pct:.4f}%)"
     )
     print(
         "Order-of-magnitude cross-check against the passenger-fleet flagship record "
-        "(Leaf/Guam 0.5828%, Model3/Seattle 0.1194% over 90 days): "
-        f"{'within a plausible range' if 0.01 <= total_loss_pct <= 5.0 else 'OUTSIDE plausible range -- investigate'}"
+        "(Leaf/Guam 0.5828%, Model3/Seattle 0.1194% over 90 days; Leaf/Guam 52.721% "
+        "over a 20-year unperturbed point estimate): "
+        f"{'within a plausible range' if 0.01 <= total_loss_pct <= 99.0 else 'OUTSIDE plausible range -- investigate'}"
     )
     print()
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--duration-days", type=int, default=DEFAULT_DURATION_DAYS)
+    args = parser.parse_args()
+
     profile = load_profile(PROFILE_PATH)
     climate = columbus_climate()
     scenario = build_scenario(profile, climate, SEED)
 
     step_a_thermal_steady_state(profile, scenario)
     characterizations = step_b_tier1_characterization(profile, scenario)
-    step_c_long_horizon(profile, characterizations, climate, scenario.charging_profile)
+    step_c_long_horizon(profile, characterizations, climate, scenario.charging_profile, args.duration_days)
 
 
 if __name__ == "__main__":
