@@ -259,6 +259,22 @@ seam" milestone.
   sim.py only checks vehicle speed, since there's no external-charger
   model yet to make "parked but charging" a distinguishable state. Wire
   this in once a charger model exists.
+- **`sim.py`'s aux-draw (`aux_current_a`, from `hvac_power_w +
+  accessory_load_w`) is applied unconditionally every step, not
+  driving-state-aware.** During a real parked period, `hvac_power_w` is
+  not a realistic 24/7 drain — `long_horizon.py`'s Tier-2 decay model
+  already accounts for this by using `accessory_load_w` alone while
+  parked (see `simulate_long_horizon`'s own docstring), but `sim.py`
+  itself has no such distinction, so any full-fidelity per-second run
+  through a parked period over-draws SOC relative to Tier-2's own
+  assumption. Confirmed as a real, measurable residual (not just
+  theoretical) by `docs/DESIGN_QUESTIONS.md` Q-0016's resolution: after
+  fixing `test_long_horizon_validation.py`'s reference-generator cadence
+  to otherwise match Tier-2, a 0.122%/0.035% absolute (Leaf/Model 3)
+  residual gap remained, consistent with this exact mechanism. Closing it
+  means making `sim.py`'s aux-draw driving-state-aware — a real
+  core-physics change (not a test-harness fix), deserving its own plan
+  review, not attempted opportunistically inside Q-0016's resolution.
 
 ## Physics simplifications flagged for eventual replacement
 

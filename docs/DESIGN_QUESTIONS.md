@@ -786,6 +786,28 @@ code it calls is.
   on this harness. This harness's OWN fidelity is a separate, real gap,
   named explicitly rather than left to be discovered by a future flaky
   failure.
+- **Resolution (2026-09-25): Option 1 (fix the cadence), decided and
+  documented per the autonomy grant — reversing a stale test reference to
+  match its own system-under-test's already-shipped model is an
+  implementation detail, not a new design decision.** `_generate_tier1_
+  reference_soh` now applies exactly one instantaneous SOC reset per day
+  at `charge_reset_hour`, mirroring `_parked_soc_trajectory`'s own reset
+  condition, replacing the stale hourly-reset-to-`typical_end_soc`
+  behavior. **Confirmed by direct measurement that option 1's own caveat
+  was correct**: the cadence fix alone did NOT close the gap — the
+  aux-draw-model divergence (`sim.py`'s real per-second physics applies
+  full `hvac_power_w + accessory_load_w` unconditionally while parked;
+  Tier-2's decay model uses `accessory_load_w` alone) is a second,
+  independent residual, and measured post-fix at 0.122%/0.035% absolute
+  (Leaf/Model 3, same 60-day/seed=123 window) — large enough to push the
+  Leaf case past the old 0.001 absolute floor. Per this same resolution,
+  the floor was widened to 0.002 (documented in the test's own docstring
+  and the tolerance's own comment, with the measured numbers on record —
+  not picked to make one specific run pass). Making `sim.py`'s aux-draw
+  behavior driving-state-aware, which would close this residual for real,
+  remains out of scope — a materially bigger core-physics change, now
+  tracked in `docs/ROADMAP.md`'s "Charging model gaps" section rather than
+  attempted opportunistically here. Full record in `docs/MILESTONES.md`.
 
 ## Q-0017 — 47.3% vs. 55-70% multi-year SOH gate: accept as documented extrapolation limit, or investigate further?
 
