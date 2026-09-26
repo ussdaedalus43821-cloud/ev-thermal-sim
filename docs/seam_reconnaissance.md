@@ -239,6 +239,17 @@ previously-unnamed residual gap, surfaced by trying the actual thing
 rather than reasoning about it in the abstract. Worth closing alongside
 whenever `ChargingProfile`/`UsageProfile` (below) get built.
 
+**Closed (2026-09-25):** `ClimateZone` (`Transition/src/types.ts`) gained
+`altitudeFt`/`solarIrradianceWPerM2`, populated for both real presets —
+School Bus Depot (Columbus, OH, ~889ft) and Tank Wash (Cedar Rapids, IA,
+~810ft) — with a shared 250 W/m² placeholder for the irradiance field,
+matching every ev-thermal-sim reference profile's own convention. Added
+as data only, same "not yet consumed by any mechanics" precedent as
+`day_type_mix`'s own empty default. See `docs/MILESTONES.md`'s "Close
+Transition's ClimateZone gap" milestone for the full record. Building a
+real `Scenario` for the seam no longer fails on missing `Climate` fields —
+this residual gap is fully closed alongside gap 3.
+
 **`duty_cycle_archetype` axis:** still not populated on Transition's
 `Route` (gap 2, unchanged, deliberately deferred) — but this checked out
 differently than §5's original framing implied. A FIRST version of the

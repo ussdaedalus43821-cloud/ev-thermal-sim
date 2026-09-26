@@ -2788,3 +2788,40 @@ whole history to find.
   close the two `Climate` fields on Transition's own `ClimateZone` (a
   cross-repo, mechanical step), then the actual table-generation script —
   neither done in this milestone.
+- **Milestone "Close Transition's ClimateZone gap" (done, 2026-09-25, step
+  2 of the seam-table plan, a cross-repo change in the sibling `Transition`
+  repository):** closes `docs/seam_reconnaissance.md` §7's own residual
+  finding — gap 3 (the three temperature fields) was closed earlier, but
+  a real `Scenario` for the seam still couldn't be built without
+  `altitude_m`/`solar_irradiance_w_per_m2` too, which `ClimateZone` never
+  had. Genuinely mechanical, as flagged: no design question needed.
+  **`Transition/src/types.ts`**: `ClimateZone` gained `altitudeFt`
+  (matching the file's existing Fahrenheit/imperial convention — convert
+  at the seam boundary via `altitudeM = altitudeFt * 0.3048`, same pattern
+  the three temperature fields already use) and `solarIrradianceWPerM2`
+  (explicitly documented as NOT the same quantity as the existing
+  `solarYieldFactor`, an annual generation-yield figure for solar-array
+  sizing, not peak irradiance for cabin heat-gain modeling).
+  **`Transition/src/constants.ts`**: both real presets populated —
+  `altitudeFt: 889` (Columbus, OH, the School Bus Depot preset's real
+  location) and `altitudeFt: 810` (Cedar Rapids, IA, the Tank Wash
+  preset's real location), both real per-location lookups, not
+  placeholders. `solarIrradianceWPerM2: 250` for both — a shared
+  placeholder, matching every ev-thermal-sim reference profile's own
+  convention for this field, per `seam_reconnaissance.md` §7's own
+  guidance that a first version doesn't need a real per-location figure.
+  Added as data only, not yet consumed by any mechanics there — same
+  precedent as `day_type_mix`'s own empty default already established in
+  this codebase.
+  **Verification, honestly reported**: this environment has no Node.js/
+  npm/`tsc` available, so the TypeScript changes could NOT be compiler-
+  checked — verified instead by careful manual review (both edits are
+  small, additive, primitive-typed fields with no generics/unions
+  involved) and by confirming, via `grep`, that `constants.ts`'s two
+  preset objects are the ONLY places in the entire `Transition` codebase
+  that construct a `ClimateZone`, so no other construction site needed
+  updating for the two new required fields. Committed in the `Transition`
+  repository (`7e9d26b`) but NOT pushed — that repo already had one
+  earlier, unrelated commit ahead of `origin/main` before this session
+  touched it, and pushing both together wasn't this session's call to
+  make without asking.

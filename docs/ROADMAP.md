@@ -216,14 +216,15 @@ seam" milestone.
   style field on `VehicleClass` pointing at the new Blue Bird profile, and
   the precomputed SOH-delta table interface itself (shape proposed in
   `docs/seam_reconnaissance.md` §5).
-- **`Climate`'s `altitude_m`/`solar_irradiance_w_per_m2` still aren't on
-  Transition's `ClimateZone`** (`solarYieldFactor` is a different
-  quantity — annual generation yield, not peak irradiance). A real
-  `Scenario` for the seam still can't be built until these exist there
-  too, even though the three temperature fields (gap 3) are closed.
-  Altitude is a trivial per-location lookup; a generic peak-irradiance
-  placeholder (the passenger profiles all use one) would suffice for a
-  first version.
+- **Done: `Climate`'s `altitude_m`/`solar_irradiance_w_per_m2` are now on
+  Transition's `ClimateZone`** (as `altitudeFt`/`solarIrradianceWPerM2`,
+  Fahrenheit/imperial convention matching that file's existing temperature
+  fields) — real elevations for both presets (Columbus, OH ~889ft; Cedar
+  Rapids, IA ~810ft), a shared 250 W/m² placeholder for irradiance
+  (`solarYieldFactor` remains a different quantity — annual generation
+  yield, not peak irradiance). A real `Scenario` for the seam no longer
+  fails on missing `Climate` fields. See `docs/seam_reconnaissance.md`
+  §7 and `docs/MILESTONES.md`'s corresponding milestone.
 - **Done: the Blue Bird profile has a real `UsageProfile`/`ChargingProfile`,
   now CANONICAL (`docs/DESIGN_QUESTIONS.md` Q-0022, not scaffolding scoped
   to a single validation pass), run through a real Tier-1 characterization
