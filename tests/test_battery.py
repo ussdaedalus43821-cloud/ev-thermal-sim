@@ -10,7 +10,12 @@ from __future__ import annotations
 
 import pytest
 
-from ev_thermal.battery import BatteryStabilityError, available_charge_current_a, step_battery
+from ev_thermal.battery import (
+    BatteryStabilityError,
+    available_charge_current_a,
+    available_discharge_current_a,
+    step_battery,
+)
 from ev_thermal.schema import BatterySpec, Confidence, Sourced, ThermalNode
 
 _COOLANT_TEMP_K = 298.15
@@ -208,6 +213,48 @@ def test_available_charge_current_a_throttles_above_soc_curve_knee() -> None:
     assert near_full < below_knee
     # placeholder curve: scale=0.2 at soc=0.97 vs scale=1.0 below the knee
     assert near_full / below_knee == pytest.approx(0.2, abs=0.01)
+
+
+def test_min_charge_temp_k_none_keeps_symmetric_cutoff_with_min_operating_temp_k() -> None:
+    """Default (min_charge_temp_k=None) behavior is unchanged: charge cuts
+    off at the same min_operating_temp_k discharge uses -- the fixture's
+    253.15K.
+    """
+    spec = _make_battery_spec()
+    assert spec.min_charge_temp_k is None
+
+    just_above = available_charge_current_a(spec, soc=0.5, cell_temp_k=253.16, v_rc_v=0.0)
+    at_or_below = available_charge_current_a(spec, soc=0.5, cell_temp_k=253.15, v_rc_v=0.0)
+
+    assert just_above > 0.0
+    assert at_or_below == 0.0
+
+
+def test_min_charge_temp_k_set_cuts_off_charge_higher_than_discharge() -> None:
+    """The BMW i3's real asymmetric range (charge 0-60C, discharge -25-60C)
+    is the motivating case: min_charge_temp_k, when set, governs CHARGE
+    only -- available_discharge_current_a must remain governed by
+    min_operating_temp_k alone, unaffected by this field (see
+    BatterySpec.min_charge_temp_k's own docstring).
+    """
+    spec = _make_battery_spec().model_copy(update={"min_charge_temp_k": _sourced(273.15)})
+
+    # Between the two cutoffs (253.15K discharge floor, 273.15K charge floor):
+    # discharge must still be available, charge must not be.
+    mid_temp_k = 263.15
+    charge_a = available_charge_current_a(spec, soc=0.5, cell_temp_k=mid_temp_k, v_rc_v=0.0)
+    discharge_a = available_discharge_current_a(spec, soc=0.5, cell_temp_k=mid_temp_k, v_rc_v=0.0)
+
+    assert charge_a == 0.0
+    assert discharge_a > 0.0
+
+    # step_battery's causal event should name the field that actually bound.
+    result = _step(spec, current_request_a=-1000.0, soc=0.5, cell_temp_k=mid_temp_k)
+    assert result.applied_current_a == 0.0
+    cutoff_events = [e for e in result.causal_events if "at/below" in e.description]
+    assert len(cutoff_events) == 1
+    assert "min_charge_temp_k" in cutoff_events[0].description
+    assert "min_operating_temp_k" not in cutoff_events[0].description
 
 
 def test_charge_current_throttled_at_high_soc_end_to_end() -> None:

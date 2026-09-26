@@ -327,9 +327,9 @@ class BatterySpec(BaseModel):
             "if different from min_operating_temp_k (which remains the discharge-"
             "side, and default/shared, hard cutoff). None means charge shares "
             "min_operating_temp_k's cutoff, i.e. today's symmetric behavior is "
-            "unchanged. Not yet read by battery.py — see docs/MILESTONES.md's deferred-work "
-            "note; battery.available_charge_current_a still uses "
-            "min_operating_temp_k for both directions until that's wired in."
+            "unchanged. Read by battery.available_charge_current_a and "
+            "battery.compute_battery_electrical_step via _min_temp_cutoff_k — "
+            "discharge always uses min_operating_temp_k, unaffected by this field."
         ),
     )
     calendar_aging_rate_per_s: Sourced[float] = Field(

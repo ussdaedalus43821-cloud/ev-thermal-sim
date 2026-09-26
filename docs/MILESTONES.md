@@ -2353,3 +2353,43 @@ whole history to find.
   change out of scope for a test-harness fix — added to `docs/ROADMAP.md`'s
   "Charging model gaps" section as its own deferred item, not attempted
   opportunistically here.
+- **Milestone "Wire in `BatterySpec.min_charge_temp_k`" (done,
+  2026-09-25):** closes the ROADMAP's own "schema-only fields not yet read"
+  item for this field — the profile-population milestone added it
+  specifically to represent the BMW i3's real, sourced asymmetric range
+  (research: "charge 0-60C, discharge -25-60C") but left it unread,
+  `available_charge_current_a` using the single `min_operating_temp_k`
+  (the DISCHARGE-side cutoff, -25C/248.15K for the i3) for both directions
+  in the meantime. Picked up as an already-fully-specified, non-
+  architecture-touching fix (the exact wiring was already written down in
+  `docs/ROADMAP.md`'s own entry), decided and documented per the autonomy
+  grant rather than escalated.
+  **Fix**: new private `battery._min_temp_cutoff_k(spec, is_discharge)` —
+  discharge always returns `min_operating_temp_k`; charge returns
+  `min_charge_temp_k` when set, else falls back to `min_operating_temp_k`
+  (today's symmetric behavior for every profile except the i3, unchanged).
+  Wired into `available_charge_current_a`'s hard-cutoff term and into
+  `compute_battery_electrical_step`'s `below_min_operating_temp`/causal-
+  event logic — the causal event's own description now names whichever
+  field actually bound (`min_charge_temp_k` vs. `min_operating_temp_k`),
+  the same "don't mislabel the actual binding constraint" discipline the
+  Blue Bird validation milestone's `DERATE_TRIGGERED` fix already
+  established for motor/inverter.
+  **Confirmed by direct numeric check, not assumed**: the i3's
+  `available_charge_current_a` is now 0.0A at and below 0C (273.15K, the
+  charge-side cutoff) and non-zero above it, while
+  `available_discharge_current_a` remains non-zero all the way down to
+  -24C, unaffected — cutting off 25K higher for charge than discharge,
+  matching the real asymmetric range this field exists to represent. No
+  other profile is affected (`min_charge_temp_k: null` for all six other
+  YAMLs) and no previously-published number used the i3 as a default
+  profile (`bmw_i3.yaml` only ever appeared as example `--profile-a`/
+  `--profile-b` CLI-flag usage text, never a default run) — this is a
+  purely additive correctness fix, not a revision to any recorded result.
+  New regression tests in `tests/test_battery.py`
+  (`test_min_charge_temp_k_none_keeps_symmetric_cutoff_with_min_operating_
+  temp_k`, `test_min_charge_temp_k_set_cuts_off_charge_higher_than_
+  discharge`). Full suite (269 tests), `mypy --strict`, `ruff` all pass;
+  the one pre-existing `mypy --strict` error in `tests/test_battery.py`'s
+  own `_step` helper (missing return annotation) was confirmed present on
+  `main` before this change, not introduced by it.

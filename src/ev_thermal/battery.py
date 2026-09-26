@@ -152,6 +152,20 @@ def ocv_v(spec: BatterySpec, soc: float, cell_temp_k: float) -> float:
     return _ocv_v(spec, soc, cell_temp_k)
 
 
+def _min_temp_cutoff_k(spec: BatterySpec, is_discharge: bool) -> float:
+    """The hard cutoff below which all current in this direction is zero.
+    Discharge always uses `min_operating_temp_k`. Charge uses
+    `min_charge_temp_k` when the profile has researched one (currently only
+    the BMW i3, whose real charge/discharge range is asymmetric -- charge
+    0-60C, discharge -25-60C), falling back to `min_operating_temp_k`
+    otherwise -- today's symmetric behavior for every other profile,
+    unchanged. See `BatterySpec.min_charge_temp_k`'s own docstring.
+    """
+    if is_discharge or spec.min_charge_temp_k is None:
+        return spec.min_operating_temp_k.value
+    return spec.min_charge_temp_k.value
+
+
 def available_discharge_current_a(spec: BatterySpec, soc: float, cell_temp_k: float, v_rc_v: float) -> float:
     """The battery's discharge current ceiling: single source of truth for
     `step_battery` (clamping a request to it) and `controller.py` (converted
@@ -194,7 +208,7 @@ def available_charge_current_a(spec: BatterySpec, soc: float, cell_temp_k: float
     cold_scale = _cold_derate_scale(
         cell_temp_k, spec.cold_derate_threshold_temp_k.value, spec.cold_derate_activation_temp_k.value
     )
-    thermal_scale = 0.0 if cell_temp_k <= spec.min_operating_temp_k.value else hot_scale * cold_scale
+    thermal_scale = 0.0 if cell_temp_k <= _min_temp_cutoff_k(spec, is_discharge=False) else hot_scale * cold_scale
     return min(voltage_limit_a, soc_charge_limit_a) * thermal_scale
 
 
@@ -239,7 +253,8 @@ def compute_battery_electrical_step(
     derate_temp_k = spec.thermal_node.derate_temp_k.value
     max_temp_k = spec.thermal_node.max_temp_k.value
     hot_scale = _hot_derate_scale(cell_temp_k, derate_temp_k, max_temp_k)
-    below_min_operating_temp = cell_temp_k <= spec.min_operating_temp_k.value
+    min_temp_cutoff_k = _min_temp_cutoff_k(spec, is_discharge)
+    below_min_operating_temp = cell_temp_k <= min_temp_cutoff_k
 
     cold_threshold_k = spec.cold_derate_threshold_temp_k.value
     cold_scale = 1.0
@@ -293,13 +308,15 @@ def compute_battery_electrical_step(
             )
         )
     if below_min_operating_temp:
+        uses_charge_cutoff = not is_discharge and spec.min_charge_temp_k is not None
+        cutoff_field_name = "min_charge_temp_k" if uses_charge_cutoff else "min_operating_temp_k"
         causal_events.append(
             make_causal_event(
                 sim_time_s=sim_time_s,
                 event_type="DERATE_TRIGGERED",
                 description=(
-                    f"Cell temp {cell_temp_k:.1f}K at/below min_operating_temp_k "
-                    f"{spec.min_operating_temp_k.value:.1f}K; all current cut off."
+                    f"Cell temp {cell_temp_k:.1f}K at/below {cutoff_field_name} "
+                    f"{min_temp_cutoff_k:.1f}K; all current cut off."
                 ),
                 affected_component="battery",
                 severity="critical",

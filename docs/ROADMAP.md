@@ -239,10 +239,6 @@ seam" milestone.
 
 ## Schema-only fields not yet read by any physics module
 
-- **`BatterySpec.min_charge_temp_k`** — `available_charge_current_a`
-  still uses the single `min_operating_temp_k` for both directions. When
-  wired in: should use `min_charge_temp_k.value if min_charge_temp_k is
-  not None else min_operating_temp_k.value` as the charge-side cutoff.
 - **`ThermalArchitecture.heat_pump_recovers_powertrain_waste_heat`** —
   descriptive metadata distinguishing a bolt-on cabin heat pump from an
   integrated waste-heat-recovery system; wiring actual recovery into the
