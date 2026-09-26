@@ -17,47 +17,47 @@ file holds the items that are genuinely discrete standalone work items.
 
 ## Thermal / cooling physics
 
-- **Refrigerant chiller path IS now implemented (`docs/DESIGN_QUESTIONS.md`
-  Q-0021 and its two follow-up milestones in `docs/MILESTONES.md`) and
-  DOES now engage — confirmed under a real, hot, NOAA-sourced climate, at
-  full capacity — but the remaining blocker is now specific: the
-  placeholder `chiller_capacity_w` itself, not engagement timing.**
-  `CoolingLoop.chiller_present`/`chiller_capacity_w`/`chiller_power_w` are
-  real, unit-tested physics in `cooling.py`/`controller.py`/`sim.py`/
-  `long_horizon.py`. Of the three candidate causes the chiller milestone
-  identified for why it never engaged in practice, two are now closed by
-  direct investigation, not left untried:
-  1. **Coolant-node hot-soak initialization** (fixed) — the chiller now
-     engages during Blue Bird's own `HOT_SOAK_COMMUTE` archetype. Blue
-     Bird's own 90-day/20-year numbers moved by well under 1 percentage
-     point (a real, measured, honestly-reported small INCREASE, not the
-     decrease a naive "chiller helps" intuition predicts — see the
-     milestone for the mechanism). Tesla Model 3 in the flagship
-     comparison moved more substantially (20-year: 14.35% -> 14.84%, ~3.4%
-     relative) via the same fix, since it also has an active battery
-     coolant loop.
-  2. **A genuinely hotter test climate** (tried, `examples/
-     chiller_hot_climate_investigation.py`) — real NOAA 1991-2020 normals
-     for Phoenix, AZ (implied peak ambient 47.7°C, vs. Guam's 36°C and the
-     chiller's 40°C threshold) make the chiller engage at FULL capacity
-     (duty=1.0, full 5000W draw) throughout the hottest `HOT_SOAK_COMMUTE`
-     characterization. But even running flat out for the entire ~1200s
-     trip, it only shaves 0.03-0.35K off the battery's own mean cell
-     temperature, because `chiller_capacity_w` (5000W, already flagged in
-     Blue Bird's own YAML as "likely undersized for a bus-size battery
-     pack") is small relative to the pack's own thermal capacitance
-     (990,000 J/K) — a genuinely different, more specific finding than
-     "not tested hot enough." 1-year Tier-2 effect: 0.00027818 percentage
-     points absolute, 0.007923% relative.
-  **What's still open**: re-deriving `chiller_capacity_w` against a real
-  bus-scale automotive refrigerant-chiller spec — no such source was found
-  during the original profile research, and none was invented here either,
-  per this project's "surface it, don't tune toward correct-looking"
-  discipline. This is still the single biggest lever for (a) making the
-  BMW i3's battery-thermal modeling non-approximated (see Milestone D
-  below — a separate, larger schema question, unaffected by this work) and
-  (b) making a future hot-climate `MistakeCase`'s delta match real-world
-  magnitudes.
+- **Refrigerant chiller path IS implemented, real, unit-tested, and fully
+  investigated (`docs/DESIGN_QUESTIONS.md` Q-0021 and its three follow-up
+  milestones in `docs/MILESTONES.md`) — all three candidate causes for why
+  it never visibly moved a published number are now closed with evidence,
+  and the honest conclusion is a structural limitation, not a missing
+  parameter.** `CoolingLoop.chiller_present`/`chiller_capacity_w`/
+  `chiller_power_w` are real physics in `cooling.py`/`controller.py`/
+  `sim.py`/`long_horizon.py`, confirmed engaging at full capacity under
+  real conditions (coolant-node hot-soak initialization fixed; a real,
+  NOAA-sourced hot climate — Phoenix, AZ — makes it run flat out;
+  `chiller_capacity_w` is now sourced from real commercial bus-BTMS
+  product data, not a guess — see the milestones for each). **What all
+  three investigations converged on**: even a real, doubled chiller
+  capacity only grew the per-trip cooling effect proportionally (e.g.
+  0.35K → 0.50K on one phase) while the 1-year aggregate SOH effect stayed
+  three to four orders of magnitude too small to matter either way. The
+  blocker was never really the specific wattage — it's a genuine TIMESCALE
+  mismatch between the battery pack's large thermal mass (990,000 J/K) and
+  a single ~20-minute characterized trip, which no further parameter
+  re-derivation can fix. Tesla Model 3 in the flagship comparison DID move
+  substantially (20-year: 14.35% → 14.84%, ~3.4% relative) from the
+  hot-soak-initialization fix alone, since its coolant was previously
+  unrealistically cool during hot-soak trips — that's the one place this
+  work changed a real published number, and it wasn't the chiller
+  operating that did it. This is still the single biggest lever for (a)
+  making the BMW i3's battery-thermal modeling non-approximated (see
+  Milestone D below — a separate, larger schema question, unaffected by
+  this work) and (b) making a future hot-climate `MistakeCase`'s delta
+  match real-world magnitudes — but the negligible 1-year Tier-2 result
+  already reflects BOTH the per-trip AND the parked-period chiller
+  mechanisms together (Tier-2 mixes trip days and fully-parked days over
+  the year, and both paths engage the chiller), not just the trip-level
+  one — checked directly, not assumed: a full parked day starting at 40°C
+  under Phoenix's peak-summer ambient never sustains above the threshold
+  long enough for the chiller to show a measurable effect there either
+  (pack temp caps essentially at the threshold, doesn't cross it
+  meaningfully even over 24 hours). So this isn't a case of "the parked
+  path is untried" — both paths were exercised and both show the same
+  structural ceiling. Accepting the trip/day-level model can't surface
+  this effect at these thermal-mass and duty-cycle magnitudes is the
+  honest conclusion, not a search for a different parameter or mechanism.
 - **Milestone D (scheduled but not next): refrigerant-loop schema
   abstraction.** The schema has no way to represent an active refrigerant
   loop (the BMW i3's DX system, or a battery chiller circuit) as anything

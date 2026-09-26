@@ -444,15 +444,15 @@ thermal_architecture:
         source: "placeholder — outside docs/research/commercial_profiles_v1.md's scope, not vehicle-specific"
       chiller_present: true  # real — the PowerDrive 7000's Thermal Management Module explicitly includes an A/C chiller; the first chiller_present:true profile in this project (see docs/MILESTONES.md's cooling.py chiller-path deferred-work note)
       chiller_capacity_w:
-        value: 5000.0
+        value: 10000.0
         confidence: low
-        source: "estimated — docs/research/commercial_profiles_v1.md"
-        note: "chiller presence is real and sourced (PowerDrive 7000 diagram), but no numeric capacity was disclosed anywhere found; this is a placeholder order-of-magnitude for an automotive-scale chiller, likely undersized for a bus-size battery pack. Q-0021: cooling.py now implements the chiller path (see docs/DESIGN_QUESTIONS.md Q-0021 and docs/MILESTONES.md's chiller-path milestone), so this value now has real physics effect."
+        source: "TKT/Guchen \"11-12M Electric Bus BTMS\" (Model 10CW) product datasheet, busthermo.com — real, size-class-matched commercial product, NOT Blue Bird's own OEM PowerDrive 7000 chiller spec (still undisclosed anywhere found)"
+        note: "the PowerDrive 7000's own chiller capacity remains undisclosed by Cummins/Accelera/Blue Bird in every source checked (spec sheets, warranty bulletin, system-diagram poster — see docs/research/commercial_profiles_v1.md). Revised from an unmotivated 5000W automotive-scale guess (see docs/MILESTONES.md's chiller-capacity-sourcing milestone) to a real, disclosed product spec for the exact vehicle length class this profile belongs to: TKT/Guchen's 11-12M Electric Bus BTMS lists 8-10kW cooling capacity (10CW model, upper end used here) for buses this length (Blue Bird's Type C Vision is ~35-40ft / 10.7-12.2m) at a matching DC voltage range (400-750V spans this pack's 583-689V). Cross-checked against Modine's A-CON BTMS (3-10kW for commercial EVs generally, modine.com) as a second, independent real source in the same range. Still confidence: low -- a real comparable product, not this specific vehicle's own OEM part."
       chiller_power_w:
-        value: 2000.0
+        value: 4375.0
         confidence: low
-        source: "estimated — docs/research/commercial_profiles_v1.md"
-        note: "no disclosed electrical rating for the PowerDrive 7000's A/C chiller compressor; placeholder derived from chiller_capacity_w at an assumed automotive-refrigerant-chiller COP of ~2.5 (5000W / 2.5 = 2000W), a typical order-of-magnitude COP for this class of system, not a sourced figure. Added for Q-0021 (docs/DESIGN_QUESTIONS.md) — chiller_capacity_w alone doesn't say what the chiller costs to run."
+        source: "derived from chiller_capacity_w (10000W) at a COP calculated from Guchen's 8kW BTMS product datasheet (guchen.com/products/battery-thermal-management-system/btms-8kw-water-cooling-unit.html): 8.0kW cooling / ≤3.5kW rated electrical input ≈ 2.29 COP, both figures directly disclosed (not a manufacturer-stated COP label). 10000W / 2.286 = 4375W."
+        note: "same real-comparable-product-not-this-vehicle's-own-part caveat as chiller_capacity_w. Previously a round-number placeholder (2000W at an assumed COP of ~2.5, no source); now anchored to a directly-disclosed cooling/input-power pair from a real commercial BTMS unit rather than an assumed ratio -- the resulting COP (2.29) turned out close to the original guess (2.5), which is reassuring but coincidental, not the reason this was revised."
       serves: ["battery_pack", "motor", "inverter"]
       coolant_specific_heat_j_per_kg_k:
         value: 3600.0

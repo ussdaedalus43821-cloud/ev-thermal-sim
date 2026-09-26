@@ -90,19 +90,22 @@ later, or left undecided) is tracked in `docs/ROADMAP.md`. This section is
 just the handful of gaps load-bearing enough to know before touching
 related code:
 
-- **Refrigerant chiller physics ARE implemented (Q-0021, plus two
-  follow-ups: hot-soak coolant initialization, and a real-climate
-  investigation).** `cooling.py`/`controller.py`/`sim.py`/`long_horizon.py`
-  all have real, unit-tested chiller behavior — confirmed engaging at FULL
-  capacity under a real, NOAA-sourced hot climate (Phoenix, AZ). The
-  remaining blocker is now specific: `chiller_capacity_w` (5000W
-  placeholder, already flagged as likely undersized) is too small relative
-  to the pack's own thermal mass to matter within a single trip, not an
-  engagement-timing problem. **Tesla Model 3's flagship-comparison 20-year
-  number moved materially (14.35% → 14.84% total loss, ~3.4% relative)**
-  from the hot-soak fix, since it has an active battery coolant loop —
-  don't cite the old Model3/Seattle figure. See
-  `docs/ROADMAP.md`'s "Thermal / cooling physics" section for what's still
+- **Refrigerant chiller physics ARE implemented and fully investigated
+  (Q-0021 plus three follow-ups: hot-soak coolant initialization, a
+  real-climate investigation, and real chiller_capacity_w sourcing).**
+  `cooling.py`/`controller.py`/`sim.py`/`long_horizon.py` all have real,
+  unit-tested chiller behavior, confirmed engaging at full capacity under
+  a real, NOAA-sourced hot climate (Phoenix, AZ) with `chiller_capacity_w`
+  now sourced from real commercial bus-BTMS product data (10kW, was a
+  5000W guess). **All three candidate causes for why it never moved a
+  published number are closed, and the conclusion is structural, not
+  fixable by more sourcing**: it's a timescale mismatch between the
+  pack's thermal mass and a single ~20-minute characterized trip — doubling
+  the real capacity barely changed the (still negligible) result. **Tesla
+  Model 3's flagship-comparison 20-year number moved materially (14.35% →
+  14.84% total loss, ~3.4% relative)** from the hot-soak fix alone, since
+  it has an active battery coolant loop — don't cite the old Model3/Seattle
+  figure. See `docs/ROADMAP.md`'s "Thermal / cooling physics" section for
   open (threshold re-derivation, hotter test climates).
   Milestone D (BMW i3's standalone DX-refrigerant abstraction) is
   unaffected and separate — still don't use i3-vs-Leaf battery comparisons

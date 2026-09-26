@@ -26,23 +26,35 @@ got close.
 
 RESULT (see docs/MILESTONES.md's "Hot climate chiller investigation"
 milestone for the full record): the hotter climate DOES make the chiller
-engage, dramatically -- commanded_chiller_duty reaches 1.0 (full 5000W
+engage, dramatically -- commanded_chiller_duty reaches 1.0 (full-capacity
 draw) during HOT_SOAK_COMMUTE at the hottest ambient bucket, confirmed by
 direct time-series inspection. But even running at full capacity for an
-entire ~1200s trip, it only shaves 0.03-0.35K off the battery's own mean
-cell temperature (measured directly, phase by phase) -- because the
-placeholder chiller_capacity_w (5000W, already flagged in Blue Bird's own
-YAML as "likely undersized for a bus-size battery pack") is small relative
-to the pack's own thermal capacitance (990,000 J/K). The resulting 1-year
-SOH effect (this script's own default `--duration-years 1` output) is real
-but negligible: 0.00027818 percentage points absolute (3.51090196% with
-the chiller vs. 3.51118014% without), 0.007923% relative -- three to four
-orders of magnitude smaller than what would be needed to change any
-published comparison. This closes the "hotter test
-climate" candidate cause with a real answer, not a null result: the
-remaining blocker is chiller_capacity_w's magnitude, not engagement
-timing, threshold placement, or climate choice -- a materially different,
-more specific finding than "not tested hot enough."
+entire ~1200s trip, it only shaves a fraction of a degree off the
+battery's own mean cell temperature (measured directly, phase by phase),
+because the pack's own thermal capacitance (990,000 J/K) dominates any
+chiller a single short trip could plausibly run.
+
+**Run twice, before and after a follow-up sourcing pass** (see
+docs/MILESTONES.md's "Source real chiller_capacity_w data" milestone):
+first against the original 5000W placeholder ("likely undersized for a
+bus-size battery pack" per Blue Bird's own YAML note), then again after
+chiller_capacity_w was revised to 10000W -- a real, size-class-matched
+commercial BTMS product spec for 11-12m electric buses (TKT/Guchen,
+busthermo.com), not another guess. Doubling the real capacity grew the
+per-phase effect by roughly the same factor (e.g. final_decel: 0.35K ->
+0.50K) but the 1-year Tier-2 aggregate remained negligible either way:
+0.00028pp absolute / 0.0079% relative at 5000W, 0.00039pp / 0.0111% at
+10000W -- three to four orders of magnitude too small to move any
+published comparison in both cases. This is a stronger, more robust
+version of the original finding: the blocker isn't really the specific
+wattage number (doubling it barely helped) -- it's a TIMESCALE mismatch
+between a large thermal mass and a single ~20-minute trip, not something
+re-deriving chiller_capacity_w further could fix. This closes the
+"hotter test climate" candidate cause AND the "re-derive chiller_
+capacity_w" one with real answers, not left untried: the chiller's
+engagement, threshold interaction, and magnitude are all now confirmed
+working as designed and still negligible for this simulator's trip-level
+characterization approach.
 
 Usage:
     uv run python -m examples.chiller_hot_climate_investigation

@@ -2643,3 +2643,87 @@ whole history to find.
   the negligible result is reported exactly as measured.
   Full suite (285 tests), `mypy --strict`, `ruff` all pass unchanged (this
   milestone added one new example script, no source or test changes).
+- **Milestone "Source real chiller_capacity_w data for a Type C bus"
+  (done, 2026-09-25, the third and final candidate cause from the chiller
+  milestone, tried at the user's explicit request):** closes the one
+  remaining open item from the hot-climate investigation above — the
+  5000W `chiller_capacity_w` placeholder was never re-derived against any
+  real source, just carried as an unmotivated "automotive-scale" guess.
+  **What was checked, not found**: the PowerDrive 7000's OWN chiller
+  capacity remains undisclosed by Cummins/Accelera/Blue Bird in every
+  source directly checked this milestone — the BP97E official spec sheet
+  PDF (accelerazero.com, confirms "H2O and Ethylene Glycol, 50:50"
+  cooling with no chiller number), the PowerDrive 7000 system-diagram
+  poster PDF (stnonline.com, confirms the Thermal Management Module's
+  existence and role, no capacity), the Cummins PD7000 warranty bulletin
+  PDF (no thermal specs at all), and Blue Bird's own Vision Electric spec
+  sheet (centralstatesbus.com, a dealer-hosted copy — adds one new detail,
+  "Roof or skirt mounted HV self contained A/C" as an OPTIONAL feature
+  distinct from the standard TMM, but still no chiller kW figure). This
+  confirms the original research's "no numeric capacity was disclosed
+  anywhere found" finding rather than overturning it — the gap is real,
+  not an earlier research shortfall.
+  **What was found instead, real and cited, not invented**: two
+  independent commercial battery-thermal-management product datasheets
+  from TKT/Guchen (busthermo.com/guchen.com, a real BTMS supplier to BYD,
+  Yutong, Golden Dragon, and TATA Motors per their own materials) and
+  Modine (modine.com, a major automotive thermal-systems OEM supplier):
+  1. TKT's "11-12M Electric Bus BTMS" (Model 10CW) — 8-10kW cooling
+     capacity, explicitly marketed for buses in Blue Bird's own Vision's
+     exact length class (Type C, ~35-40ft / 10.7-12.2m), at a DC voltage
+     range (400-750V) that spans this pack's real 583-689V operating
+     range.
+  2. Modine's A-CON BTMS — 3-10kW for commercial EVs generally, a second,
+     independent real source corroborating the same upper bound.
+  3. Guchen's separate 8kW BTMS unit datasheet directly discloses BOTH
+     cooling capacity (8.0kW) and rated electrical input power (≤3.5kW)
+     for the same real product — giving a calculated COP (8.0/3.5 ≈ 2.29)
+     from two directly-disclosed numbers, not a manufacturer-labeled "COP"
+     figure, used to derive `chiller_power_w` from the revised
+     `chiller_capacity_w` instead of repeating the old assumed-COP guess.
+  **Revised** (`configs/profiles_commercial/blue_bird_vision_electric.yaml`):
+  `chiller_capacity_w` 5000W → 10000W (TKT's 10CW model's upper bound, the
+  best available size-class match found); `chiller_power_w` 2000W → 4375W
+  (10000W / 2.286 COP). Both remain `confidence: low` and explicitly
+  flagged as a real, comparable COMMERCIAL PRODUCT spec, not Blue Bird's
+  own OEM PowerDrive 7000 chiller — the same "generic published
+  heavy-vehicle engineering figures" treatment already given to
+  `curb_mass_kg`/`frontal_area_m2`/etc. in the original commercial-profile
+  milestone, applied here to a real vendor datasheet instead of a textbook
+  figure specifically because a real, size-class-matched product exists
+  and a generic engineering handbook figure for "electric bus chiller
+  capacity" does not.
+  **Re-validated, not just swapped in**: `examples/
+  chiller_hot_climate_investigation.py` re-run with the new value —
+  doubling the real capacity grew the per-phase cooling effect by roughly
+  the same factor (final_decel: 0.35K → 0.50K) but the 1-year Tier-2
+  aggregate remained negligible either way (0.00028pp/0.0079% relative at
+  5000W → 0.00039pp/0.0111% relative at 10000W) — three to four orders of
+  magnitude too small to move any published comparison at either value.
+  Blue Bird's own published 90-day/20-year numbers (under its real
+  Columbus, OH climate, which doesn't get hot enough to meaningfully
+  engage the chiller either way) moved by a noise-level amount (20-year:
+  57.9778% → 57.9756%, 0.002pp). **This is a stronger, more robust version
+  of the hot-climate investigation's own finding, not a new one**: since
+  doubling a now-REAL capacity number barely changed the negligible
+  result, the blocker was never really about the specific wattage —
+  it's a genuine TIMESCALE mismatch between the pack's large thermal mass
+  and a single ~20-minute characterized trip, which re-deriving
+  `chiller_capacity_w` further cannot fix. All three candidate causes the
+  original chiller milestone identified (engagement timing, climate
+  choice, chiller magnitude) are now closed with real, evidence-based
+  answers — none silently decided, none tuned toward a bigger effect.
+  **One more check, done while writing up `docs/ROADMAP.md`'s own entry,
+  not left as an unverified assumption**: is the negligible 1-year Tier-2
+  result missing a bigger effect from the PARKED-period chiller mechanism
+  specifically (`relax_parked_temp_k`'s own chiller term, separate from
+  the per-trip one just discussed)? No — checked directly by simulating a
+  full 24-hour parked day starting at the chiller's own 40°C threshold
+  under Phoenix's real peak-summer ambient cycle: the pack temperature
+  never sustains meaningfully above the threshold even over the full day
+  (caps essentially at 40.0°C, chiller-on and chiller-off trajectories
+  converge to the same value), so the parked path shows the same
+  structural ceiling as the trip path, not an untapped lever. The 1-year
+  aggregate already reflects both paths together, correctly.
+  Full suite (285 tests), both `@pytest.mark.slow` cases, `mypy --strict`,
+  `ruff` all pass unchanged.
