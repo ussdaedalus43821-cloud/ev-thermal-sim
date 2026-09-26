@@ -154,13 +154,11 @@ file holds the items that are genuinely discrete standalone work items.
   schedule seed fixed across every sample (a deterministic shuffle of the
   exact stated annual mix, not i.i.d. draws) — a separate, deferred MC
   mode would sample over schedule order too.
-- **`test_long_horizon_validation.py`'s reference generator still uses the
-  OLD SOC-snapping assumption, and needs its own follow-up fix (Q-0016,
-  raised not resolved).** Currently still passes only because both
-  real-profile losses are small enough at its 60-day window to sit under
-  the 0.1% absolute tolerance floor — relative error grew from ~0.8-4%
-  historically to 15.64%/10.14% post-parked-SOC-fix. A longer window or
-  different seed could push this past the floor and fail.
+- **`test_long_horizon_validation.py`'s reference generator (Q-0016):
+  resolved.** The stale SOC-snapping cadence was fixed to mirror
+  `_parked_soc_trajectory`'s own once-per-day reset. A second, distinct
+  residual it surfaced — `sim.py`'s aux-draw not being driving-state-aware
+  — remains open; see "Charging model gaps" below.
 - **`typical_start_soc`'s exact semantics under the parked-SOC model are
   unresolved (Q-0014, raised not resolved).** Current implemented
   behavior (descriptive reference point, not an enforced daily value) was
