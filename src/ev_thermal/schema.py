@@ -1553,3 +1553,84 @@ class MCResult(BaseModel):
     soh_band: list[MCPercentileBand] = Field(
         ..., description="Time-indexed p05/p50/p95 SOH band, one entry per simulated day."
     )
+
+
+class SeamTableRow(BaseModel):
+    """One `(vehicle_class, climate_zone, duty_cycle_archetype)` row of the
+    Transition-seam precomputed SOH-delta table (docs/seam_reconnaissance.md
+    §5) — shape, not spec, still evolving. Keyed on axes Transition's own
+    schema needs to gain before it could look anything up (see that memo's
+    §3/§7): a `manufacturerProfileKey`-style field on `VehicleClass`, and
+    per-route duty-cycle detail (gap 2, still deliberately deferred — v1
+    rows use a single fixed `duty_cycle_archetype`, not yet meaningfully
+    varying with route).
+    """
+
+    vehicle_class: str = Field(
+        ...,
+        description=(
+            "Profile YAML filename stem, e.g. 'blue_bird_vision_electric' — matches "
+            "profile_loader.load_all_profiles's own keying convention."
+        ),
+    )
+    climate_zone: str = Field(
+        ...,
+        description=(
+            "A descriptive per-location key, e.g. 'columbus_oh' — deliberately NOT Transition's "
+            "ClimateZone.key (an ASHRAE zone code like '5A'), which collides across different real "
+            "locations sharing the same zone (both current Transition presets are '5A'). Transition-side "
+            "wiring will need its own disambiguation, not decided here."
+        ),
+    )
+    duty_cycle_archetype: str = Field(
+        ...,
+        description=(
+            "v1: always 'default' (the profile's own canonical day_type_mix) — Transition's Route has "
+            "no per-route duty-cycle detail yet (seam_reconnaissance.md gap 2), so this axis doesn't "
+            "vary meaningfully yet."
+        ),
+    )
+    methodology: str = Field(
+        ...,
+        description=(
+            "'point_estimate' (an unperturbed simulate_long_horizon run) or 'monte_carlo' (p05/p50/p95 "
+            "from mc.run_monte_carlo). v1 rows are point_estimate only — do NOT read a point estimate as "
+            "a median; see mc.py's own 'p50 vs. the point estimate' note for why they diverge, "
+            "especially at longer horizons."
+        ),
+    )
+    monthly_soh_delta_pct: list[float] = Field(
+        ...,
+        description=(
+            "SOH percentage points lost in EACH calendar month since conversion (incremental, not "
+            "cumulative) — index 0 is month 1. Transition ticks monthly and applies one delta per tick, "
+            "matching this shape directly. Aggregated from Tier-2's daily LongHorizonCheckpoints, not a "
+            "native monthly simulation."
+        ),
+    )
+    source_seed: int
+    source_duration_years: int
+    caveats: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Known limitations that travel with THIS row's specific numbers, not just documented in "
+            "ev-thermal-sim's own docs — e.g. calibration-range extrapolations, unvalidated aging "
+            "coefficients for this vehicle class. Per this project's own 'the caveat must travel with "
+            "the number' discipline (see docs/MILESTONES.md's Monte Carlo p50-vs-point-estimate record)."
+        ),
+    )
+    generated_at: str = Field(
+        ..., description="ISO 8601 date this row was generated — the underlying model/coefficients may change."
+    )
+
+
+class SeamTable(BaseModel):
+    """The full precomputed Transition-seam SOH-delta table
+    (docs/seam_reconnaissance.md §5) — a JSON artifact produced offline by
+    this repo, consumed as a pure function on Transition's side. Shape, not
+    spec: this schema itself may change once Transition-side wiring
+    surfaces real requirements this repo can't anticipate alone.
+    """
+
+    table_version: str
+    rows: list[SeamTableRow]

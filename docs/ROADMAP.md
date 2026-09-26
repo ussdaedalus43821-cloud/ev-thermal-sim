@@ -212,10 +212,30 @@ seam" milestone.
   to characterize against); revisit as part of the school-bus profile's
   actual integration into Transition, not populated speculatively ahead
   of that.
+- **Done: a first, real, one-row SOH-delta table exists**
+  (`examples/generate_seam_table.py`, `SeamTableRow`/`SeamTable` in
+  `schema.py`) — Blue Bird Vision Electric / Columbus, OH, a single fixed
+  `duty_cycle_archetype`, `methodology="point_estimate"` (not the MC
+  distribution §5 originally proposed — a deliberate, documented v1 scope
+  choice, not silently substituted). Its cumulative 20-year loss matches
+  the already-validated Blue Bird figure exactly, confirming internal
+  consistency. Every row carries its own caveats (point-estimate-not-
+  median, SOC/time-horizon extrapolations, unvalidated commercial-
+  chemistry coefficients, chiller-not-engaged-by-this-climate) directly in
+  the JSON artifact, not just in this repo's docs. See
+  `docs/MILESTONES.md`'s "Generate a first Transition-seam table row"
+  milestone.
+- **A real, previously-unidentified gap this surfaced**: Transition's
+  `ClimateZone.key` (e.g. `"5A"`) is an ASHRAE zone code, not a unique
+  per-location identifier — both current presets share it. The seam table
+  keys `climate_zone` by a descriptive per-location string instead
+  (`"columbus_oh"`); Transition-side wiring will need to resolve this
+  collision for real, not treat it as solved.
 - **Transition-side wiring is not started**: a `manufacturerProfileKey`-
   style field on `VehicleClass` pointing at the new Blue Bird profile, and
-  the precomputed SOH-delta table interface itself (shape proposed in
-  `docs/seam_reconnaissance.md` §5).
+  actually consuming the now-real seam table (shape proposed in
+  `docs/seam_reconnaissance.md` §5, first populated above) — the user's
+  own seam-table plan's step 5, its own milestone, not started here.
 - **Done: `Climate`'s `altitude_m`/`solar_irradiance_w_per_m2` are now on
   Transition's `ClimateZone`** (as `altitudeFt`/`solarIrradianceWPerM2`,
   Fahrenheit/imperial convention matching that file's existing temperature

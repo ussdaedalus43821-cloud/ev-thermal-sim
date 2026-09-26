@@ -2825,3 +2825,67 @@ whole history to find.
   earlier, unrelated commit ahead of `origin/main` before this session
   touched it, and pushing both together wasn't this session's call to
   make without asking.
+- **Milestone "Generate a first Transition-seam table row" (done,
+  2026-09-25, step 3 of the seam-table plan):** the actual deliverable the
+  first two steps built toward — new `SeamTableRow`/`SeamTable` pydantic
+  types (`schema.py`, matching `MCResult`'s own established style for
+  output-shaped types) and `examples/generate_seam_table.py`, which
+  produces ONE row (Blue Bird Vision Electric / Columbus, OH / a single
+  fixed `duty_cycle_archetype`), not a comprehensive matrix, per explicit
+  scope. Reuses `validate_blue_bird_vision_electric.py`'s own canonical
+  builders directly — guaranteed to reflect the SAME canonical data
+  (Q-0022) that profile's own validation record describes, not a
+  silently-drifted copy.
+  **Methodology decision, made and documented, not left ambiguous**:
+  `docs/seam_reconnaissance.md` §5 originally proposed "median + spread,
+  from MCResult," but this row uses a single unperturbed
+  `simulate_long_horizon` point estimate instead
+  (`methodology="point_estimate"`) — running a full 500-sample Monte Carlo
+  for a first proof-of-shape row wasn't the scope the user's own plan
+  described ("runs characterize_all_trips + simulate_long_horizon," not
+  `run_monte_carlo`). `SeamTableRow.methodology` exists specifically so a
+  future MC-backed row is a real, distinguishable upgrade, not a silent
+  swap — and the row's own `caveats` field says explicitly, in the JSON
+  artifact itself, not to read a point estimate as a median (mc.py's own
+  "p50 vs. the point estimate" finding).
+  **A real design gap found and documented, not silently worked around**:
+  Transition's `ClimateZone.key` (e.g. `"5A"`) is an ASHRAE zone
+  classification, not a unique per-location identifier — both currently-
+  defined presets (Columbus, OH and Cedar Rapids, IA) share the same key.
+  Keying the seam table by that field would collide. `SeamTableRow.
+  climate_zone` uses a descriptive per-location key (`"columbus_oh"`)
+  instead, with this exact collision documented in the field's own
+  description — a real, previously-unidentified gap for whoever does
+  Transition-side wiring next, not decided here.
+  **The monthly-aggregation methodology**: Tier-2's checkpoints are daily,
+  Transition ticks monthly — `_monthly_soh_deltas_pct` down-samples by
+  taking the daily checkpoint closest to each calendar month's end
+  (`round(month * 365/12)` days in), computing each month's INCREMENTAL
+  (not cumulative) loss, matching how `monthlySohDelta(...)` would be
+  consumed once per tick. New unit tests hand-verify this against a
+  synthetic checkpoint trajectory, including the boundary case where a
+  run is shorter than the requested table horizon (clamps to the last
+  available checkpoint instead of raising `IndexError`).
+  **Result, run end-to-end, not just schema-designed**: the generated
+  row's cumulative loss over 20 years (74.0392%) matches — exactly, to
+  the same 4 decimal places — the already-validated, independently-
+  computed 20-year Blue Bird figure from `validate_blue_bird_vision_
+  electric.py --duration-days 7300` (Q-0022's own milestone). Confirms
+  internal consistency between the two code paths, not assumed. All five
+  of this row's own caveats (point-estimate-not-median, SOC=1.0
+  extrapolation, 20-year time-horizon extrapolation, unvalidated
+  commercial-chemistry aging coefficients, and Columbus's climate not
+  engaging the chiller) travel WITH the JSON artifact itself, in the
+  row's own `caveats` field — not left to live only in this repo's own
+  docs, per the project's established "the caveat must travel with the
+  number" discipline.
+  New tests: `test_seam_table_row_round_trip`/`test_seam_table_round_trip`
+  (`tests/test_schema.py`), and `tests/test_generate_seam_table.py`
+  (3 fast aggregation-logic tests, 1 `@pytest.mark.slow` end-to-end smoke
+  test). Full suite (293 tests, up from 287; 290 fast + 3 slow), `mypy
+  --strict`, `ruff` all pass.
+  **What's still open, per the user's own plan**: step 5, Transition-side
+  wiring (a `manufacturerProfileKey`-style field on `VehicleClass`, and
+  actually consuming this table) — its own milestone, not started here.
+  The `climate_zone` keying collision found above is a real, concrete
+  question that milestone will need to resolve, not optional polish.

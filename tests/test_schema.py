@@ -34,6 +34,8 @@ from ev_thermal.schema import (
     MistakeCase,
     MotorSpec,
     Scenario,
+    SeamTable,
+    SeamTableRow,
     SimState,
     SimStepRecord,
     SimTimeSeries,
@@ -766,3 +768,33 @@ def test_mc_config_round_trip() -> None:
     )
     restored = MCConfig.model_validate_json(config.model_dump_json())
     assert restored == config
+
+
+# --- SeamTableRow / SeamTable ---
+
+
+def _make_seam_table_row() -> SeamTableRow:
+    return SeamTableRow(
+        vehicle_class="blue_bird_vision_electric",
+        climate_zone="columbus_oh",
+        duty_cycle_archetype="default",
+        methodology="point_estimate",
+        monthly_soh_delta_pct=[0.05, 0.06, 0.04],
+        source_seed=42,
+        source_duration_years=20,
+        caveats=["typical_end_soc=1.0 is outside aging.py's calendar-aging calibration range"],
+        generated_at="2026-09-25",
+    )
+
+
+def test_seam_table_row_round_trip() -> None:
+    row = _make_seam_table_row()
+    restored = SeamTableRow.model_validate_json(row.model_dump_json())
+    assert restored == row
+
+
+def test_seam_table_round_trip() -> None:
+    table = SeamTable(table_version="1", rows=[_make_seam_table_row(), _make_seam_table_row()])
+    restored = SeamTable.model_validate_json(table.model_dump_json())
+    assert restored == table
+    assert len(restored.rows) == 2
