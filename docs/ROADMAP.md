@@ -18,33 +18,33 @@ file holds the items that are genuinely discrete standalone work items.
 ## Thermal / cooling physics
 
 - **Refrigerant chiller path IS now implemented (`docs/DESIGN_QUESTIONS.md`
-  Q-0021, `docs/MILESTONES.md`'s "Chiller path implementation" milestone)
-  — but it doesn't yet visibly change any published number.**
+  Q-0021, `docs/MILESTONES.md`'s "Chiller path implementation" and
+  "Hot-soak coolant initialization fix" milestones) and DOES now engage
+  under at least one real (not synthetic) tested condition — but still
+  doesn't move any published comparison by more than a noise-level amount.**
   `CoolingLoop.chiller_present`/`chiller_capacity_w`/`chiller_power_w` are
-  now real, unit-tested physics in `cooling.py`/`controller.py`/`sim.py`/
-  `long_horizon.py` (confirmed correct: a direct test with artificially
-  hot ambient shows the chiller engaging and cooling below ambient — the
-  one thing a radiator-only loop can never do). **What's still open**: the
-  chiller does NOT engage in any currently-tested REAL scenario, including
-  Blue Bird (the only `chiller_present: true` profile) under both its
-  native climate and a synthetic Guam-like test, because the coolant
-  loop's own temperature never crosses the shared placeholder
-  `thermostat_full_open_temp_k` (40°C) — confirmed root cause: Tier-1's
-  hot-soak initial condition only patches the battery node, not the
-  coolant node, so a short trip doesn't have time to heat coolant past the
-  threshold; and Q-0020's own earlier finding already showed a
-  radiator-coupled pack under sustained Guam-like ambient tracks within
-  ~1K of ambient, well below 40°C. Making the chiller actually matter for
-  a real comparison needs one of: a re-derived (currently unsourced)
-  `thermostat_full_open_temp_k`, a coolant-node hot-soak initialization
-  fix, or a genuinely hotter test climate than Guam's mild seasonal
-  amplitude — none decided or attempted here, per this project's "surface
-  it, don't tune toward correct-looking" discipline. This is still the
-  single biggest lever for (a) making the BMW i3's battery-thermal
-  modeling non-approximated (see Milestone D below — a separate, larger
-  schema question, unaffected by this milestone) and (b) making a future
-  hot-climate `MistakeCase`'s delta match real-world magnitudes, once
-  whichever of the above unblocks it.
+  real, unit-tested physics in `cooling.py`/`controller.py`/`sim.py`/
+  `long_horizon.py`. The chiller milestone identified three candidate
+  causes for why it never engaged in practice; the first (a coolant-node
+  hot-soak initialization gap) is now fixed and confirmed to let the
+  chiller engage during Blue Bird's own `HOT_SOAK_COMMUTE` archetype at
+  its hottest ambient bucket — but the coolant cools back down within that
+  trip's own short duration faster than the chiller meaningfully offsets,
+  so Blue Bird's 90-day/20-year numbers moved by well under 1
+  percentage point (a real, measured, honestly-reported increase, not the
+  decrease a naive "chiller helps" intuition predicts — see the milestone
+  for the full mechanism). Tesla Model 3 in the flagship comparison moved
+  more substantially (20-year: 14.35% -> 14.84%, ~3.4% relative) via the
+  same fix, since it also has an active battery coolant loop. **What's
+  still open**: the other two candidate causes — a re-derived (currently
+  unsourced) `thermostat_full_open_temp_k`, or a genuinely hotter test
+  climate than Guam's mild seasonal amplitude — remain untried, per this
+  project's "surface it, don't tune toward correct-looking" discipline.
+  This is still the single biggest lever for (a) making the BMW i3's
+  battery-thermal modeling non-approximated (see Milestone D below — a
+  separate, larger schema question, unaffected by this work) and (b)
+  making a future hot-climate `MistakeCase`'s delta match real-world
+  magnitudes.
 - **Milestone D (scheduled but not next): refrigerant-loop schema
   abstraction.** The schema has no way to represent an active refrigerant
   loop (the BMW i3's DX system, or a battery chiller circuit) as anything

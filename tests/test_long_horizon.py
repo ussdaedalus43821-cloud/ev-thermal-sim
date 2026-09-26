@@ -28,6 +28,7 @@ from ev_thermal.long_horizon import (
     _parked_soc_trajectory,
     _phase_aging,
     _pump_soc_decrement,
+    _soak_patched_temps_k,
     _speed_from_waypoints,
     ambient_bucket_temps_k,
     ambient_temp_k,
@@ -41,6 +42,8 @@ from ev_thermal.long_horizon import (
     simulate_long_horizon,
 )
 from ev_thermal.schema import AnnualDayTypeMix, Confidence, ManufacturerProfile, Sourced, TripType
+from ev_thermal.sim import coolant_node_name
+from tests.test_cooling import _make_cooling_loop
 from tests.test_sim import _make_profile, _make_scenario
 
 _T = TypeVar("_T")
@@ -209,6 +212,77 @@ def test_characterize_trip_hot_soak_starts_warmer_than_cold_start_same_ambient()
     # Same drive, same climate, same vehicle -- only the initial pack temperature
     # differs, so the warm_up phase's mean cell temp must reflect that.
     assert hot.phases[0].mean_cell_temp_k > cold.phases[0].mean_cell_temp_k
+
+
+def test_soak_patched_temps_k_patches_battery_and_its_serving_coolant_loop() -> None:
+    loop = _make_cooling_loop()  # serves battery_pack, motor, inverter
+    base_temps_k = {
+        "battery_pack": 298.15,
+        "motor": 298.15,
+        "inverter": 298.15,
+        coolant_node_name(loop.name): 298.15,
+    }
+    patched = _soak_patched_temps_k(base_temps_k, "battery_pack", 317.15, [loop])
+
+    assert patched["battery_pack"] == 317.15
+    assert patched[coolant_node_name(loop.name)] == 317.15
+    # Motor/inverter are deliberately untouched -- same precedent as
+    # apply_trip_start_offset (Tier-2 doesn't track them between trips).
+    assert patched["motor"] == 298.15
+    assert patched["inverter"] == 298.15
+
+
+def test_soak_patched_temps_k_ignores_a_loop_that_does_not_serve_the_battery() -> None:
+    loop = _make_cooling_loop().model_copy(update={"name": "motor_only_loop", "serves": ["motor"]})
+    base_temps_k = {"battery_pack": 298.15, "motor": 298.15, coolant_node_name(loop.name): 298.15}
+    patched = _soak_patched_temps_k(base_temps_k, "battery_pack", 317.15, [loop])
+
+    assert patched["battery_pack"] == 317.15
+    assert patched[coolant_node_name(loop.name)] == 298.15
+
+
+def test_hot_soak_coolant_patch_lets_chiller_engage_where_battery_only_patch_would_not() -> None:
+    """Direct regression check for `_soak_patched_temps_k`'s actual effect
+    (checking `mean_cell_temp_k > ambient` alone is NOT a valid regression
+    test here -- verified directly: it stays true even with only the
+    battery patched, since that alone already starts the cell above
+    ambient, regardless of the coolant node's own temperature). What
+    actually changed is whether a coolant-GATED mechanism -- the chiller's
+    second-stage duty -- can see the soak condition at all. Compares two
+    otherwise-identical initial states built from the same base: one with
+    only the battery patched (this function's pre-fix behavior), one with
+    the battery AND its serving coolant loop patched (via the real
+    `_soak_patched_temps_k`, this fix) -- the chiller must engage in the
+    latter and stay off in the former.
+    """
+    from ev_thermal.sim import initialize_sim_state, run_scenario
+    from tests.test_cooling import _make_chiller_loop
+
+    profile = _make_profile()
+    chiller_loop = _make_chiller_loop().model_copy(update={"serves": ["battery_pack", "motor", "inverter"]})
+    new_thermal_architecture = profile.thermal_architecture.model_copy(update={"cooling_loops": [chiller_loop]})
+    profile = profile.model_copy(update={"thermal_architecture": new_thermal_architecture})
+    ambient_k = chiller_loop.thermostat_full_open_temp_k.value - 10.0
+    hot_pack_temp_k = chiller_loop.thermostat_full_open_temp_k.value + 10.0
+    scenario = _make_scenario(profile, ambient_temp_k=ambient_k)
+    base_state = initialize_sim_state(profile, scenario, scenario.random_seed)
+
+    battery_only_temps_k = dict(base_state.node_temps_k, battery_pack=hot_pack_temp_k)
+    battery_only_state = base_state.model_copy(update={"node_temps_k": battery_only_temps_k})
+    battery_and_coolant_temps_k = _soak_patched_temps_k(
+        base_state.node_temps_k, "battery_pack", hot_pack_temp_k, [chiller_loop]
+    )
+    battery_and_coolant_state = base_state.model_copy(update={"node_temps_k": battery_and_coolant_temps_k})
+
+    battery_only_result = run_scenario(
+        profile, scenario, duration_s=300.0, target_speed_mps=lambda _t: 10.0, initial_state=battery_only_state
+    )
+    both_result = run_scenario(
+        profile, scenario, duration_s=300.0, target_speed_mps=lambda _t: 10.0, initial_state=battery_and_coolant_state
+    )
+
+    assert max(step[chiller_loop.name] for step in battery_only_result.time_series.chiller_duty) == 0.0
+    assert max(step[chiller_loop.name] for step in both_result.time_series.chiller_duty) > 0.0
 
 
 def test_characterize_trip_highway_has_three_phases() -> None:

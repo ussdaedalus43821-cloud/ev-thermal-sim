@@ -2507,3 +2507,87 @@ whole history to find.
   the one pre-existing `mypy --strict` error in `tests/test_battery.py`'s
   own `_step` helper (missing return annotation) was confirmed present on
   `main` before this change, not introduced by it.
+- **Milestone "Hot-soak coolant initialization fix" (done, 2026-09-25, a
+  direct follow-up to the chiller-path milestone above, per user
+  request):** the chiller milestone's own finding was that the chiller
+  never engages in ANY currently-tested scenario because the coolant loop
+  never crosses the engagement threshold — this milestone tests the first
+  of the three candidate causes that milestone identified (a coolant-node
+  hot-soak initialization gap), without touching the other two (the
+  threshold value itself, or the test climates).
+  **The gap**: `characterize_trip`'s hot/cold-soak initial condition
+  (`BatterySpec.hot_soak_offset_k`/`cold_soak_offset_k`) patched only the
+  battery node's own initial temperature — a HOT_SOAK_COMMUTE trip started
+  with a pre-heated cell but its coolant loop still at the pinned
+  climate's bare ambient, so a coolant-gated mechanism (the chiller's own
+  second-stage duty, or the radiator/fan ramp) had no way to see the soak
+  condition during a short trip's own duration.
+  **Fix**: new `long_horizon._soak_patched_temps_k` helper (extracted from
+  `characterize_trip` for direct testability) also patches any coolant
+  node(s) serving the battery to the SAME `initial_pack_temp_k` value —
+  no new offset invented, since the coolant loop's thermal mass is far
+  smaller than the pack's, so assuming it has equilibrated toward the
+  pack's own soaked temperature during a long parked soak is the more
+  defensible approximation. For the "none" soak case this is a no-op
+  (`initial_pack_temp_k` already equals ambient), so one code path
+  handles all three cases. Motor/inverter are deliberately untouched,
+  matching `apply_trip_start_offset`'s own established precedent that
+  they aren't part of the tracked soak condition at all.
+  **Confirmed the mechanism now activates, by direct measurement, not
+  assumption**: for Blue Bird's `HOT_SOAK_COMMUTE` archetype at its
+  hottest (36C) ambient bucket, per-step time-series inspection showed
+  `commanded_chiller_duty` reaching 0.267 (previously exactly 0.0 at every
+  step, confirmed in the chiller milestone's own investigation) and
+  `chiller_heat_removed_w` reaching 1333W before decaying as the coolant
+  cooled within the trip's own 1200s duration.
+  **The actual re-validation result — reported as measured, not the
+  direction expected going in**: total SOH loss INCREASED slightly rather
+  than decreased, for both Blue Bird (90-day: 0.5309% -> 0.5328%; 20-year:
+  57.3981% -> 57.9778%) and, more substantially, Tesla Model 3 in the
+  flagship comparison (90-day: 0.1194% -> 0.1209%; 20-year: 14.3506% ->
+  14.8429%, a real, non-noise-level ~3.4% relative move on a previously-
+  published number, not the passenger-fleet comparison's structural ratio,
+  which held: 3.6747 -> 3.5528). Nissan Leaf/Guam was unaffected in both
+  runs (its battery is passively air-cooled, no coolant loop serves it, so
+  this fix is a no-op for it). The mistake library's Leaf-vs-counterfactual
+  case moved in the same direction: soh_delta dropped from +0.0626pp to
+  +0.0543pp.
+  **Why the direction is correct, not a red flag**: before this fix, every
+  actively-cooled profile's coolant was UNREALISTICALLY COOL during a
+  hot-soak trip's own duration (still at bare ambient rather than reflecting
+  the soak), which was itself quietly giving those profiles an unearned
+  cooling assist relative to a hot-soaked vehicle's real coolant state.
+  Fixing that (making coolant correctly start hot) increases aging by more
+  than the newly-added chiller can claw back during a single short trip —
+  the two fixes are correct in combination even though their NET effect on
+  this specific archetype is a small increase, not the decrease a naive
+  "we added a chiller" intuition would predict. Not tuned toward either
+  direction; reported as measured.
+  **What this does and does NOT establish**: confirms the chiller
+  mechanism can now engage under at least one real (not synthetic) tested
+  condition, closing one of the three candidate causes the chiller
+  milestone identified. It does NOT mean the chiller's effect is large
+  enough to matter for any published comparison yet (Blue Bird's own
+  numbers moved by less than 0.02pp / 0.6pp respectively — the coolant
+  cools back down within the trip's own short duration faster than the
+  chiller can meaningfully offset the now-correctly-modeled hot start).
+  Whether a genuinely hotter test climate or a re-derived engagement
+  threshold would change that further remains exactly as open as the
+  chiller milestone left it.
+  **A flawed first version of the end-to-end regression test was caught
+  and rewritten before landing, not after**: the obvious assertion
+  (`characterization.phases[0].mean_cell_temp_k > ambient_bucket_k`) was
+  checked directly against a deliberately-reverted copy of the fix and
+  found to PASS regardless — it's trivially true from the battery-only
+  patch alone, so it never actually exercised the coolant side of the fix
+  at all. Replaced with a self-contained comparison
+  (`test_hot_soak_coolant_patch_lets_chiller_engage_where_battery_only_
+  patch_would_not`) that builds both a battery-only-patched state and a
+  battery-and-coolant-patched state from the same base and asserts the
+  chiller engages in the latter only — a real regression check, not a
+  restatement of an already-guaranteed fact.
+  New tests: `test_soak_patched_temps_k_patches_battery_and_its_serving_
+  coolant_loop`, `test_soak_patched_temps_k_ignores_a_loop_that_does_not_
+  serve_the_battery`, `test_hot_soak_coolant_patch_lets_chiller_engage_
+  where_battery_only_patch_would_not`. Full suite (285 tests, up from
+  282), both `@pytest.mark.slow` cases, `mypy --strict`, `ruff` all pass.

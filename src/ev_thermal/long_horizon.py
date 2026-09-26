@@ -43,6 +43,7 @@ from ev_thermal.schema import (
     BatterySpec,
     ChargingProfile,
     Climate,
+    CoolingLoop,
     LongHorizonCheckpoint,
     LongHorizonRunResult,
     ManufacturerProfile,
@@ -51,7 +52,7 @@ from ev_thermal.schema import (
     TripPhaseAging,
     TripType,
 )
-from ev_thermal.sim import initialize_sim_state, run_charging_session, run_scenario
+from ev_thermal.sim import coolant_node_name, initialize_sim_state, run_charging_session, run_scenario
 
 ANNUAL_PEAK_DAY_OF_YEAR = 200.0
 """Day of year (1-365.25) of the annual ambient-temperature peak -- Northern
@@ -300,6 +301,29 @@ def _pinned_climate(base_climate: Climate, ambient_bucket_temp_k: float) -> Clim
     )
 
 
+def _soak_patched_temps_k(
+    base_temps_k: dict[str, float],
+    battery_node_name: str,
+    initial_pack_temp_k: float,
+    cooling_loops: list[CoolingLoop],
+) -> dict[str, float]:
+    """Applies a hot/cold-soak initial pack temperature to the battery node
+    AND to any coolant node(s) serving it -- fixed alongside Q-0021 (see
+    `characterize_trip`'s own docstring for the full reasoning: a hot-soaked
+    vehicle's coolant loop has been sitting in the same heat, not just the
+    pack, and using anything but the pack's own temperature would invent a
+    new offset this project has no basis for). Motor/inverter are
+    deliberately untouched, matching `apply_trip_start_offset`'s own
+    precedent (Tier-2 doesn't track them between trips at all).
+    """
+    patched = dict(base_temps_k)
+    patched[battery_node_name] = initial_pack_temp_k
+    for loop in cooling_loops:
+        if battery_node_name in loop.serves:
+            patched[coolant_node_name(loop.name)] = initial_pack_temp_k
+    return patched
+
+
 def characterize_trip(
     profile: ManufacturerProfile,
     scenario_template: Scenario,
@@ -315,6 +339,14 @@ def characterize_trip(
     pins `climate` to a constant `ambient_bucket_temp_k` (zeroing the
     seasonal/daily amplitudes), matching `run_scenario`'s existing single-
     ambient behavior exactly.
+
+    The hot/cold-soak offset is applied to the battery's serving coolant
+    node(s) too, not just the battery cell itself -- see `_soak_patched_
+    temps_k`'s own docstring for why. Before this fix (Q-0021's own
+    follow-up), a HOT_SOAK_COMMUTE trip started with a pre-heated cell but
+    coolant still at the pinned climate's own ambient, so a coolant-gated
+    mechanism (the chiller's second-stage duty, or the radiator/fan ramp)
+    couldn't see the soak condition at all during a short trip's duration.
     """
     if trip_type not in _ARCHETYPES:
         raise NotImplementedError(
@@ -334,8 +366,12 @@ def characterize_trip(
         initial_pack_temp_k = ambient_bucket_temp_k + profile.battery.hot_soak_offset_k.value
     else:
         initial_pack_temp_k = ambient_bucket_temp_k
-    patched_temps_k = dict(base_state.node_temps_k)
-    patched_temps_k[battery_node_name] = initial_pack_temp_k
+    patched_temps_k = _soak_patched_temps_k(
+        base_state.node_temps_k,
+        battery_node_name,
+        initial_pack_temp_k,
+        profile.thermal_architecture.cooling_loops,
+    )
     initial_state = base_state.model_copy(update={"node_temps_k": patched_temps_k})
 
     result = run_scenario(
