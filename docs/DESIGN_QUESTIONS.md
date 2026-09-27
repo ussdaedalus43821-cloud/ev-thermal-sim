@@ -1829,3 +1829,185 @@ code it calls is.
   only profiles with a real, correctly-scoped `battery_preconditioning:
   true` do (Kia Niro EV, today).
 
+## Q-0028 — Cold-charging degradation (lithium plating): a real, missing aging mechanism, not a preconditioning-fix
+
+- Date: 2026-09-27
+- Context: raised by the user directly, explicitly separated from the
+  preconditioning milestone's own finding that a 2kW/25min heater comes
+  out net-negative for SOH (Q-0026's milestone entry, `docs/
+  MILESTONES.md`). **The reason to build this is that `aging.py`'s cycle-
+  aging term is missing a real physical mechanism, independent of whether
+  fixing it happens to change the preconditioning story — not the other
+  way around.** `aging.py`'s `compute_aging_step` today has exactly one
+  temperature-dependent term for cycle aging, a single Arrhenius scale
+  (`cycle_aging_activation_temp_k`) that makes aging monotonically WORSE
+  as temperature rises above `reference_temp_k` and monotonically BETTER
+  as it falls below — correct for SEI-growth-dominated aging (the
+  mechanism that term's coefficients were actually calibrated to
+  represent, see `aging.py`'s own module docstring), but wrong, not just
+  incomplete, for charging current specifically: real lithium-ion cells
+  charged at low temperature suffer **lithium plating** — metallic
+  lithium deposits on the graphite anode instead of intercalating,
+  because low temperature slows solid-state diffusion and intercalation
+  kinetics faster than it slows the charge current trying to push ions
+  in. This is charge-specific (discharge doesn't push lithium INTO the
+  anode, so it isn't at risk the same way) and gets WORSE, not better, as
+  temperature drops — the opposite direction from the existing Arrhenius
+  term. `battery.py`'s existing `_cold_derate_scale`/
+  `available_charge_current_a` already model the BMS's defensive response
+  to this real risk (throttling charge current when cold) — see that
+  module's own docstring — but a derate curve that reduces available
+  current is not the same claim as "the current that DOES flow at that
+  reduced rate causes zero extra aging"; a real BMS's derate curve is
+  calibrated to keep plating within an acceptable envelope, not to
+  eliminate it, so a residual, genuinely present aging cost on the
+  actually-applied cold-charge current is real physics this simulator
+  currently has no term for at all.
+- **Survey: no clean fleet-level anchor exists specifically isolating
+  cold-charging degradation, unlike this project's hope going in.**
+  Checked directly, not assumed:
+  - Geotab's own 2026 fleet studies (22,700+ and 6,300+ EVs) explicitly
+    disclaim this: "our current dataset lacked sufficient 'cold-only'
+    samples... to isolate the impact of extreme cold on long-term
+    degradation." Their published climate finding is a HOT-climate
+    penalty (~0.4%/year faster in hot climates), and their newer
+    fast-charging finding (DC fast-charge-heavy vehicles degrading up to
+    ~3.0%/year vs ~1.5%/year for AC-heavy ones) does not separate out
+    ambient temperature during those sessions.
+  - Geotab's own qualitative statement corroborates the mechanism without
+    quantifying it: "charging below 0°C without battery pre-conditioning
+    increases lithium plating risk — a permanent capacity loss
+    mechanism."
+  - Nissan Leaf fleet data specifically (Plug-in America / My Nissan Leaf
+    forum, Geotab) is dominated by the well-known HOT-climate signal
+    (Phoenix-area Leafs, ~4-4.5%/year), not a cold-climate one — there is
+    no equivalent "cold-climate Leaf fleet" quantified dataset found.
+    **The user's premise that documented Leaf cold-climate fleet data
+    exists does not appear to be borne out by what's findable — flagging
+    this rather than fabricating a number to match the premise.**
+  - The real, usable anchors found are lab/cell-level, not fleet-level —
+    the same class of source this project's existing cycle-aging anchor
+    (82% SOH @ 100,000 kWh @ 25°C) already is:
+    1. **Yang & Wang, "Understanding the Trilemma of Fast Charging, Energy
+       Density and Cycle Life of Lithium-ion Batteries"** (Penn State
+       ECEC; DOE-funded, OSTI-hosted, peer-reviewed physics-based aging
+       model, read directly, not just abstract-summarized). Key findings:
+       lithium plating is negligible above an "onset temperature" that
+       itself RISES with charge C-rate (their simulated PHEV cell:
+       no-plating floor ~20°C at 1C charge, ~40°C at 2C, >50°C at 3C — the
+       "optimal temperature for cell life" shifts the same way: 20°C →
+       35°C → 45°C at 1C/2C/3C respectively). Below that floor, capacity
+       loss becomes strongly nonlinear (a positive-feedback effect: plated
+       lithium blocks anode pores, worsening the next cycle's plating).
+       For a denser modern EV-class cell (vs. their lower-density PHEV
+       cell), the no-plating floor is higher still (~35°C even at 1C).
+    2. **Matadi et al., cited directly within Yang & Wang** (a real,
+       experimental, not simulated, number — but I have only the
+       secondary citation, not Matadi et al.'s own paper, so treat this
+       as one citation-hop removed): a 16Ah graphite/NMC cell that
+       sustained 4000 cycles at 25°C lost 75% capacity in only 50 cycles
+       at 5°C — roughly two orders of magnitude faster per-cycle capacity
+       loss at 5°C than at 25°C. Caveat found while checking this, not
+       glossed over: the two numbers use different implied end-of-life
+       thresholds (4000-cycle figure presumably to a conventional ~20-30%
+       EOL, the 50-cycle figure explicitly to 75% loss), so the ratio
+       overstates the like-for-like rate difference somewhat — a real
+       calibration pass should pull Matadi et al.'s own paper directly
+       before treating this ratio as exact, not just relayed through
+       Yang & Wang's citation of it.
+    3. **A relevant, if secondary, validation of direction/magnitude for
+       preconditioning specifically** (also from Yang & Wang, their own
+       prior work): a specialized cell with an internal rapid-heating
+       element (~1°C/sec, reaching an "optimal" charging temperature
+       before charge starts) sustained 4500 cycles of 3.5C charging at
+       0°C ambient before losing 20% capacity, vs. only 50 cycles for an
+       identical cell with no preheating step under the same condition —
+       a ~90x cycle-life improvement from real preconditioning, done
+       aggressively enough to actually reach the cell's true optimal
+       temperature. This is useful context for the preconditioning
+       milestone's own net-negative finding, not a reason to revisit it:
+       Kia Niro EV's real-world heater (2kW, resistive, external, 25min
+       budget) is a much weaker intervention than a purpose-built internal
+       heating element reaching >1°C/sec — the preconditioning finding and
+       this milestone are consistent, not in tension. Once this milestone
+       lands, the preconditioning mechanism will have an actual cold-
+       charging cost to protect against for the first time; revisit
+       whether the net-negative finding still holds once it does (a
+       downstream check, not scoped to this Q entry).
+- Options considered (functional form):
+  1. **A new, separate, charge-only additive term in `compute_aging_step`**
+     (Claude's recommendation to start): active only when
+     `applied_current_a < 0` (this project's existing sign convention for
+     charging, confirmed in `battery.py`) AND `cell_temp_k` is below a new
+     `cold_charge_plating_onset_temp_k`, scaling with how far below that
+     onset temperature the cell is and with C-rate (mirroring the
+     existing `cycle_aging_c_rate_sensitivity` term's shape, but as its
+     own independent coefficient, not reusing that one — the two
+     mechanisms have different real C-rate sensitivities). Held at a
+     SINGLE reference-C-rate onset temperature initially, not the fully
+     C-rate-coupled onset surface Yang & Wang found — the same kind of
+     deliberate first-pass simplification this project's existing cycle-
+     aging model already made in several places (e.g.
+     `cycle_aging_activation_temp_k` assumed rather than derived). A
+     genuinely new, separately-attributable SOH delta
+     (`AgingStepResult.cold_charge_plating_delta` or similar, summed into
+     `new_soh` alongside `calendar_delta`/`cycle_delta`, never folded into
+     either) — matches this project's own stated causal-trace goal (every
+     simulated event should be attributable to why it happened, not
+     merged into a less-specific bucket), and matches the precedent of
+     giving `precondition` its own phase rather than folding it into
+     `ramp` in the preconditioning milestone just completed.
+  2. **A full physics-based SEI+plating electrochemical model** (Yang &
+     Wang's own approach: Tafel kinetics, tracked anode porosity/lithium-
+     deposition-potential internal state). Rejected: this project's
+     entire aging model is a deliberately simple empirical Arrhenius+EFC
+     formulation with no internal electrochemical state anywhere else —
+     adopting a stateful physics model for exactly one aging mechanism
+     while every other one stays empirical would be inconsistent
+     abstraction level, and CLAUDE.md's "no speculative abstractions" /
+     "build what the current task needs" rule argues directly against it
+     unless option 1 is shown to be inadequate.
+  3. **Fold it into the existing `cycle_aging_activation_temp_k` term**
+     (e.g. make that Arrhenius term non-monotonic instead of adding a
+     separate one). Rejected: would silently break the existing anchor
+     fit (that coefficient is currently unconstrained by the single
+     82%-SOH anchor and was ASSUMED, not fit — see `aging.py`'s own
+     docstring — but changing its functional FORM, not just its value,
+     is a bigger, riskier change than adding an independent term, and
+     would make the existing coefficient's provenance documentation
+     wrong).
+- Options considered (calibration source):
+  1. **Matadi et al.'s cited ratio** (4000 cycles @ 25°C vs. 75%-loss-in-
+     50-cycles @ 5°C) as the primary real anchor, EOL-threshold mismatch
+     caveat flagged directly in the coefficient provenance docstring
+     (same discipline `aging.py`'s existing docstring already uses for
+     its own anchors' limitations) — pending an attempt to retrieve
+     Matadi et al.'s own paper directly to tighten this before finalizing
+     the exact coefficient value, not before opening this design question.
+  2. **Yang & Wang's own simulated onset-temperature figures** (~20°C
+     floor at 1C, rising with C-rate) as the onset-temperature anchor
+     specifically (a different unknown than the RATE anchor above — this
+     project's existing model already separates "which coefficients are
+     anchored" from "which are assumed," e.g. `cycle_aging_c_rate_
+     sensitivity`'s own history), leaving the rate itself anchored by
+     option 1's Matadi citation. (Claude's recommendation: use both,
+     analogous to how the existing cycle-aging anchor already needed
+     three separate assumed/solved constants, not one.)
+  3. Invent a placeholder number instead of researching further. Rejected
+     outright — this is exactly the class of decision CLAUDE.md's "don't
+     invent parameters" rule exists for, and real, if imperfect,
+     literature anchors were found.
+- Blocking: yes — this changes published cycle-aging numbers for every
+  cold-climate scenario across all six reference profiles (shared
+  aging coefficients, so the change is universal, not per-profile), and
+  needs a written implementation plan reviewed before any code changes
+  per this project's standing practice, not just a Q-NNNN resolution.
+- **Not resolved here — reported back for review, not decided.** Per this
+  project's own escalation bar (a decision that determines a citable,
+  published number and changes what an existing term's coefficients mean
+  cannot be decided silently), this entry stays open pending the user's
+  confirmation of: the functional-form recommendation (option 1), the
+  calibration approach (option 1+2 combined), and whether to pull Matadi
+  et al.'s primary paper before finalizing the exact rate coefficient.
+  Implementation does not start until this resolves.
+
