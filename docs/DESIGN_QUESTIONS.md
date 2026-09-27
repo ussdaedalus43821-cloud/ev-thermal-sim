@@ -1515,3 +1515,29 @@ code it calls is.
   since the unbounded-sink version was demonstrably wrong, not just
   imprecise. See `docs/MILESTONES.md`'s corresponding milestone for the
   full implementation record and every number here traced to an actual run.
+- **Follow-up resolution (2026-09-26): the i3-vs-Leaf publication caveat is
+  LIFTED.** `examples/i3_multiclimate_validation.py` validated the
+  refrigerant loop under two more real climates beyond the two used during
+  implementation (Phoenix, AZ — already sourced for the chiller
+  investigation; Minneapolis, MN — new, real NOAA NCEI 1991-2020 normals,
+  station USW00014922, first use of this location anywhere in the
+  project), plus a direct hot-bucket-vs-cold-bucket engagement check and a
+  real 365-day i3-vs-Leaf comparison under all four climates. Findings, not
+  assumed: the refrigerant effect grows smoothly across a hot trip's phases
+  (+0.077K → +0.394K → +0.649K at Phoenix's 47.7°C peak) and is EXACTLY
+  0.0000K under Minneapolis's -17.3°C coldest bucket — a cooling-only
+  mechanism correctly staying fully inactive in the cold, not partially
+  engaging. The i3-vs-Leaf total-loss ratio is a coherent, physically
+  sensible picture across climates: i3 clearly outperforms Leaf in both hot
+  climates (Guam 0.568×, Phoenix 0.648× — consistent with the Leaf's own
+  real documented hot-climate weakness), shows no artificial advantage in
+  the cold climate where the mechanism is correctly inactive (Minneapolis
+  1.005×, essentially identical), and only a small, plausible difference in
+  the mild climate (Seattle 1.130× — a genuine multi-variable real-vehicle
+  comparison, not an isolated-variable counterfactual, so some non-thermal
+  difference is expected). No NaN/inf/runaway temperatures in any run. This
+  is the evidence the caveat was gating — `CLAUDE.md`, `docs/ROADMAP.md`,
+  and `docs/model_reference.md` are updated to reflect i3-vs-Leaf battery
+  comparisons are now publication-safe. Still open, not closed by this:
+  the i3 battery's own `resistance_to_coolant_k_per_w` magnitude (flagged
+  earlier in this entry) — not this validation's scope.

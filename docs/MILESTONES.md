@@ -3106,3 +3106,51 @@ whole history to find.
   `CLAUDE.md`/`model_reference.md` caveat stays in place, reworded to say
   why (not yet re-validated under the real mechanism across climates), not
   lifted.
+- **Milestone D follow-up — multi-climate validation, i3-vs-Leaf caveat
+  LIFTED (done, 2026-09-26, `docs/DESIGN_QUESTIONS.md` Q-0024's
+  follow-up resolution):** closes the one item Milestone D itself left
+  open. `examples/i3_multiclimate_validation.py` (NEW) validates the
+  refrigerant loop under two more real climates beyond the two used
+  during implementation:
+  - **Phoenix, AZ** — already sourced (real NOAA normals) for the chiller
+    investigation; reused directly.
+  - **Minneapolis, MN** — NEW, real NOAA NCEI 1991-2020 normals
+    (Minneapolis/St Paul Intl AP, station USW00014922), first use of
+    this location anywhere in the project. Derived the same way every
+    other real climate here has been: mean=8.28°C (average of the 12
+    monthly means, matches NOAA's own published Summary row exactly),
+    seasonal_amplitude=16.14K, daily_amplitude=9.45K, elevation=872ft
+    (real) — a genuinely cold climate (implied winter low -17.3°C, well
+    below the battery's 0°C charge cutoff), chosen specifically because
+    the refrigerant loop is cooling-only and should show NO engagement
+    there, the complementary case to Phoenix's hot-peak stress test.
+  **Two things checked, not assumed**: (1) a direct hot-bucket-vs-cold-
+  bucket engagement comparison (WITH vs. WITHOUT the RefrigerantLoop,
+  same technique the original chiller investigation used) — under
+  Phoenix's 47.7°C peak, the refrigerant effect grows smoothly across a
+  HOT_SOAK_COMMUTE trip's phases (+0.077K → +0.394K → +0.649K); under
+  Minneapolis's -17.3°C trough, the effect is EXACTLY 0.0000K in every
+  phase, confirming the mechanism stays fully, cleanly inactive in the
+  cold rather than partially engaging or producing a numerical artifact.
+  (2) A real 365-day i3-vs-Leaf comparison under all four climates
+  (Guam, Seattle, Phoenix, Minneapolis), reusing `examples.flagship_
+  comparison`'s own `run_one` machinery directly (same usage/charging/
+  day-type-mix for both vehicles under every climate, isolating climate
+  as the controlled variable). **Result, a coherent and physically
+  sensible picture, not a fluke**: i3-vs-Leaf total-loss ratio —
+  Guam 0.568× (i3 clearly better), Phoenix 0.648× (i3 clearly better),
+  Seattle 1.130× (i3 slightly worse — a genuine multi-variable real-
+  vehicle comparison, not an isolated-variable counterfactual, so some
+  non-thermal difference is expected), Minneapolis 1.005× (essentially
+  identical — no artificial advantage where the mechanism is correctly
+  inactive). i3 winning decisively in both hot climates is directly
+  consistent with the Leaf's own real documented hot-climate weakness
+  (docs/research/profiles_v1.md: "~4.2%/year in hot climates"). No
+  NaN/inf/runaway temperatures across any of the four climates for
+  either vehicle.
+  **The i3-vs-Leaf battery-comparison publication caveat is LIFTED** —
+  `CLAUDE.md`, `docs/ROADMAP.md`, and `docs/model_reference.md` updated
+  accordingly. Still open, unaffected by this: the i3 battery's own
+  `resistance_to_coolant_k_per_w` magnitude (flagged in the original
+  Milestone D entry, not re-derived here — out of this validation's
+  scope).

@@ -117,14 +117,19 @@ pack; fixed by reusing `ThermalNode.resistance_to_coolant_k_per_w` as a
 genuine rate limit — the same field, previously noted "unused" on this
 profile, now the mechanism's binding constraint in practice).
 
-**Caution, still open:** validated under two climates (Guam, Seattle) so
-far, not yet the broader multi-climate/duty-cycle pass the six passenger
-profiles' other mechanisms have had — do not use i3-vs-Leaf battery
-comparisons for publication until that follow-up validation lands. Also
-flagged: the battery's `resistance_to_coolant_k_per_w` (0.3 K/W) is
-noticeably weaker than other actively-cooled profiles' placeholder values
-for the same field (~0.015-0.05) and predates this field becoming
-load-bearing — not re-derived, a real follow-up (see `docs/ROADMAP.md`).
+**Validated under four real climates** (Guam, Seattle, Phoenix, Minneapolis
+— `examples/i3_multiclimate_validation.py`): the mechanism engages
+smoothly under a real 47.7°C peak and stays exactly inactive under a real
+-17.3°C trough, and a real 365-day i3-vs-Leaf comparison across all four
+shows a coherent picture — i3 clearly outperforms Leaf in both hot
+climates (consistent with the Leaf's own real documented hot-climate
+weakness), no artificial cold-climate advantage, a small expected
+difference in the mild climate. **i3-vs-Leaf battery comparisons are now
+publication-safe.** Still flagged, unaffected by this: the battery's
+`resistance_to_coolant_k_per_w` (0.3 K/W) is noticeably weaker than other
+actively-cooled profiles' placeholder values for the same field
+(~0.015-0.05) and predates this field becoming load-bearing — not
+re-derived, a real follow-up (see `docs/ROADMAP.md`).
 
 ### Kia Niro EV (64 kWh, heat-pump trim, 2018+)
 

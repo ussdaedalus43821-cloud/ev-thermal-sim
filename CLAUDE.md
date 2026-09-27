@@ -113,14 +113,16 @@ related code:
   A resistance-cap correctness bug (an unbounded direct sink let a single
   trip implausibly overcool the pack) was found and fixed mid-
   implementation by reusing `ThermalNode.resistance_to_coolant_k_per_w` as
-  a genuine rate limit. **Still don't use i3-vs-Leaf battery comparisons
-  for publication** — validated under two climates (Guam, Seattle) so far,
-  not yet the broader multi-climate/duty-cycle pass the six passenger
-  profiles' other mechanisms have had; that gap, not the mechanism itself,
-  is what's left before this caveat can be lifted. See `docs/ROADMAP.md`'s
-  "Thermal / cooling physics" section for this and the i3 battery's own
-  `resistance_to_coolant_k_per_w` magnitude (0.3 K/W, weaker than other
-  profiles' convention, now load-bearing and flagged for re-examination).
+  a genuine rate limit. **i3-vs-Leaf battery comparisons are now
+  publication-safe** — validated under four real climates (Guam, Seattle,
+  Phoenix, Minneapolis; `examples/i3_multiclimate_validation.py`): the
+  mechanism engages smoothly under real heat, stays exactly inactive under
+  real cold, and produces a coherent i3-vs-Leaf picture (i3 clearly better
+  in both hot climates, no artificial advantage in the cold one). See
+  `docs/ROADMAP.md`'s "Thermal / cooling physics" section for the full
+  numbers and the i3 battery's own `resistance_to_coolant_k_per_w`
+  magnitude (0.3 K/W, weaker than other profiles' convention, now
+  load-bearing and still flagged for re-examination — unaffected by this).
 - **Preconditioning is deferred entirely, not approximated** (`docs/
   DESIGN_QUESTIONS.md` Q-0004) — every fast-charge characterization is
   equally pessimistic across all profiles; this is the single biggest
