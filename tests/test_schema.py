@@ -501,6 +501,34 @@ def test_refrigerant_loop_round_trip() -> None:
     assert restored_loop.serves == ["battery_pack"]
 
 
+def test_thermal_architecture_defaults_preconditioning_fields_to_none() -> None:
+    """Q-0026: every profile except the Kia Niro EV leaves these unset --
+    battery_preconditioning alone (unaffected by this milestone) can still
+    be True without them, so this fixture's own True value round-trips
+    with both new fields None, not asserted inconsistent with each other."""
+    architecture = make_thermal_architecture()
+    assert architecture.preconditioning_heater_power_w is None
+    assert architecture.preconditioning_target_temp_k is None
+    restored = ThermalArchitecture.model_validate_json(architecture.model_dump_json())
+    assert restored.preconditioning_heater_power_w is None
+    assert restored.preconditioning_target_temp_k is None
+
+
+def test_preconditioning_fields_round_trip() -> None:
+    architecture = make_thermal_architecture().model_copy(
+        update={
+            "preconditioning_heater_power_w": sourced(2000.0),
+            "preconditioning_target_temp_k": sourced(293.15),
+        }
+    )
+    restored = ThermalArchitecture.model_validate_json(architecture.model_dump_json())
+    assert restored == architecture
+    assert restored.preconditioning_heater_power_w is not None
+    assert restored.preconditioning_heater_power_w.value == 2000.0
+    assert restored.preconditioning_target_temp_k is not None
+    assert restored.preconditioning_target_temp_k.value == 293.15
+
+
 # --- ManufacturerProfile (deep nesting) ---
 
 

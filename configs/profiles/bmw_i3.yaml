@@ -506,7 +506,18 @@ thermal_architecture:
     source: "docs/research/profiles_v1.md — BMW i3"
     note: "research does not name the base-trim heater type explicitly, only that a heat pump is an optional upgrade ('saves up to 30% energy in city driving vs. resistive heat'), which implies the base trim uses resistive heat — not independently confirmed"
   heat_pump_recovers_powertrain_waste_heat: null  # not applicable to base trim / not described for the i3 either way
-  battery_preconditioning: true  # research: "Preconditioning via wallbox before departure in cold"
+  # Q-0027 (docs/DESIGN_QUESTIONS.md): was `true`, citing "Preconditioning
+  # via wallbox before departure in cold" — but that's COLD-WEATHER
+  # PRE-DEPARTURE warming (while plugged in at home, for driving
+  # range/performance), a real but DIFFERENT capability from what this
+  # field actually documents (its own Field description: "before a
+  # planned fast charge"). No fast-charge-specific i3 citation exists, so
+  # this is `false` — not a claim the i3 lacks real cold-departure
+  # preconditioning (it doesn't say either way for fast charging
+  # specifically), just that this field's own meaning isn't supported by
+  # the available research. The real cold-departure capability stays
+  # unmodeled: no field for it exists in this schema yet.
+  battery_preconditioning: false
 
 control_strategy:
   derate_curve:

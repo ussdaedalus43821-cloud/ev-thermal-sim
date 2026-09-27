@@ -48,11 +48,18 @@ from ev_thermal.schema import (
     LongHorizonRunResult,
     ManufacturerProfile,
     Scenario,
+    SimState,
     TripCharacterization,
     TripPhaseAging,
     TripType,
 )
-from ev_thermal.sim import coolant_node_name, initialize_sim_state, run_charging_session, run_scenario
+from ev_thermal.sim import (
+    advance_preconditioning_step,
+    coolant_node_name,
+    initialize_sim_state,
+    run_charging_session,
+    run_scenario,
+)
 
 ANNUAL_PEAK_DAY_OF_YEAR = 200.0
 """Day of year (1-365.25) of the annual ambient-temperature peak -- Northern
@@ -421,6 +428,78 @@ since a characterization function shouldn't reach into a specific profile's
 curve shape to decide its own phase structure -- the boundary is a modeling
 choice about where "ramp" ends and "taper" begins, not a per-profile value."""
 
+PRECONDITIONING_DURATION_S = 1500.0
+"""TODO(spec-sourcing): placeholder real-preconditioning duration, 25
+minutes -- within Tesla's own real, widely-documented Supercharger-
+preconditioning window (~20-30 minutes before arrival; see
+docs/DESIGN_QUESTIONS.md Q-0026), not vehicle-specific for any of the six
+reference profiles. Only used when a profile's ThermalArchitecture.
+battery_preconditioning is True AND its scenario's ChargingProfile.
+preconditioning_enabled is True -- see characterize_all_trips."""
+
+
+def _precondition_phase(
+    profile: ManufacturerProfile, scenario: Scenario, initial_state: SimState
+) -> tuple[SimState, TripPhaseAging]:
+    """Real preconditioning (Q-0026), not Q-0004's rejected temp-offset
+    shortcut: steps `advance_preconditioning_step` forward, at most
+    `PRECONDITIONING_DURATION_S`, with the profile's own real
+    `preconditioning_heater_power_w`, via the SAME per-second battery/
+    thermal physics every other discharge path uses -- a real SOC cost and
+    a real thermal rise, not a hand-set offset. Stops early once
+    `preconditioning_target_temp_k` is reached (a real BMS controls to a
+    target, it doesn't run blindly for a fixed duration) -- if the duration
+    budget elapses first, preconditioning simply ends at whatever
+    temperature it got to (realistic in genuinely cold conditions; see that
+    field's own docstring). Returns (the resulting `SimState`, a
+    `TripPhaseAging` summarizing the phase for the caller's own `phases`
+    list) -- the `SimState`'s `sim_time_s` is reset to 0.0 before being
+    returned so the caller's own subsequent charge-session phase math
+    (which assumes a 0-based time origin, like every other archetype's) is
+    unaffected by how long preconditioning actually took.
+    """
+    heater_power_w = profile.thermal_architecture.preconditioning_heater_power_w
+    assert heater_power_w is not None  # battery_preconditioning=True always pairs with this, per schema's own intent
+    target_temp_k = profile.thermal_architecture.preconditioning_target_temp_k
+
+    battery_node_name = profile.battery.thermal_node.name
+    state = initial_state
+    time_s: list[float] = [state.sim_time_s]
+    cell_temp_k: list[float] = [state.node_temps_k[battery_node_name]]
+    soc: list[float] = [state.battery_soc]
+    current_a: list[float] = [0.0]
+
+    end_time_s = state.sim_time_s + PRECONDITIONING_DURATION_S
+    network = None
+    while state.sim_time_s < end_time_s:
+        if target_temp_k is not None and cell_temp_k[-1] >= target_temp_k.value:
+            break
+        remaining_s = end_time_s - state.sim_time_s
+        record = advance_preconditioning_step(
+            profile, scenario, state, heater_power_w.value, max_dt_s=remaining_s, network=network
+        )
+        state = record.new_state
+        time_s.append(state.sim_time_s)
+        cell_temp_k.append(state.node_temps_k[battery_node_name])
+        soc.append(state.battery_soc)
+        current_a.append(record.applied_current_a)
+
+    capacity_ah = profile.battery.capacity_nominal_ah.value
+    # Already at/above target at t=0 (a warm-climate ambient bucket, or one
+    # near enough the target that even the first stability-check breaks the
+    # loop before any step runs) -- zero real samples beyond the initial
+    # one, so _phase_aging's overlap-weighted average has nothing to weight.
+    # Same degenerate-phase treatment _fast_charge_phases already uses for
+    # its own "already past the knee at t=0" edge case, not a new pattern.
+    if len(time_s) < 2:
+        phase = _degenerate_phase("precondition", time_s, cell_temp_k, soc, current_a, capacity_ah, 0.0)
+    else:
+        phase = _phase_aging(
+            "precondition", time_s, cell_temp_k, soc, current_a, capacity_ah, 0.0, PRECONDITIONING_DURATION_S
+        )
+    reset_state = state.model_copy(update={"sim_time_s": 0.0, "step_count": 0})
+    return reset_state, phase
+
 
 def _fast_charge_phases(
     time_s: list[float],
@@ -462,6 +541,7 @@ def characterize_fast_charge_session(
     profile: ManufacturerProfile,
     scenario_template: Scenario,
     ambient_bucket_temp_k: float,
+    preconditioned: bool = False,
 ) -> TripCharacterization:
     """Run one Tier-1 (full-fidelity `sim.run_charging_session`) characterization
     for a DC fast-charge session at a constant `ambient_bucket_temp_k`, for
@@ -491,22 +571,48 @@ def characterize_fast_charge_session(
     Revisit if offset error is shown to dominate the fast-charge thermal
     signature specifically.
 
-    **Phases (`ramp`, `taper`) are SOC-triggered at `FAST_CHARGE_SOC_KNEE`,
-    not time-fixed like every other archetype.** SOC is monotonically
-    non-decreasing across a charging session (`advance_charging_step` always
-    requests negative/charging current; the applied magnitude only ever
-    shrinks, never flips sign, since every ceiling in `available_charge_
-    current_a` is non-negative by construction), so a knee-crossing, if it
-    exists, exists exactly once. `phases` ALWAYS has exactly 2 entries
-    regardless of whether a real crossing occurs -- `_interpolate_
-    characterization` zips two characterizations' phase lists with
-    `strict=True`, so a variable phase count per ambient bucket would crash
-    bucket interpolation the moment two adjacent buckets disagreed on
-    whether a session crosses the knee (plausible: colder buckets charge
-    more slowly), not just break a single session. When the session starts
-    at/above the knee, `ramp` is a `_degenerate_phase` built from the `t=0`
-    sample. When the session never reaches the knee in `duration_s`, `taper`
-    is a `_degenerate_phase` built from the `t=duration_s` (final) sample.
+    **`preconditioned` (Q-0026, real preconditioning, not Q-0004's rejected
+    temp-offset shortcut)**: when `True`, `_precondition_phase` runs FIRST,
+    starting from `ambient_bucket_temp_k` and stepping real per-second
+    physics forward with the profile's own `preconditioning_heater_power_w`
+    heater active -- a real SOC cost and a real thermal rise, not a hand-set
+    offset -- producing the actual warmer, lower-SOC state the charge
+    session itself then starts from. This is a genuinely different
+    Tier-1 characterization, not a Tier-2 replay trick: `apply_trip_start_
+    offset`'s linear-offset mechanism only shifts temperature, never
+    current/SOC, so it cannot reach `battery.available_charge_current_a`'s
+    `_cold_derate_scale` term -- the one thing that makes preconditioning
+    matter for how fast the session itself can charge. `characterize_all_
+    trips` decides whether to pass `True` (see that function) -- this
+    parameter does not read `battery_preconditioning`/`preconditioning_
+    enabled` itself, keeping this function a pure "given a bucket temp and
+    a yes/no, characterize one session" primitive.
+
+    **Phases**: `[ramp, taper]` normally, or `[precondition, ramp, taper]`
+    when `preconditioned=True` -- a THIRD phase, not folded into `ramp`,
+    so the preconditioning window's own aging contribution is visible and
+    separately attributable, matching this project's general phase-level
+    (not whole-trip-averaged) aging-input convention. `characterize_all_
+    trips` always calls this function with the SAME `preconditioned` value
+    for every ambient bucket in one `characterize_all_trips` call, so a
+    given `TripType.FAST_CHARGE_SESSION` characterization set is internally
+    consistent (always 2 phases or always 3) -- `_interpolate_
+    characterization`'s `strict=True` zip requires this, same reasoning
+    `ramp`/`taper`'s own always-2-entries invariant already documents below.
+
+    **`ramp`/`taper` are SOC-triggered at `FAST_CHARGE_SOC_KNEE`, not
+    time-fixed like every other archetype (or `precondition`, which IS
+    time-fixed).** SOC is monotonically non-decreasing across a charging
+    session (`advance_charging_step` always requests negative/charging
+    current; the applied magnitude only ever shrinks, never flips sign,
+    since every ceiling in `available_charge_current_a` is non-negative by
+    construction), so a knee-crossing, if it exists, exists exactly once.
+    These two phases ALWAYS total exactly 2 entries regardless of whether a
+    real crossing occurs -- see the `strict=True` reasoning above. When the
+    session starts at/above the knee, `ramp` is a `_degenerate_phase` built
+    from the session's own `t=0` sample. When the session never reaches the
+    knee in `duration_s`, `taper` is a `_degenerate_phase` built from the
+    `t=duration_s` (final) sample.
     """
     climate = _pinned_climate(scenario_template.climate, ambient_bucket_temp_k)
     scenario = scenario_template.model_copy(update={"manufacturer_profile": profile, "climate": climate})
@@ -516,6 +622,10 @@ def characterize_fast_charge_session(
     patched_temps_k = dict(base_state.node_temps_k)
     patched_temps_k[battery_node_name] = ambient_bucket_temp_k
     initial_state = base_state.model_copy(update={"node_temps_k": patched_temps_k})
+
+    precondition_phase: TripPhaseAging | None = None
+    if preconditioned:
+        initial_state, precondition_phase = _precondition_phase(profile, scenario, initial_state)
 
     result = run_charging_session(
         profile,
@@ -534,11 +644,12 @@ def characterize_fast_charge_session(
     ramp, taper = _fast_charge_phases(
         time_s, cell_temp_k, soc, current_a, capacity_ah, FAST_CHARGE_SESSION_DURATION_S
     )
+    phases = [precondition_phase, ramp, taper] if precondition_phase is not None else [ramp, taper]
 
     return TripCharacterization(
         trip_type=TripType.FAST_CHARGE_SESSION,
         ambient_bucket_temp_k=ambient_bucket_temp_k,
-        phases=[ramp, taper],
+        phases=phases,
         odometer_km_delta=0.0,
         final_soc=result.final_state.battery_soc,
         final_node_temps_k=result.final_state.node_temps_k,
@@ -556,14 +667,29 @@ def characterize_all_trips(
     two-tier split -- call once, reuse the result across many
     `simulate_long_horizon` calls (different day_type_mix, duration_years, or
     seed) rather than re-running Tier-1 physics per call.
+
+    Real preconditioning (Q-0026) applies when BOTH `profile.thermal_
+    architecture.battery_preconditioning` (vehicle capability) AND
+    `scenario_template.charging_profile.preconditioning_enabled`
+    (scenario/usage assumption) are true -- this is the ONLY place that
+    decision is made; `characterize_fast_charge_session` itself just takes
+    the resulting yes/no. Today this is `True` only for the Kia Niro EV
+    with `preconditioning_enabled=True` explicitly set on its scenario (no
+    example script sets it yet -- see docs/DESIGN_QUESTIONS.md Q-0026); the
+    BMW i3's `battery_preconditioning` was corrected to `False` (Q-0027).
     """
     buckets = ambient_bucket_temps_k(scenario_template.climate, n_buckets)
     result = {
         trip_type: [characterize_trip(profile, scenario_template, trip_type, bucket) for bucket in buckets]
         for trip_type in _ARCHETYPES
     }
+    preconditioned = (
+        profile.thermal_architecture.battery_preconditioning
+        and scenario_template.charging_profile.preconditioning_enabled
+    )
     result[TripType.FAST_CHARGE_SESSION] = [
-        characterize_fast_charge_session(profile, scenario_template, bucket) for bucket in buckets
+        characterize_fast_charge_session(profile, scenario_template, bucket, preconditioned=preconditioned)
+        for bucket in buckets
     ]
     return result
 

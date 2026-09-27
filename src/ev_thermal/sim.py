@@ -1004,6 +1004,224 @@ def advance_charging_step(
     )
 
 
+def advance_preconditioning_step(
+    profile: ManufacturerProfile,
+    scenario: Scenario,
+    state: SimState,
+    heater_power_w: float,
+    max_dt_s: float | None = None,
+    pump_aggressiveness: float = DEFAULT_PUMP_AGGRESSIVENESS,
+    network: ThermalNetwork | None = None,
+) -> SimStepRecord:
+    """Real preconditioning (docs/DESIGN_QUESTIONS.md Q-0026): advance
+    `state` by one step of the battery actively pre-heating itself before a
+    planned fast charge. Peer to `advance_charging_step`, same "no driver,
+    no motor/inverter mechanical output, vehicle stationary" shape and the
+    same reason for it -- but the battery is DISCHARGING to power its own
+    heater, not receiving current from an external charger.
+
+    This is Q-0026's actual mechanism, not Q-0004's rejected temp-offset
+    shortcut: `heater_power_w` is drawn as real battery current via the
+    same `compute_battery_electrical_step` every other discharge path uses
+    (so it costs real SOC, not an invented one), and is ALSO applied as a
+    direct heat_inputs_w term on the battery's own node -- distinct from,
+    and on top of, the battery's own incidental R0/entropic heat from
+    carrying that current. A resistive preconditioning heater is treated
+    as ~100% efficient (see `RefrigerantLoop`/`CoolingLoop.chiller_
+    capacity_w` for the contrasting compressor-style case, which DOES need
+    a separate capacity/COP figure) -- see `ThermalArchitecture.
+    preconditioning_heater_power_w`'s own docstring.
+
+    Reuses `step_controller`/`step_cooling`/the refrigerant-loop machinery
+    unmodified: a cold pack being intentionally warmed naturally reads a
+    near-zero/floor cooling duty from the existing thermostat-ramp logic,
+    so no special-casing is needed to avoid the cooling and heating paths
+    fighting each other.
+    """
+    battery_spec = profile.battery
+    aged_battery_spec = apply_soh_to_battery_spec(battery_spec, state.battery_soh)
+    motor_spec = profile.motors[0]
+    inverter_spec = profile.inverter
+    cooling_loops = profile.thermal_architecture.cooling_loops
+    refrigerant_loops = profile.thermal_architecture.refrigerant_loops
+
+    motor_name = motor_spec.thermal_node.name
+    inverter_name = inverter_spec.thermal_node.name
+    battery_name = battery_spec.thermal_node.name
+
+    ambient_temp_k = scenario.climate.mean_annual_temp_k.value
+
+    if network is None:
+        coolant_nodes = _coolant_thermal_nodes(cooling_loops, state.node_temps_k)
+        network = _combined_thermal_network(profile, coolant_nodes)
+    coolant_temps_k = {loop.name: state.node_temps_k[coolant_node_name(loop.name)] for loop in cooling_loops}
+
+    battery_rc_tau_s = aged_battery_spec.r1_ohm.value * aged_battery_spec.c1_farad.value
+    dt_s = _stabilize_dt_s(network, battery_rc_tau_s, scenario.dt_policy.min_dt_s)
+    if max_dt_s is not None:
+        dt_s = min(dt_s, max_dt_s)
+
+    causal_events: list[CausalEvent] = []
+
+    # cooling duty only, same reasoning as advance_charging_step's own
+    # identical call.
+    controller_result = step_controller(
+        0.0,
+        motor_spec,
+        inverter_spec,
+        aged_battery_spec,
+        profile.vehicle_dynamics,
+        cooling_loops,
+        state.node_temps_k[motor_name],
+        state.node_temps_k[inverter_name],
+        state.battery_soc,
+        state.node_temps_k[battery_name],
+        state.battery_v_rc_v,
+        state.battery_voltage_v,
+        0.0,
+        coolant_temps_k,
+        state.sim_time_s,
+        refrigerant_loops=refrigerant_loops,
+        pump_aggressiveness=pump_aggressiveness,
+    )
+
+    cooling_results = {
+        loop.name: step_cooling(
+            loop,
+            state.node_temps_k[coolant_node_name(loop.name)],
+            ambient_temp_k,
+            state.speed_mps,
+            controller_result.commanded_pump_duty[loop.name],
+            controller_result.commanded_fan_duty[loop.name],
+            controller_result.commanded_chiller_duty[loop.name],
+        )
+        for loop in cooling_loops
+    }
+    total_heat_rejected_w = sum(result.heat_rejected_w for result in cooling_results.values())
+    total_chiller_heat_removed_w = sum(result.chiller_heat_removed_w for result in cooling_results.values())
+
+    component_temps_k_for_refrigerant = {
+        motor_name: state.node_temps_k[motor_name],
+        inverter_name: state.node_temps_k[inverter_name],
+        battery_name: state.node_temps_k[battery_name],
+    }
+    component_resistances_to_coolant_k_per_w = {
+        motor_name: motor_spec.thermal_node.resistance_to_coolant_k_per_w.value,
+        inverter_name: inverter_spec.thermal_node.resistance_to_coolant_k_per_w.value,
+        battery_name: battery_spec.thermal_node.resistance_to_coolant_k_per_w.value,
+    }
+    refrigerant_heat_removed_w_by_component, refrigerant_parasitic_w = _step_refrigerant_loops(
+        refrigerant_loops,
+        controller_result.commanded_refrigerant_duty,
+        component_temps_k_for_refrigerant,
+        component_resistances_to_coolant_k_per_w,
+    )
+    total_refrigerant_heat_removed_w = sum(refrigerant_heat_removed_w_by_component.values())
+
+    cooling_parasitic_w = (
+        sum(result.pump_power_w + result.fan_power_w + result.chiller_power_w for result in cooling_results.values())
+        + refrigerant_parasitic_w
+    )
+
+    # The heater draws FROM the battery (discharge, positive current) --
+    # the opposite sign from advance_charging_step's external-charger
+    # current, which flows INTO the battery. Cooling/refrigerant parasitic
+    # draw is charged the same way every other discharge path charges it.
+    heater_current_request_a = (heater_power_w + cooling_parasitic_w) / state.battery_voltage_v
+    battery_electrical = compute_battery_electrical_step(
+        aged_battery_spec,
+        heater_current_request_a,
+        state.battery_soc,
+        state.node_temps_k[battery_name],
+        state.battery_v_rc_v,
+        dt_s,
+        state.sim_time_s,
+    )
+    causal_events.extend(battery_electrical.causal_events)
+
+    aging_result = compute_aging_step(
+        battery_spec,
+        state.battery_soh,
+        state.node_temps_k[battery_name],
+        state.battery_soc,
+        battery_electrical.applied_current_a,
+        dt_s,
+    )
+
+    heat_inputs_w = {
+        motor_name: 0.0,
+        inverter_name: 0.0,
+        # heater_power_w is a DIRECT heat term, distinct from (and on top
+        # of) the battery's own incidental irreversible/entropic heat from
+        # carrying the discharge current -- see this function's own
+        # docstring for why these aren't double-counting the same effect.
+        battery_name: battery_electrical.irreversible_heat_w + battery_electrical.entropic_heat_w + heater_power_w,
+        **{
+            coolant_node_name(loop.name): -(
+                cooling_results[loop.name].heat_rejected_w + cooling_results[loop.name].chiller_heat_removed_w
+            )
+            for loop in cooling_loops
+        },
+    }
+    for name, refrigerant_heat_removed_w in refrigerant_heat_removed_w_by_component.items():
+        heat_inputs_w[name] = heat_inputs_w.get(name, 0.0) - refrigerant_heat_removed_w
+    new_temps_k = step_thermal_network(
+        network,
+        state.node_temps_k,
+        heat_inputs_w,
+        ambient_temp_k=ambient_temp_k,
+        coolant_temp_k=0.0,
+        coolant_flow_l_per_min=0.0,
+        dt_s=dt_s,
+    )
+
+    new_state = SimState(
+        state_id=f"{state.scenario_id}-step-{state.step_count + 1:06d}",
+        scenario_id=state.scenario_id,
+        sim_time_s=state.sim_time_s + dt_s,
+        odometer_km=state.odometer_km,
+        battery_soc=battery_electrical.soc,
+        battery_soh=aging_result.new_soh,
+        node_temps_k=new_temps_k,
+        rng_state=state.rng_state,
+        fork_lineage=state.fork_lineage,
+        step_count=state.step_count + 1,
+        dt_current_s=dt_s,
+        speed_mps=0.0,
+        battery_v_rc_v=battery_electrical.v_rc_v,
+        driver_integral_error_state=state.driver_integral_error_state,
+        battery_throughput_ah=state.battery_throughput_ah + abs(battery_electrical.applied_current_a) * dt_s / 3600.0,
+        battery_voltage_v=battery_electrical.terminal_voltage_v,
+        parked_duration_s=0.0,
+    )
+
+    return SimStepRecord(
+        new_state=new_state,
+        causal_events=causal_events,
+        requested_torque_nm=0.0,
+        commanded_torque_nm=0.0,
+        motor_mechanical_power_w=0.0,
+        motor_electrical_power_w=0.0,
+        battery_electrical_power_w=battery_electrical.terminal_voltage_v * battery_electrical.applied_current_a,
+        battery_ocv_power_w=battery_electrical.ocv_v * battery_electrical.applied_current_a,
+        pump_duty=controller_result.commanded_pump_duty,
+        fan_duty=controller_result.commanded_fan_duty,
+        chiller_duty=controller_result.commanded_chiller_duty,
+        refrigerant_duty=controller_result.commanded_refrigerant_duty,
+        heat_rejected_w=total_heat_rejected_w,
+        chiller_heat_removed_w=total_chiller_heat_removed_w,
+        refrigerant_heat_removed_w=total_refrigerant_heat_removed_w,
+        motor_loss_w=0.0,
+        inverter_loss_w=0.0,
+        battery_loss_w=battery_electrical.irreversible_heat_w + battery_electrical.entropic_heat_w,
+        aux_power_w=0.0,
+        cooling_parasitic_w=cooling_parasitic_w,
+        active_limit_event_types=[event.event_type for event in controller_result.causal_events],
+        applied_current_a=battery_electrical.applied_current_a,
+        charging=False,
+    )
+
+
 def run_scenario(
     profile: ManufacturerProfile,
     scenario: Scenario,

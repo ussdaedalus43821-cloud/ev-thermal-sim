@@ -37,6 +37,7 @@ from ev_thermal.sim import (
     _coolant_thermal_nodes,
     advance_charging_step,
     advance_one_step,
+    advance_preconditioning_step,
     coolant_node_name,
     coolant_node_names,
     initialize_sim_state,
@@ -634,6 +635,79 @@ def test_advance_charging_step_resets_parked_duration_s() -> None:
     record = advance_charging_step(profile, scenario, state, charge_power_request_w=50_000.0)
 
     assert record.new_state.parked_duration_s == 0.0
+
+
+# --- Q-0026: advance_preconditioning_step ---
+
+
+def test_advance_preconditioning_step_produces_no_nan_or_inf() -> None:
+    profile = _make_profile()
+    scenario = _make_scenario(profile)
+    state = initialize_sim_state(profile, scenario, scenario.random_seed)
+
+    record = advance_preconditioning_step(profile, scenario, state, heater_power_w=2000.0)
+
+    for value in [
+        record.new_state.battery_soc,
+        record.new_state.battery_soh,
+        record.applied_current_a,
+        *record.new_state.node_temps_k.values(),
+    ]:
+        assert math.isfinite(value)
+
+
+def test_advance_preconditioning_step_is_stationary_and_discharges() -> None:
+    profile = _make_profile()
+    scenario = _make_scenario(profile)
+    state = initialize_sim_state(profile, scenario, scenario.random_seed)
+    start_soc = state.battery_soc
+
+    record = advance_preconditioning_step(profile, scenario, state, heater_power_w=2000.0)
+
+    assert record.charging is False
+    assert record.new_state.speed_mps == 0.0
+    assert record.new_state.odometer_km == state.odometer_km
+    assert record.applied_current_a > 0.0  # discharge convention -- the pack powers its own heater
+    assert record.new_state.battery_soc < start_soc
+
+
+def test_advance_preconditioning_step_heats_the_battery_directly() -> None:
+    """The heater's own heat_inputs_w term is what makes this real
+    preconditioning, not Q-0004's rejected temp-offset shortcut -- confirm
+    the battery node actually warms by a real per-second-physics amount,
+    not just that current flows.
+    """
+    profile = _make_profile()
+    scenario = _make_scenario(profile)
+    state = initialize_sim_state(profile, scenario, scenario.random_seed)
+    battery_name = profile.battery.thermal_node.name
+    start_temp_k = state.node_temps_k[battery_name]
+
+    record = advance_preconditioning_step(profile, scenario, state, heater_power_w=2000.0)
+
+    assert record.new_state.node_temps_k[battery_name] > start_temp_k
+
+
+def test_advance_preconditioning_step_zero_heater_power_heats_far_less_than_a_real_heater() -> None:
+    """Isolates the heater's own heat_inputs_w term specifically: at
+    heater_power_w=0.0 the battery still draws the fixture's own cooling-
+    loop parasitic current (pump/fan idle floors are never exactly zero --
+    controller.py's MIN_PUMP_DUTY/MIN_FAN_DUTY), so this doesn't assert
+    zero current/heating, only that a real 2000W heater produces a much
+    larger temperature rise than none at all.
+    """
+    profile = _make_profile()
+    scenario = _make_scenario(profile)
+    state = initialize_sim_state(profile, scenario, scenario.random_seed)
+    battery_name = profile.battery.thermal_node.name
+    start_temp_k = state.node_temps_k[battery_name]
+
+    no_heater = advance_preconditioning_step(profile, scenario, state, heater_power_w=0.0)
+    with_heater = advance_preconditioning_step(profile, scenario, state, heater_power_w=2000.0)
+
+    no_heater_rise_k = no_heater.new_state.node_temps_k[battery_name] - start_temp_k
+    with_heater_rise_k = with_heater.new_state.node_temps_k[battery_name] - start_temp_k
+    assert with_heater_rise_k > no_heater_rise_k * 10.0
 
 
 def test_run_charging_session_current_tapers_across_the_soc_curve_knee() -> None:

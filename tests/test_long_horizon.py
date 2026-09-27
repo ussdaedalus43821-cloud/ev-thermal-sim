@@ -22,6 +22,7 @@ from ev_thermal.long_horizon import (
     DIURNAL_PEAK_HOUR,
     FAST_CHARGE_SESSION_DURATION_S,
     FAST_CHARGE_SOC_KNEE,
+    PRECONDITIONING_DURATION_S,
     _archetype_assumed_start_temp_k,
     _fast_charge_phases,
     _interpolate_characterization,
@@ -52,6 +53,18 @@ _T = TypeVar("_T")
 
 def _sourced(value: _T) -> Sourced[_T]:
     return Sourced[_T](value=value, confidence=Confidence.LOW, source="test-fixture")
+
+
+def _make_preconditioning_profile(heater_power_w: float = 2000.0, target_temp_k: float = 293.15) -> ManufacturerProfile:
+    profile = _make_profile()
+    new_architecture = profile.thermal_architecture.model_copy(
+        update={
+            "battery_preconditioning": True,
+            "preconditioning_heater_power_w": _sourced(heater_power_w),
+            "preconditioning_target_temp_k": _sourced(target_temp_k),
+        }
+    )
+    return profile.model_copy(update={"thermal_architecture": new_architecture})
 
 
 def _make_long_horizon_profile() -> ManufacturerProfile:
@@ -1127,3 +1140,91 @@ def test_fast_charge_soc_knee_matches_placeholder_curve_documentation() -> None:
     # BatterySpec.charge_current_limit_curve's placeholder knee (0.6) --
     # a documentation/consistency guard, not a physics test.
     assert FAST_CHARGE_SOC_KNEE == 0.6
+
+
+# --- Q-0026: real preconditioning ---
+
+
+def test_characterize_fast_charge_session_not_preconditioned_has_two_phases() -> None:
+    """Default behavior unchanged -- preconditioned=False (the default) is
+    byte-identical to before this milestone."""
+    profile = _make_profile()
+    scenario = _make_scenario(profile, ambient_temp_k=263.15)  # cold, -10C
+
+    characterization = characterize_fast_charge_session(profile, scenario, 263.15)
+
+    assert [p.phase_name for p in characterization.phases] == ["ramp", "taper"]
+
+
+def test_characterize_fast_charge_session_preconditioned_has_three_phases() -> None:
+    profile = _make_preconditioning_profile()
+    scenario = _make_scenario(profile, ambient_temp_k=263.15)  # cold, -10C -- well below target
+
+    characterization = characterize_fast_charge_session(profile, scenario, 263.15, preconditioned=True)
+
+    assert [p.phase_name for p in characterization.phases] == ["precondition", "ramp", "taper"]
+
+
+def test_characterize_fast_charge_session_precondition_phase_warms_the_pack_and_costs_current() -> None:
+    profile = _make_preconditioning_profile()
+    scenario = _make_scenario(profile, ambient_temp_k=263.15)  # -10C, well below the 20C target
+
+    characterization = characterize_fast_charge_session(profile, scenario, 263.15, preconditioned=True)
+    precondition = characterization.phases[0]
+
+    assert precondition.phase_name == "precondition"
+    assert precondition.mean_cell_temp_k > 263.15  # real heating happened, not a zero-effect placeholder
+    assert precondition.mean_c_rate > 0.0  # the heater's own real current draw
+
+
+def test_characterize_fast_charge_session_precondition_stops_early_at_target() -> None:
+    """A pack starting close to (but below) the target should reach it well
+    before PRECONDITIONING_DURATION_S elapses -- confirms the stopping
+    condition actually stops early, not just eventually.
+    """
+    profile = _make_preconditioning_profile(heater_power_w=5000.0, target_temp_k=293.15)  # 20C
+    scenario = _make_scenario(profile, ambient_temp_k=288.15)  # 15C, close to target
+
+    characterization = characterize_fast_charge_session(profile, scenario, 288.15, preconditioned=True)
+    precondition = characterization.phases[0]
+
+    assert 0.0 < precondition.duration_s < PRECONDITIONING_DURATION_S
+    assert precondition.peak_cell_temp_k == pytest.approx(293.15, abs=0.1)
+
+
+def test_characterize_fast_charge_session_precondition_degenerate_when_already_at_target() -> None:
+    profile = _make_preconditioning_profile(target_temp_k=293.15)  # 20C
+    scenario = _make_scenario(profile, ambient_temp_k=305.15)  # 32C, already well above target
+
+    characterization = characterize_fast_charge_session(profile, scenario, 305.15, preconditioned=True)
+    precondition = characterization.phases[0]
+
+    assert precondition.duration_s == 0.0
+    assert precondition.mean_cell_temp_k == pytest.approx(305.15)
+
+
+def test_characterize_all_trips_gates_preconditioning_on_both_capability_and_scenario_flags() -> None:
+    """Q-0026: preconditioning applies only when BOTH ThermalArchitecture.
+    battery_preconditioning AND ChargingProfile.preconditioning_enabled are
+    true -- checked directly against all four combinations, not assumed
+    from characterize_fast_charge_session's own unit tests alone.
+    """
+    capable_profile = _make_preconditioning_profile()
+    incapable_profile = _make_profile()  # battery_preconditioning=False
+
+    scenario = _make_scenario(capable_profile)
+    enabled_scenario = scenario.model_copy(
+        update={"charging_profile": scenario.charging_profile.model_copy(update={"preconditioning_enabled": True})}
+    )
+    disabled_scenario = scenario  # preconditioning_enabled=False, from _make_scenario's own fixture
+
+    cases = [
+        (capable_profile, enabled_scenario, 3),  # capable AND enabled -> preconditioned
+        (capable_profile, disabled_scenario, 2),  # capable but not enabled this scenario
+        (incapable_profile, enabled_scenario, 2),  # enabled but vehicle isn't capable
+        (incapable_profile, disabled_scenario, 2),  # neither
+    ]
+    for profile, test_scenario, expected_phase_count in cases:
+        result = characterize_all_trips(profile, test_scenario)
+        for characterization in result[TripType.FAST_CHARGE_SESSION]:
+            assert len(characterization.phases) == expected_phase_count

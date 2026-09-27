@@ -3234,3 +3234,131 @@ whole history to find.
   confirmed behavior-identical by manual review (same limitation flagged
   for every prior Transition-side change this session: no test framework,
   no Node/tsc available in this environment).
+- **Milestone "Real preconditioning" (done, 2026-09-27,
+  `docs/DESIGN_QUESTIONS.md` Q-0026/Q-0027):** Q-0004 had deferred
+  preconditioning entirely, naming the blocker as a "vehicle knows a
+  charge stop is coming" signal requiring a route/navigation concept this
+  simulator doesn't have.
+  **First finding: that blocker is reducible, not real.**
+  `TripType.FAST_CHARGE_SESSION` was already its own independent
+  day-type-mix category — `characterize_fast_charge_session` starts from
+  `initialize_sim_state` at a fixed ambient bucket, with zero composition
+  with any preceding drive archetype. `simulate_long_horizon`'s day loop
+  already knows, for every simulated day, whether that occurrence IS a
+  fast-charge session — that's already exactly as knowable as any other
+  day-type membership fact, with zero new machinery. Q-0004 had conflated
+  "a real vehicle needs navigation to know this" (true) with "the
+  simulator needs a route concept to know this" (false, since it already
+  decides day types by category, not by simulating an actual
+  drive-to-charger sequence).
+  **Second finding, load-bearing for the architecture**:
+  `apply_trip_start_offset` (Tier-2's linear-offset replay) only shifts
+  temperature by a constant — it never re-derives current/SOC at the
+  shifted value, so it cannot reach `battery.available_charge_current_a`'s
+  `_cold_derate_scale` term, the one thing that makes preconditioning
+  matter. The mechanism therefore had to live at Tier-1, inside
+  `characterize_fast_charge_session` itself, not as a Tier-2 modifier.
+  **Third finding, found while surveying, not asked for**: BMW i3's
+  existing `battery_preconditioning: true` cited "preconditioning via
+  wallbox before departure in cold" — real, but a DIFFERENT phenomenon
+  (cold-weather pre-departure warming while already plugged in at home)
+  from what the field's own `Field(description=...)` claims
+  (fast-charge-arrival preconditioning specifically). Kia Niro EV's own
+  citation, by contrast, genuinely is fast-charge-specific. Resolved
+  (Q-0027, option 3): i3's `battery_preconditioning` corrected to
+  `false` — a data-correctness fix removing an unsupported claim, not a
+  new invented figure — with its real cold-departure capability flagged
+  as a separate, still-unmodeled gap, not conflated with this field.
+  **Architecture (Q-0026, approved in full)**: a `preconditioned: bool`
+  parameter on `characterize_fast_charge_session`, gated by the two
+  already-existing fields (`ThermalArchitecture.battery_preconditioning`
+  × `ChargingProfile.preconditioning_enabled`, no new gate field needed).
+  When `True`, a new `long_horizon._precondition_phase` runs FIRST: a
+  real, physically-stepped stationary phase (`sim.
+  advance_preconditioning_step`, peer to `advance_charging_step`, mirrors
+  its cooling/refrigerant-loop machinery but inverts the sign — the
+  heater DISCHARGES the battery) that draws the profile's own
+  `preconditioning_heater_power_w` as a direct additive heat term on the
+  battery node (on top of, not instead of, the battery's own incidental
+  R0/entropic self-heating from carrying that current — this is a
+  ~100%-resistive heater, no separate compressor-style capacity/COP
+  figure the way `CoolingLoop.chiller_capacity_w`/
+  `RefrigerantLoop.capacity_w` have one). The phase runs for up to
+  `PRECONDITIONING_DURATION_S` (1500s/25min) or stops early the moment
+  `preconditioning_target_temp_k` is reached, whichever comes first —
+  a real BMS controls to a target, not a fixed duration regardless of
+  outcome. Produces a genuinely new `precondition` phase (not folded into
+  `ramp`), so `TripCharacterization.phases` is always exactly 2 or always
+  3 entries per `FAST_CHARGE_SESSION` characterization set (never mixed),
+  matching `_interpolate_characterization`'s `strict=True` zip
+  requirement. New schema fields: `ThermalArchitecture.
+  preconditioning_heater_power_w`/`preconditioning_target_temp_k`
+  (`Sourced[float] | None`, `None` when incapable — named per the user's
+  explicit correction, not `battery_heater_w`, since the mechanism is
+  preconditioning-specific and shouldn't imply a general-purpose pack
+  heater this project doesn't otherwise model).
+  **Real-world figures sourced, not invented**: heater power 1.5-3kW is a
+  real, multiply-sourced range for passenger-EV battery preheating (2kW
+  chosen, mid-range, for Kia Niro EV — still a placeholder POINT value
+  within a real range, not a Niro-specific number); target temp 293.15K
+  (20°C) reuses Niro's own already-cited `cold_derate_threshold_temp_k`
+  research value exactly — deliberately, not coincidentally, since a real
+  BMS stops preconditioning once in the acceptable range rather than
+  independently re-deriving a second number; duration 1500s is within
+  Tesla's own real, widely-documented ~20-30min Supercharger-
+  preconditioning window, not vehicle-specific for any of the six
+  reference profiles.
+  **A pre-existing edge-case bug found and fixed during implementation,
+  not present before this milestone touched this code path**: an
+  already-warm ambient bucket makes `_precondition_phase`'s loop break on
+  its first iteration (target already met), leaving only 1 time sample —
+  `_phase_aging`'s loop needs ≥2 to compute `covered_s`, so it raised
+  `ValueError` instead of producing a legitimate zero-duration phase.
+  Fixed using the exact same `_degenerate_phase` pattern
+  `_fast_charge_phases` already established for its own "already past the
+  knee at t=0" case — verified correct at all three boundary conditions
+  (cold/never reaches target, mild/stops early exactly at target,
+  warm/degenerate zero-duration phase).
+  **The headline finding, verified sample-by-sample, not just at the
+  aggregate level, and reported honestly rather than tuned toward a nicer
+  story**: preconditioning DOES correctly raise the charge-current
+  ceiling (confirmed: ~3-4A higher sustained current throughout a
+  Minneapolis-cold session vs. unpreconditioned, consistent with
+  `_cold_derate_scale` rising from ~0.61 to ~0.83 at the warmer starting
+  temperature) — but the heater's own SOC draw during the up-to-25-minute
+  precondition phase (a real cost, ~1.3 percentage points of SOC for
+  Kia Niro EV's pack at the coldest tested bucket) is larger than what
+  that current-ceiling benefit claws back within the fixed 1800s
+  (`FAST_CHARGE_SESSION_DURATION_S`) charging window. Net result at the
+  coldest tested Minneapolis bucket: preconditioned final session SOC
+  (0.8432) finishes slightly BELOW unpreconditioned (0.8449) — the
+  benefit recovers most, not all, of the heater's own cost. Rolled up
+  into a 20-year Tier-2 run (an ad hoc, uncommitted verification-only
+  day-type mix built specifically to include `FAST_CHARGE_SESSION`
+  occurrences, since none of the six reference profiles' own canonical
+  mixes do — see `docs/ROADMAP.md`), the same direction holds at the
+  aggregate level: 19.77% total 20-year SOH loss preconditioned vs.
+  19.59% unpreconditioned, i.e. net-negative. This is not a bug — every
+  value in the underlying per-second trace (current, SOC, temperature) is
+  internally consistent with the mechanism working exactly as specified
+  — it's a genuine consequence of this project's aging model having no
+  separate "charging cold accelerates degradation beyond what the
+  current ceiling already throttles" term: the ONLY route by which
+  preconditioning can help SOH here is "charge more, in the same
+  fixed-duration window," and for the currently-sourced 2kW/25min
+  figures, that benefit is smaller than the mechanism's own cost. A
+  higher-powered or longer-duration heater could plausibly flip the sign
+  — not tried here, since inflating either figure without a real citation
+  to force a "nicer" result would be exactly the kind of invented
+  parameter this project's "don't invent parameters" rule exists to
+  prevent.
+  New tests (12 total): `tests/test_schema.py` (2, round-trip +
+  defaults-to-None for the new fields), `tests/test_sim.py` (4, covering
+  `advance_preconditioning_step`'s stationarity, discharge direction, and
+  direct battery heating), `tests/test_long_horizon.py` (6, covering
+  2-vs-3-phase characterization shape, the warm/cold/stops-early-at-target
+  boundary conditions, and `characterize_all_trips`' capability×scenario
+  gating across all four combinations). Full suite: 325 passed (was 313
+  before this milestone, +12 matching the new tests exactly), 3 slow
+  tests unaffected. `mypy --strict`, `ruff check` clean on every file
+  touched.

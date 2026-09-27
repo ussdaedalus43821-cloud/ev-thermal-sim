@@ -161,18 +161,43 @@ file holds the items that are genuinely discrete standalone work items.
 
 ## Fast charging / preconditioning
 
-- **Preconditioning is deferred entirely — explicitly rejected, not just
-  deprioritized (Q-0004).** No initial-pack-temp-offset placeholder
-  either: that would model the effect without the mechanism, and the
-  mechanism has a real energy cost (feeds back into SOC/range) this
-  simulator exists to get right. Every fast-charge characterization is
-  therefore equally pessimistic across all profiles (no preconditioning
-  benefit for anyone) — **this is the single biggest remaining gap in the
-  fast-charge story**, and specifically means the Leaf-vs-Model3
-  fast-charge comparison won't show its real differentiator until this
-  lands. The real feature (thermal load + SOC draw + arrival-temp effect)
-  is contingent on a route/navigation concept this simulator doesn't have
-  yet, and is its own later milestone.
+- **Done: real preconditioning (Q-0026/Q-0027).** The route/navigation
+  dependency Q-0004 named as the blocker turned out to be reducible, not
+  real — `FAST_CHARGE_SESSION` was already its own independent day-type
+  category with nothing to chain from, so "the vehicle knows a charge
+  stop is coming" is already exactly as knowable as any other day-type
+  membership fact. The real mechanism (a physically-stepped pre-session
+  heater phase, real SOC cost, real thermal rise, gated on
+  `ThermalArchitecture.battery_preconditioning` ×
+  `ChargingProfile.preconditioning_enabled`) now lives in
+  `long_horizon._precondition_phase`/`characterize_fast_charge_session`.
+  See `docs/MILESTONES.md`'s corresponding milestone for the full
+  implementation record and the honest net-negative SOH finding (the
+  heater's own SOC/cycling cost currently outweighs the charge-current
+  benefit it claws back, for the sourced 2kW/25min figures).
+  **Still open, not this milestone's scope:**
+  - `preconditioning_heater_power_w` (2kW, Kia Niro EV) and
+    `PRECONDITIONING_DURATION_S` (1500s / 25min, `long_horizon.py`) are
+    both real-range-sourced placeholders (1.5-3kW and ~20-30min are real,
+    but not vehicle-specific point values) — a future pass could source
+    exact per-vehicle figures, which would directly change the net-
+    negative finding's magnitude (possibly its sign, for a
+    higher-powered heater).
+  - No reference profile's canonical `day_type_mix` (flagship comparison,
+    the Blue Bird school-bus script) includes any `FAST_CHARGE_SESSION`
+    occurrences at all, so this mechanism's aggregate-SOH effect is
+    currently invisible in every existing published scenario — the
+    net-negative finding above came from an ad hoc, uncommitted
+    verification mix built only to confirm the mechanism moves a number
+    in the expected direction of causality, not a canonical one.
+  - The i3's real cold-weather pre-departure (wallbox) preconditioning
+    capability remains unmodeled and uncited (Q-0027) — a different real
+    phenomenon from this milestone's fast-charge-arrival mechanism, with
+    no schema field of its own yet.
+  - The Kia Niro mistake-library entry that Q-0023 eliminated (its
+    original candidate was preconditioning/cabin-priority-related)
+    becomes worth revisiting now that real preconditioning exists — not
+    scoped here, flagged for whoever picks up the mistake library next.
 - **`FAST_CHARGE_SESSION` day interaction with the daily charge-reset
   event is unresolved (Q-0015, raised not resolved).** Currently no
   special-casing — a fast-charge day's session and the day's normal reset

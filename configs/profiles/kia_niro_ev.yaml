@@ -472,6 +472,14 @@ thermal_architecture:
     source: "docs/research/profiles_v1.md — Kia Niro EV"
     note: "research: 'Heat pump scavenges waste heat from power electronics' — explicit"
   battery_preconditioning: true  # research: "Preconditioning to 20-25C before fast charging when navigating to charger" (note: research also states early models lacked this — later/full-featured config modeled here, see profile header)
+  preconditioning_heater_power_w:
+    value: 2000.0
+    confidence: low
+    source: "docs/DESIGN_QUESTIONS.md Q-0026 — placeholder within the real, sourced 1.5-3kW passenger-EV battery-preconditioning heater range (multiple industry/patent sources); not a Niro-specific figure. Target pack temp (20-25C) and preconditioning trigger (navigating to charger) ARE real and Niro-specific — see battery_preconditioning's own citation above; PRECONDITIONING_DURATION_S (long_horizon.py) is a separate, also-placeholder figure."
+  preconditioning_target_temp_k:
+    value: 293.15
+    confidence: medium
+    source: "docs/research/profiles_v1.md — Kia Niro EV: 'Preconditioning to 20-25C' — the low end (20C) used as the stop condition (a real BMS reasonably stops once in the acceptable range, not necessarily at its ceiling). Not a coincidence that this exactly matches cold_derate_threshold_temp_k above (also 293.15K, same research) — the real preconditioning target and the real charge-rate cold-derate threshold are the SAME cited number, not independently tuned to align."
 
 control_strategy:
   derate_curve:

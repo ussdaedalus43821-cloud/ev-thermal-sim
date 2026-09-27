@@ -660,6 +660,30 @@ class ThermalArchitecture(BaseModel):
     battery_preconditioning: bool = Field(
         ..., description="Whether the vehicle can pre-heat/pre-cool the battery before a planned fast charge."
     )
+    preconditioning_heater_power_w: Sourced[float] | None = Field(
+        default=None,
+        description=(
+            "Milestone: real preconditioning. Electrical power drawn from the battery to actively "
+            "pre-heat the pack before a fast charge, in watts -- None when battery_preconditioning is "
+            "False. Named for this specific mechanism, not a general-purpose pack heater this project "
+            "doesn't otherwise model. Treated as ~100% resistive (all drawn power becomes heat "
+            "deposited directly on the battery node, distinct from the battery's own incidental R0 "
+            "loss from carrying that current) -- unlike CoolingLoop.chiller_capacity_w/RefrigerantLoop."
+            "capacity_w, no separate capacity/COP figure: a resistive preconditioning heater doesn't "
+            "have the compressor-style efficiency gap those mechanisms do."
+        ),
+    )
+    preconditioning_target_temp_k: Sourced[float] | None = Field(
+        default=None,
+        description=(
+            "Milestone: real preconditioning. The cell temperature the preconditioning heater stops "
+            "at (a real BMS controls to a target, it doesn't just run for a fixed duration regardless) "
+            "-- None when battery_preconditioning is False. If the heater's own duration budget "
+            "(long_horizon.PRECONDITIONING_DURATION_S) elapses before this temperature is reached "
+            "(realistic in genuinely cold conditions), preconditioning simply ends at whatever "
+            "temperature it got to -- this field is a stopping condition, not a promise."
+        ),
+    )
 
 
 class ControlStrategy(BaseModel):

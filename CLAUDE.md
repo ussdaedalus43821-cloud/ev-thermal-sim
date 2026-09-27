@@ -123,11 +123,39 @@ related code:
   numbers and the i3 battery's own `resistance_to_coolant_k_per_w`
   magnitude (0.3 K/W, weaker than other profiles' convention, now
   load-bearing and still flagged for re-examination — unaffected by this).
-- **Preconditioning is deferred entirely, not approximated** (`docs/
-  DESIGN_QUESTIONS.md` Q-0004) — every fast-charge characterization is
-  equally pessimistic across all profiles; this is the single biggest
-  remaining gap in the fast-charge story. See `docs/ROADMAP.md`'s
-  "Fast charging / preconditioning" section.
+- **Preconditioning IS implemented (Q-0026/Q-0027), with a real, honest,
+  counter-to-expectation finding, not the Q-0004-deferred placeholder
+  anymore.** The route/navigation blocker Q-0004 named turned out to be
+  reducible (`FAST_CHARGE_SESSION` was already its own independent
+  day-type category with no drive to chain from), so the real mechanism
+  — a physically-stepped pre-session heater phase with a real SOC cost
+  and a real thermal rise, gated on `ThermalArchitecture.
+  battery_preconditioning` × `ChargingProfile.preconditioning_enabled` —
+  now lives in `long_horizon._precondition_phase`/
+  `characterize_fast_charge_session(preconditioned=...)`, feeding a real
+  new `ThermalArchitecture.preconditioning_heater_power_w`/
+  `preconditioning_target_temp_k` pair (only Kia Niro EV has both today —
+  the i3's prior `battery_preconditioning: true` was found, while
+  surveying this, to cite a real but DIFFERENT phenomenon — cold-weather
+  wallbox pre-departure warming, not fast-charge arrival preconditioning
+  — and was corrected to `false`; its real cold-departure capability
+  stays unmodeled). **The finding: for the currently-sourced 2kW/25min
+  heater, the mechanism's own SOC/cycling cost outweighs the charge-speed
+  benefit it claws back from the warmer pack's higher current ceiling —
+  preconditioning comes out net-negative for both a single session's
+  final SOC and (in an ad hoc verification run using a day-type mix that
+  actually includes fast-charge occurrences — none of the six reference
+  profiles' canonical mixes do) aggregate SOH.** This isn't a bug (the
+  current/SOC/temperature trace was verified sample-by-sample and is
+  self-consistent) or something to tune away — it's a genuine consequence
+  of an aging model whose only captured preconditioning benefit is
+  "charge more in the same fixed-duration window," with no separate
+  cold-charging degradation penalty for it to protect against beyond that
+  window. See `docs/MILESTONES.md`'s corresponding milestone for the full
+  numbers and `docs/ROADMAP.md`'s "Fast charging / preconditioning"
+  section for what's still a placeholder (heater power/duration point
+  values) versus what's real (the mechanism itself, the Niro's target
+  temp).
 - **Motor mechanical-loss coefficients are placeholders, not a real
   efficiency map** — internally consistent (energy-balance tests hold)
   but not realistic in absolute magnitude yet.
