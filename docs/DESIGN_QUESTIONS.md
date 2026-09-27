@@ -2091,3 +2091,145 @@ code it calls is.
   from the earlier net-negative finding to a real, substantial net
   benefit once this term gives it something real to protect against).
 
+## Q-0029 — Making the Leaf-vs-Model3 fast-charge differentiator real: occurrence rates, Model3's preconditioning flag, and its heater specs
+
+- Date: 2026-09-27
+- Context: raised by the user directly, explicitly framed as finishing
+  what Q-0026/Q-0028 started, not a new mechanism — both the real
+  preconditioning mechanism and the real cold-charging plating penalty
+  exist and are correctly implemented, but the *published* flagship
+  comparison (`examples/flagship_comparison.py`, Leaf/Guam vs.
+  Model3/Seattle) has never included any `FAST_CHARGE_SESSION`
+  occurrences at all, and Model3's own `battery_preconditioning` was left
+  a conservative, unsourced `False`. Three sub-tasks, explicitly scoped
+  by the user in order of difficulty.
+- **Sub-task 1: fast-charge occurrence rates — a design decision, not
+  research, per the user's own framing.** The user's own illustrative
+  example ("1 per ~10 driving days for a 150mi Leaf, 1 per ~20 for a
+  300mi Model 3") used ROUND illustrative range figures, not this
+  project's actual modeled trims — checked directly before using them:
+  this project's Leaf profile is the real 24kWh Gen1 (2011) car
+  (`capacity_kwh_nominal: 24.0`, matches exactly), EPA-rated at **73
+  miles**; this project's Model 3 profile (`capacity_kwh_nominal: 80.5`,
+  `capacity_kwh_usable: 75.0`) matches the Long Range AWD trim family,
+  EPA-rated up to **358 miles** (2022 model year, 18" wheels) — both
+  real, cited figures, not invented. The real range ratio (73:358 ≈
+  1:4.9) is meaningfully more lopsided than the user's illustrative
+  1:2 — used the real figures, not the illustrative ones, per CLAUDE.md's
+  "research the real number" rule, since real figures for the ACTUAL
+  modeled vehicles were available. **Reasoning, kept simple (a policy
+  choice, same confidence tier as this file's other occurrence counts,
+  all already `confidence: low` "flagship-comparison placeholder"
+  values)**: a 73-mile range makes most trips beyond a fairly short local
+  radius require a fast-charge top-up — modeled as roughly weekly, 48/yr;
+  a 358-mile range covers nearly any single day's driving without one —
+  fast-charging becomes primarily a road-trip event, modeled as roughly
+  monthly, 12/yr. Ratio (48:12 = 4:1) intentionally close to, not forced
+  to exactly match, the real 4.9:1 range ratio.
+  **Mechanism**: `examples/flagship_comparison.py`'s `default_day_type_
+  mix()` gained an optional `fast_charge_occurrences_per_year: int = 0`
+  parameter (0 preserves every existing caller's exact behavior — the
+  mistake-library scripts, Monte Carlo examples/tests — unchanged, since
+  none of them pass a nonzero value), and `run_one`/`main` gained
+  `DEFAULT_FAST_CHARGE_OCCURRENCES_A/B = 48/12` with
+  `--fast-charge-occurrences-a/-b` CLI overrides for a different profile
+  pair. Additive, not substitutive: fast-charge days are added on top of
+  the existing 240 driving-day total (not carved out of another
+  category), since 125 slack days already exist in the 365-day schedule
+  and deciding which existing category to reduce would be its own
+  under-motivated judgment call.
+- **Sub-task 2: Model3's `battery_preconditioning` flag — near-trivial,
+  confirmed real.** Tesla's Navigate-to-Supercharger preconditioning is
+  real, well-documented (Tesla's own owner's manual: using Trip Planner
+  to navigate to a Supercharger pre-heats the battery so it's at optimal
+  temperature on arrival, 30-45min recommended lead time), and
+  specifically fast-charge-triggered — exactly this field's own
+  documented meaning, unlike the i3's disqualified cold-departure/wallbox
+  citation (Q-0027). Set `true`, correcting the prior conservative
+  `false` (which was left blank for lack of research, not a real
+  negative finding).
+- **Sub-task 3: heater power / target temp — turned out better-sourced
+  than expected, not needing the low-confidence placeholder fallback.**
+  Real, if enthusiast/community-level (not an official Tesla spec sheet),
+  corroborating sources: combined cabin+battery preconditioning draws up
+  to ~11-13kW, dropping to ~6kW once the cabin is warm and only the
+  battery is still heating (Tesla Motors Club, evspeedy.com) — the 6kW
+  battery-only figure used here, matching this project's own convention
+  that preconditioning heats the pack directly, not the cabin. Target
+  temp: "below 7°C ambient, the battery is preheated to around 20°C"
+  (Tesla Motors Club forum) — 293.15K, matching Kia Niro EV's own target
+  (the same real-world ~20°C convergence, not independently tuned to
+  align). Both `confidence: medium`, arguably better-sourced than Niro's
+  own 2kW mid-of-a-generic-range placeholder.
+  **`ChargingProfile.preconditioning_enabled` flipped from `False` to
+  `True`** in `default_charging_profile()` — a real driver who navigates
+  to a charger uses preconditioning whenever the vehicle supports it;
+  confirmed safe for every existing caller (the mistake library's three
+  vehicles all have `battery_preconditioning: False`, so the gate stays
+  closed for them regardless — verified by their unchanged 0.0000%
+  cold-charge columns).
+- **Re-ran the flagship comparison (20yr point estimate) — this is the
+  review moment, not a resolved-and-closed number.** Result:
+  `nissan_leaf/Guam` 62.03% total (52.71% calendar, 9.31% cycle, 0.00%
+  cold-charge) vs. `tesla_model3/Seattle` 26.08% total (24.96% calendar,
+  1.12% cycle, 0.00% cold-charge) — total ratio (A/B) 2.3785, down from
+  3.4868 without fast-charge days. Both `cold-charge` columns read
+  0.0000%, but for OPPOSITE reasons, not the same one: Leaf/Guam never
+  gets cold enough for the mechanism to activate at all (Guam's coldest
+  characterized bucket is ~24°C, well above the 293.15K onset), while
+  Model3/Seattle's preconditioning is fully suppressing what would
+  otherwise be substantial plating loss (confirmed by disabling
+  preconditioning in isolation: cold-charge loss jumps to 11.76% for the
+  same fast-charge occurrence count). So the Leaf-vs-Model3 differentiator
+  IS now real and visible — but it shows up as "Model3's preconditioning
+  fully protects it from a real cold-charging risk Leaf structurally
+  cannot avoid or protect against" — not as a visible number in the
+  `cold-charge` column of either vehicle's own row (Model3's is 0%
+  because it works; Leaf's is 0% because it never needed protection in
+  Guam specifically — the real Leaf-vs-Model3 delta a reader would need
+  to see is the WITH-vs-WITHOUT-preconditioning comparison for Model3
+  itself, not this table's own two rows).
+- **A genuinely significant finding surfaced by this re-run, not
+  something to silently absorb into "the story": Model3's calendar-aging
+  loss itself jumped far more than expected from adding just 12 fast-
+  charge days/year** (14.65% baseline -> 19.41% with fast-charge added,
+  precondition off -> 24.96% with precondition on) — traced by hand, not
+  assumed: `ThermalArchitecture`'s battery `resistance_to_ambient_k_per_w
+  = 2.0` for Model3 is explicitly documented as "a weak SECONDARY path
+  alongside the dominant active coolant path... magnitude not chased,
+  just present so the node isn't fully adiabatic" — i.e. it was never
+  meant to be load-bearing, only a not-literally-adiabatic fallback for
+  whenever the active loop isn't running. `tau = R*C = 2.0 K/W *
+  432,000 J/K = 864,000s ~= 10 DAYS`. A preconditioned fast-charge
+  session leaves the pack at ~24-32°C (vs. a normal cold-climate commute
+  day's ~-5 to +4°C, tracking ambient closely) — a 25-35°C "hangover"
+  that this weak passive-only path then takes on the order of ten days to
+  relax away. With fast-charge events roughly monthly, the pack rarely
+  fully recovers between them, keeping it in a persistently elevated
+  state for much of the year and directly inflating the Arrhenius-
+  sensitive calendar-aging term. This is real physics given the input
+  parameters, but those parameters (specifically this ONE coefficient)
+  were never validated against anything and are now doing far more work
+  than the milestone that introduced them intended — the exact same
+  shape of problem CLAUDE.md already flags for the BMW i3's `resistance_
+  to_coolant_k_per_w` (0.3 K/W, "now load-bearing and still flagged for
+  re-examination"). Leaf's own equivalent battery coefficient (0.25 K/W,
+  deliberately tuned for an ~18.75h tau matching its REAL passive-air-
+  cooling design) doesn't have this problem, which is why Leaf's own
+  calendar-aging jump from adding 4x more fast-charge days (48/yr) is
+  much smaller (49.28% -> 52.71%, +3.43pp vs. Model3's +10.31pp).
+- Blocking: yes — determines the flagship comparison's own published
+  headline numbers, and surfaced a load-bearing pre-existing placeholder
+  coefficient that was never previously exercised.
+- **Not resolved here — reported back for review, per the user's own
+  explicit "that's the moment to review" framing.** The three sub-tasks
+  themselves (occurrence rates, Model3's preconditioning flag, its
+  heater specs) are implemented and not in question. What's open: whether
+  to accept the re-run numbers as-is with this coefficient's newly-
+  load-bearing status flagged as a caveat (matching how the i3's own
+  finding was initially just flagged before later getting its own
+  dedicated investigation), or to treat Model3's battery `resistance_to_
+  ambient_k_per_w` as its own follow-up needing a real derivation before
+  trusting these numbers further — this decision determines a citable,
+  published number and isn't this entry's to make silently.
+

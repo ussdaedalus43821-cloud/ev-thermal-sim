@@ -530,7 +530,15 @@ thermal_architecture:
     confidence: high
     source: "docs/research/profiles_v1.md — Tesla Model 3"
     note: "research explicitly states waste heat recovery from motor and power electronics"
-  battery_preconditioning: false  # not explicitly described for Model 3 in research (unlike Bolt/Niro, which use the word directly); left conservative
+  battery_preconditioning: true  # Milestone: real preconditioning, Model3 (Q-0029). Corrects the prior conservative `false` -- Tesla's Navigate-to-Supercharger preconditioning is real, well-documented, and specifically fast-charge-triggered (not the cold-departure/wallbox phenomenon Q-0027 found ineligible for the i3): per Tesla's own owner's manual, using Trip Planner to navigate to a Supercharger pre-heats the battery so it's at optimal temperature on arrival, recommended 30-45min before arrival -- exactly this field's own documented meaning.
+  preconditioning_heater_power_w:
+    value: 6000.0
+    confidence: medium
+    source: "Tesla Motors Club / evspeedy.com owner-reported figures: combined cabin+battery preconditioning draws up to ~11-13kW, dropping to ~6kW once the cabin is warm and only the battery is still heating -- the 6kW battery-only figure used here, since this project's mechanism heats the pack directly, not the cabin (see aging.py precedent from the Niro entry). Not an official Tesla spec sheet, but multiple independently corroborating technical/enthusiast sources, better-sourced than Niro's own 2kW mid-range-of-a-generic-range placeholder."
+  preconditioning_target_temp_k:
+    value: 293.15
+    confidence: medium
+    source: "Tesla Motors Club forum discussion ('Battery Heating explained'): below 7C ambient, the battery is preheated to around 20C before fast charging is permitted at full rate. Matches Kia Niro EV's own 293.15K target (same real-world 20C convergence, not independently tuned to align)."
 
 control_strategy:
   derate_curve:

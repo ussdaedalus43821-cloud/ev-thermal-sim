@@ -96,6 +96,21 @@ file holds the items that are genuinely discrete standalone work items.
 - **`controller.py`'s cooling-command policy (`_duty_ramp`, pump/fan duty
   vs. temperature above thermostat) is an explicit `TODO(tuning)`
   placeholder, not a calibrated policy.**
+- **Open follow-up, the same shape of problem as the i3's above: Tesla
+  Model 3's battery `resistance_to_ambient_k_per_w` (2.0 K/W) was never
+  meant to be load-bearing and now is (found during the Q-0029 flagship
+  re-run, `docs/MILESTONES.md`).** Documented as "a weak secondary path
+  alongside the dominant active coolant path... magnitude not chased,
+  just present so the node isn't fully adiabatic" — but once fast-charge
+  occurrences were added to the flagship comparison's day-type mix, this
+  single coefficient (implying a ~10-day passive-relaxation time
+  constant) became directly responsible for a large fraction of Model3's
+  calendar-aging headline number, since a preconditioned fast-charge
+  session leaves the pack 25-35°C above a normal commute day's endpoint
+  and this weak path can't relax it away between roughly-monthly
+  fast-charge events. Not yet decided whether to re-derive it for real or
+  accept the current numbers with this caveat — see Q-0029's own
+  resolution once it lands.
 
 ## Aging model fidelity
 
@@ -187,13 +202,13 @@ file holds the items that are genuinely discrete standalone work items.
     but not vehicle-specific point values) — a future pass could source
     exact per-vehicle figures, which would change the net-benefit
     magnitude found above.
-  - No reference profile's canonical `day_type_mix` (flagship comparison,
-    the Blue Bird school-bus script) includes any `FAST_CHARGE_SESSION`
-    occurrences at all, so neither this mechanism's nor Q-0028's
-    aggregate-SOH effect is visible in any existing published scenario —
-    every number cited for either mechanism came from an ad hoc,
-    uncommitted verification mix built only to confirm the mechanism
-    moves a number in the expected direction, not a canonical one.
+  - **Partially resolved by Q-0029**: the flagship comparison's own
+    `default_day_type_mix()` now includes real, if policy-not-research-
+    derived, `FAST_CHARGE_SESSION` occurrence counts for Leaf/Model3
+    specifically (see Q-0029 below) — both mechanisms are now visible in
+    that one published scenario. The Blue Bird school-bus script's own
+    mix still has none, and every mistake-library entry's mix still has
+    none (unaffected by Q-0029, out of its scope).
   - The i3's real cold-weather pre-departure (wallbox) preconditioning
     capability remains unmodeled and uncited (Q-0027) — a different real
     phenomenon from this milestone's fast-charge-arrival mechanism, with
@@ -219,13 +234,33 @@ file holds the items that are genuinely discrete standalone work items.
     imprecision (flagged in `aging.py`'s docstring) — pulling Matadi et
     al.'s own paper directly (not just Yang & Wang's citation of it)
     would tighten this.
-  - No reference profile's canonical `day_type_mix` includes
-    `FAST_CHARGE_SESSION` occurrences (see above) — this mechanism's real
-    aggregate effect is not visible in any currently-published number.
+  - Now visible in the flagship comparison specifically (Q-0029, below)
+    — 9.31% of Leaf/Guam's total, 0.00% of Model3/Seattle's (fully
+    suppressed by preconditioning; 11.76% if disabled) — still not
+    visible in the Blue Bird school-bus script or any mistake-library
+    entry.
   - `cold_charge_plating_temp_sensitivity`/`_c_rate_sensitivity` are both
     assumed linear (1.0), not fit — a single anchor point can't constrain
     more than one free parameter, and the real literature suggests a
     convex (accelerating) shape near onset.
+- **In progress, reported for review, not closed: making the Leaf-vs-
+  Model3 fast-charge differentiator real (Q-0029).** Fast-charge
+  occurrence rates added to the flagship comparison (48/yr Leaf, 12/yr
+  Model3, a policy decision using real EPA range figures for THIS
+  project's actual modeled trims — 73mi/24kWh Leaf, 358mi/Long-Range-AWD
+  Model3), Model3's `battery_preconditioning` corrected to `true` (real,
+  well-documented Tesla Navigate-to-Supercharger citation), and real
+  heater specs sourced (6kW, 293.15K target). Re-run at 20yr: Leaf/Guam
+  62.03% total vs. Model3/Seattle 26.08% total, ratio 2.3785 (down from
+  3.4868 without fast-charge days). **Surfaced a significant open
+  question, not resolved yet**: Model3's calendar-aging number jumped far
+  more than expected from adding fast-charge days, traced to its battery
+  `resistance_to_ambient_k_per_w` (2.0 K/W, a never-validated placeholder
+  now implying a load-bearing ~10-day passive-relaxation time constant —
+  see this file's "Thermal / cooling physics" section, same shape of
+  problem as the i3's own flagged coefficient). Whether to accept the
+  re-run numbers with this caveat or re-derive that coefficient first is
+  an open decision, not made in this entry.
 - **`FAST_CHARGE_SESSION` day interaction with the daily charge-reset
   event is unresolved (Q-0015, raised not resolved).** Currently no
   special-casing — a fast-charge day's session and the day's normal reset
