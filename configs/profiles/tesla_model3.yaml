@@ -115,10 +115,10 @@ battery:
       source: "estimated from owner reports and manual warnings"
       note: "45C: research's 'Target ~45C' steady operating target (docs/research/profiles_v1.md — Tesla Model 3), used as the derate-onset point"
     resistance_to_ambient_k_per_w:
-      value: 2.0
+      value: 0.1
       confidence: low
-      source: "placeholder — estimated from physical plausibility, not sourced"
-      note: "weak secondary path alongside the dominant active coolant path (battery is liquid-cooled) — magnitude not chased, just present so the node isn't fully adiabatic."
+      source: "Milestone (Q-0029 flagship re-run): re-derived from the prior 2.0 K/W placeholder, same methodology as Nissan Leaf's own resistance_to_ambient_k_per_w -- target a passive relaxation time constant tau=R*C on the shape 'hours, not seconds/days' for the physical situation the field represents (here: a liquid-cooled pack with the active pump off, not Leaf's fully passive-air case), then solve R = tau/C, not sourced from a literature convective coefficient (none is worth finding for a fallback path -- shape, not magnitude, is what's being fit, exactly the Leaf's own precedent)."
+      note: "target tau ~= overnight (12h = 43200s, sanity range 6-18h for a liquid-cooled pack with the pump off, still passively conducting through chassis/coolant contact -- faster than a fully passive-air pack like the Leaf's, so this value should and does land BELOW the Leaf's 0.25 K/W). R = tau / C = 43200s / 432000 J/K = 0.1 K/W exactly. Replaces the prior 2.0 K/W, which was never chased for magnitude and turned out to imply an unintended ~10-day passive-relaxation tau -- load-bearing once fast-charge occurrences were added to the flagship comparison (docs/MILESTONES.md's Q-0029 milestone). Chevrolet Bolt/Audi e-tron/Kia Niro EV still carry the same un-re-derived 2.0 K/W placeholder for their own battery nodes -- same class of issue, not yet exercised into being load-bearing for any published number, deliberately not fixed here (see docs/ROADMAP.md)."
   capacity_nominal_ah:
     value: 201.25
     confidence: high

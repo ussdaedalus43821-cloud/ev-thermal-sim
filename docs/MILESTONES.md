@@ -3541,9 +3541,8 @@ whole history to find.
   property — the 50/100/200kWh runs confirmed no other code path breaks
   that guarantee, they didn't establish it.
 - **Milestone "Making the Leaf-vs-Model3 fast-charge differentiator real"
-  (in progress — implemented, re-run, reported for review; not closed,
-  2026-09-27, `docs/DESIGN_QUESTIONS.md` Q-0029):** raised by the user
-  directly as the deliberate follow-through on Q-0026/Q-0028 — both
+  (done, 2026-09-27, `docs/DESIGN_QUESTIONS.md` Q-0029):** raised by the
+  user directly as the deliberate follow-through on Q-0026/Q-0028 — both
   mechanisms existed and were correct, but the published flagship
   comparison never actually exercised either one.
   **Three sub-tasks, all implemented**:
@@ -3607,10 +3606,53 @@ whole history to find.
   passive-air-cooling design) doesn't have this problem, which is why
   Leaf's own calendar jump from 4x more fast-charge days is much smaller
   (+3.43pp vs. Model3's +10.31pp).
-  **Status: reported back for review, not closed** — per the user's own
-  "that's the moment to review" framing, this milestone stops here
-  pending a decision on whether to accept the re-run numbers with the
-  newly-load-bearing coefficient flagged as a caveat, or treat Model3's
-  battery `resistance_to_ambient_k_per_w` as its own follow-up needing a
-  real derivation first. Full suite unaffected (still 334 passed);
-  `mypy --strict`, `ruff check` clean on every file touched.
+  **Reviewed and closed: Model3's battery `resistance_to_ambient_k_per_w`
+  re-derived, bounded to Model3 only, using the Leaf's own already-
+  established methodology, not a new one.** Nissan Leaf's own 0.25 K/W
+  value was itself never a sourced literature figure — it was picked to
+  target a passive relaxation time constant tau=R*C on the right SHAPE
+  ("a few hours to a day," per that field's own documented note) for the
+  physical situation it represents (a fully passive-air-cooled pack).
+  Applied the identical method to Model3's battery, for the DIFFERENT
+  physical situation it actually represents (a liquid-cooled pack with
+  the active pump off, still passively conducting through chassis/
+  coolant contact — faster than a fully passive-air pack, not the same
+  case Leaf's value was fit to): target tau ~= overnight (12h, sanity
+  range 6-18h), `R = tau / C = 43200s / 432,000 J/K = 0.1 K/W` exactly,
+  replacing the un-chased 2.0 K/W. **Cross-checked against Leaf, as
+  required, not skipped**: 0.1 K/W lands BELOW Leaf's 0.25 K/W, the
+  correct direction (a liquid-cooled pack should relax faster than a
+  fully passive-air one) — confirms the derivation, not just internally
+  consistent by luck. Explicitly NOT sourced from any literature
+  convective-coefficient search — this field's own established
+  convention (Leaf's precedent) fits SHAPE, not a real physical
+  magnitude, for a coefficient that only matters as a not-fully-adiabatic
+  fallback path.
+  **Re-ran the flagship comparison at 20yr with the corrected value**:
+  `nissan_leaf/Guam` unchanged at 62.03% total (this fix only touches
+  Model3's own battery node). `tesla_model3/Seattle` dropped to **14.17%
+  total (13.29% calendar, 0.88% cycle, 0.00% cold-charge — fully
+  preconditioning-suppressed, same as before)** — total ratio (A/B) now
+  **4.3770**, both higher than the broken-coefficient re-run (2.3785) AND
+  higher than the original no-fast-charge baseline (3.4868), a coherent,
+  publishable result. **A second finding, checked not assumed, and worth
+  being honest about**: Model3's calendar number with the fix (13.29%
+  with fast-charge days) came out even BELOW the ORIGINAL no-fast-charge
+  baseline (14.65%, computed under the old 2.0 K/W) — isolated by
+  re-running a true apples-to-apples zero-fast-charge baseline under the
+  NEW 0.1 K/W coefficient: 12.72% calendar. This confirms the old 2.0 K/W
+  was inflating calendar aging even in the ORIGINAL, no-fast-charge
+  published number, not just in the fast-charge-specific "hangover" this
+  milestone's own re-run first surfaced — the corrected 13.29% (+0.57pp
+  over the new 12.72% zero-fast-charge baseline) is the small, plausible
+  increment fast-charging alone should add, not a multi-day compounding
+  artifact.
+  **Scope discipline, as instructed**: only Model3's BATTERY node's
+  `resistance_to_ambient_k_per_w` was touched — its own motor/inverter
+  nodes, and every other profile's battery node (Chevrolet Bolt, Audi
+  e-tron, Kia Niro EV all still carry the same un-re-derived 2.0 K/W),
+  were deliberately left alone; see `docs/ROADMAP.md` for the flag. No
+  new `docs/DESIGN_QUESTIONS.md` entry opened — applying an already-
+  ratified methodology to a new field is not a new design decision. Full
+  suite unaffected (still 334 passed); `mypy --strict`, `ruff check`
+  clean on every file touched.

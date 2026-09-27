@@ -96,21 +96,28 @@ file holds the items that are genuinely discrete standalone work items.
 - **`controller.py`'s cooling-command policy (`_duty_ramp`, pump/fan duty
   vs. temperature above thermostat) is an explicit `TODO(tuning)`
   placeholder, not a calibrated policy.**
-- **Open follow-up, the same shape of problem as the i3's above: Tesla
-  Model 3's battery `resistance_to_ambient_k_per_w` (2.0 K/W) was never
-  meant to be load-bearing and now is (found during the Q-0029 flagship
-  re-run, `docs/MILESTONES.md`).** Documented as "a weak secondary path
-  alongside the dominant active coolant path... magnitude not chased,
-  just present so the node isn't fully adiabatic" — but once fast-charge
-  occurrences were added to the flagship comparison's day-type mix, this
-  single coefficient (implying a ~10-day passive-relaxation time
-  constant) became directly responsible for a large fraction of Model3's
-  calendar-aging headline number, since a preconditioned fast-charge
-  session leaves the pack 25-35°C above a normal commute day's endpoint
-  and this weak path can't relax it away between roughly-monthly
-  fast-charge events. Not yet decided whether to re-derive it for real or
-  accept the current numbers with this caveat — see Q-0029's own
-  resolution once it lands.
+- **Done: Tesla Model 3's battery `resistance_to_ambient_k_per_w`
+  re-derived (Q-0029 flagship re-run, `docs/MILESTONES.md`) — 2.0 K/W
+  (never meant to be load-bearing, "magnitude not chased") replaced with
+  0.1 K/W, using the Leaf's own already-established methodology (target
+  a passive relaxation tau on the right SHAPE for the physical case —
+  here, a liquid-cooled pack with the pump off, ~12h/overnight — then
+  solve R=tau/C), not a new one.** Cross-checked against Leaf's 0.25 K/W
+  and lands correctly below it (liquid-cooled should relax faster than
+  fully passive-air). Model3/Seattle's 20yr calendar number moved from
+  24.96% (broken coefficient) to 13.29% (corrected) — even below the
+  original no-fast-charge baseline (14.65%), confirming the old value was
+  inflating calendar aging generally, not just via the fast-charge-
+  specific hangover that first surfaced it.
+  **Same class of issue, deliberately NOT fixed here, still open**:
+  Chevrolet Bolt, Audi e-tron, and Kia Niro EV all still carry the same
+  un-re-derived 2.0 K/W placeholder for their own battery nodes. None is
+  currently producing a surprising published number the way Model3's did
+  (none of their canonical scenarios push their packs through a similar
+  large, repeated thermal excursion), so re-deriving them wasn't in this
+  milestone's bounded scope — but the same fix (Leaf's methodology,
+  applied per-profile) would apply directly whenever one of them becomes
+  load-bearing too.
 
 ## Aging model fidelity
 
@@ -243,24 +250,22 @@ file holds the items that are genuinely discrete standalone work items.
     assumed linear (1.0), not fit — a single anchor point can't constrain
     more than one free parameter, and the real literature suggests a
     convex (accelerating) shape near onset.
-- **In progress, reported for review, not closed: making the Leaf-vs-
-  Model3 fast-charge differentiator real (Q-0029).** Fast-charge
-  occurrence rates added to the flagship comparison (48/yr Leaf, 12/yr
-  Model3, a policy decision using real EPA range figures for THIS
-  project's actual modeled trims — 73mi/24kWh Leaf, 358mi/Long-Range-AWD
-  Model3), Model3's `battery_preconditioning` corrected to `true` (real,
-  well-documented Tesla Navigate-to-Supercharger citation), and real
-  heater specs sourced (6kW, 293.15K target). Re-run at 20yr: Leaf/Guam
-  62.03% total vs. Model3/Seattle 26.08% total, ratio 2.3785 (down from
-  3.4868 without fast-charge days). **Surfaced a significant open
-  question, not resolved yet**: Model3's calendar-aging number jumped far
-  more than expected from adding fast-charge days, traced to its battery
-  `resistance_to_ambient_k_per_w` (2.0 K/W, a never-validated placeholder
-  now implying a load-bearing ~10-day passive-relaxation time constant —
-  see this file's "Thermal / cooling physics" section, same shape of
-  problem as the i3's own flagged coefficient). Whether to accept the
-  re-run numbers with this caveat or re-derive that coefficient first is
-  an open decision, not made in this entry.
+- **Done: making the Leaf-vs-Model3 fast-charge differentiator real
+  (Q-0029).** Fast-charge occurrence rates added to the flagship
+  comparison (48/yr Leaf, 12/yr Model3, a policy decision using real EPA
+  range figures for THIS project's actual modeled trims — 73mi/24kWh
+  Leaf, 358mi/Long-Range-AWD Model3), Model3's `battery_preconditioning`
+  corrected to `true` (real, well-documented Tesla Navigate-to-
+  Supercharger citation), and real heater specs sourced (6kW, 293.15K
+  target). The re-run surfaced a significant finding along the way —
+  Model3's battery `resistance_to_ambient_k_per_w` (2.0 K/W, never meant
+  to be load-bearing) was inflating calendar aging once fast-charge
+  occurrences existed to exercise it — re-derived to 0.1 K/W using the
+  Leaf's own established methodology (see this file's "Thermal / cooling
+  physics" section for the full record). **Final re-run at 20yr**:
+  Leaf/Guam 62.03% total vs. Model3/Seattle 14.17% total, ratio 4.3770
+  (up from 3.4868 without fast-charge days) — a coherent, publishable
+  result.
 - **`FAST_CHARGE_SESSION` day interaction with the daily charge-reset
   event is unresolved (Q-0015, raised not resolved).** Currently no
   special-casing — a fast-charge day's session and the day's normal reset

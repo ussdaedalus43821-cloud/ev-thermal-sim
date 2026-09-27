@@ -2221,15 +2221,22 @@ code it calls is.
 - Blocking: yes — determines the flagship comparison's own published
   headline numbers, and surfaced a load-bearing pre-existing placeholder
   coefficient that was never previously exercised.
-- **Not resolved here — reported back for review, per the user's own
-  explicit "that's the moment to review" framing.** The three sub-tasks
-  themselves (occurrence rates, Model3's preconditioning flag, its
-  heater specs) are implemented and not in question. What's open: whether
-  to accept the re-run numbers as-is with this coefficient's newly-
-  load-bearing status flagged as a caveat (matching how the i3's own
-  finding was initially just flagged before later getting its own
-  dedicated investigation), or to treat Model3's battery `resistance_to_
-  ambient_k_per_w` as its own follow-up needing a real derivation before
-  trusting these numbers further — this decision determines a citable,
-  published number and isn't this entry's to make silently.
+- **Resolution (2026-09-27): re-derive, bounded to Model3's battery node
+  only.** The user chose re-derivation over accept-with-caveat, with an
+  explicitly bounded scope: apply the Leaf's own already-established
+  `resistance_to_ambient_k_per_w` methodology (target a passive
+  relaxation tau on the right shape, `R = tau/C`, no literature search
+  for a real convective coefficient) to Model3's battery specifically,
+  cross-check the result against Leaf's own value for the correct
+  direction, don't touch Bolt/e-tron/Niro's identical placeholder (flag
+  them in `docs/ROADMAP.md` instead), and don't open a further Q-NNNN
+  for it (applying an already-ratified methodology to a new field is not
+  a new design decision). Result: `R = 43200s / 432,000 J/K = 0.1 K/W`
+  (target tau=12h/overnight, sanity range 6-18h), correctly below Leaf's
+  0.25 K/W. Final re-run: Model3/Seattle 20yr total loss 14.17% (13.29%
+  calendar), total ratio (A/B) 4.3770. See `docs/MILESTONES.md`'s
+  corresponding milestone entry for the full record, including the
+  finding that the old 2.0 K/W was inflating calendar aging even in the
+  original no-fast-charge baseline, not just via the fast-charge-specific
+  hangover this milestone's re-run first surfaced.
 
