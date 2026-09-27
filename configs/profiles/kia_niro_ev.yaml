@@ -229,6 +229,22 @@ battery:
     value: 1.0
     confidence: low
     source: "assumed (fixed choice, not fit) — see aging.py's module docstring 'Coefficient provenance'; not vehicle-specific"
+  cold_charge_plating_onset_temp_k:
+    value: 293.15
+    confidence: low
+    source: "Yang & Wang, 'Understanding the Trilemma of Fast Charging, Energy Density and Cycle Life of Lithium-ion Batteries' (Penn State ECEC, DOE/OSTI) -- simulated PHEV-cell no-plating floor at 1C charge; see docs/DESIGN_QUESTIONS.md Q-0028 and aging.py's module docstring; not vehicle-specific"
+  cold_charge_plating_rate_per_efc_per_k:
+    value: 0.001
+    confidence: low
+    source: "Solved from Matadi et al.'s cited 0.75 loss/50 cycles at 5C (via Yang & Wang's citation, not read directly), at the reference C-rate of 1.0 and an assumed linear temperature sensitivity -- see docs/DESIGN_QUESTIONS.md Q-0028 and aging.py's module docstring for the full derivation and its known EOL-threshold-mismatch imprecision; not vehicle-specific"
+  cold_charge_plating_temp_sensitivity:
+    value: 1.0
+    confidence: low
+    source: "assumed (fixed choice, not fit) -- see aging.py's module docstring 'Cold-charging lithium plating'; not vehicle-specific"
+  cold_charge_plating_c_rate_sensitivity:
+    value: 1.0
+    confidence: low
+    source: "assumed (fixed choice, not fit), independent of cycle_aging_c_rate_sensitivity -- see aging.py's module docstring 'Cold-charging lithium plating'; not vehicle-specific"
   resistance_growth_per_soh_loss:
     value: 1.0
     confidence: low

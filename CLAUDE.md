@@ -139,23 +139,48 @@ related code:
   surveying this, to cite a real but DIFFERENT phenomenon — cold-weather
   wallbox pre-departure warming, not fast-charge arrival preconditioning
   — and was corrected to `false`; its real cold-departure capability
-  stays unmodeled). **The finding: for the currently-sourced 2kW/25min
-  heater, the mechanism's own SOC/cycling cost outweighs the charge-speed
-  benefit it claws back from the warmer pack's higher current ceiling —
-  preconditioning comes out net-negative for both a single session's
-  final SOC and (in an ad hoc verification run using a day-type mix that
-  actually includes fast-charge occurrences — none of the six reference
-  profiles' canonical mixes do) aggregate SOH.** This isn't a bug (the
-  current/SOC/temperature trace was verified sample-by-sample and is
-  self-consistent) or something to tune away — it's a genuine consequence
-  of an aging model whose only captured preconditioning benefit is
-  "charge more in the same fixed-duration window," with no separate
-  cold-charging degradation penalty for it to protect against beyond that
-  window. See `docs/MILESTONES.md`'s corresponding milestone for the full
+  stays unmodeled). **Superseded finding, don't cite**: this milestone
+  originally found preconditioning net-negative for SOH — the heater's
+  own SOC/cycling cost outweighing the charge-current benefit it claws
+  back — but that held only because the aging model then had no
+  cold-charging degradation term for preconditioning to protect against.
+  See the next bullet (Q-0028): once that term landed, preconditioning
+  flips to a real, substantial net benefit in the same verification
+  setup. See `docs/MILESTONES.md`'s corresponding milestones for the full
   numbers and `docs/ROADMAP.md`'s "Fast charging / preconditioning"
   section for what's still a placeholder (heater power/duration point
   values) versus what's real (the mechanism itself, the Niro's target
   temp).
+- **Cold-charging lithium-plating degradation IS implemented (Q-0028) —
+  real missing physics, added on its own merits, not to fix
+  preconditioning's story (that was a consequence, not the reason).**
+  `aging.compute_aging_step`'s only prior temperature dependence for
+  cycle aging (an Arrhenius term calibrated to SEI-growth-like behavior)
+  made aging monotonically WORSE as temperature rises — correct for that
+  mechanism, but wrong for lithium plating during charging specifically,
+  which gets WORSE as temperature drops. A new, separate, charge-only
+  additive term (gated on `applied_current_a < 0` and `cell_temp_k`
+  below `BatterySpec.cold_charge_plating_onset_temp_k`) now models this,
+  calibrated from real literature — Yang & Wang's peer-reviewed
+  physics-based aging model (onset ~293.15K at the 1C reference C-rate)
+  and Matadi et al.'s cited experimental rate (a real cell: 75% capacity
+  loss in 50 cycles at 5°C) — one citation-hop removed and flagged as
+  carrying a known EOL-threshold-mismatch imprecision, not treated as
+  exact. **Checked directly, not assumed: no clean fleet-level anchor
+  exists for this specifically** — Geotab's own 2026 reports explicitly
+  disclaim insufficient cold-only fleet samples to isolate it, and Leaf
+  fleet data is dominated by the well-known hot-climate signal instead;
+  the user's own premise that documented Leaf cold-climate fleet data
+  exists did not hold up under checking. **A load-bearing gap found and
+  fixed mid-implementation**: `TripPhaseAging` had never carried signed
+  current (only `abs()`), which is the only current information that
+  survives into `simulate_long_horizon`'s Tier-2 replay — without fixing
+  this, the new term would have been silently inert for every long-
+  horizon/flagship number, exactly the numbers this milestone exists to
+  change. Fixed via a new `TripPhaseAging.mean_current_a` field. See
+  `docs/MILESTONES.md`'s corresponding milestone for the full numbers,
+  including the real verification result reconciling this with
+  preconditioning's own (superseded) net-negative finding above.
 - **Motor mechanical-loss coefficients are placeholders, not a real
   efficiency map** — internally consistent (energy-balance tests hold)
   but not realistic in absolute magnitude yet.

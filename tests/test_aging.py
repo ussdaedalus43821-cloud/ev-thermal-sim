@@ -9,6 +9,8 @@ are what catch it.
 
 from __future__ import annotations
 
+import pytest
+
 from ev_thermal.aging import apply_soh_to_battery_spec, compute_aging_step
 from tests.test_battery import _make_battery_spec
 
@@ -81,6 +83,89 @@ def test_combined_aging_delta_equals_calendar_plus_cycle() -> None:
     assert combined.cycle_delta > 0.0
     assert combined.new_soh == 1.0 - combined.calendar_delta - combined.cycle_delta
     assert combined.new_soh < calendar_only.new_soh
+
+
+def test_cold_charge_plating_is_zero_during_discharge_even_when_cold() -> None:
+    """The mechanism (Q-0028) is charge-specific -- discharge doesn't push
+    lithium into the anode, so it isn't at plating risk the same way,
+    regardless of how cold the cell is.
+    """
+    spec = _make_battery_spec()
+    result = compute_aging_step(
+        spec,
+        soh=1.0,
+        cell_temp_k=253.15,  # -20C, well below the 293.15K onset
+        soc=0.5,
+        applied_current_a=spec.capacity_nominal_ah.value,  # positive = discharge
+        dt_s=3600.0,
+    )
+    assert result.cold_charge_plating_delta == 0.0
+
+
+def test_cold_charge_plating_is_zero_when_charging_at_or_above_onset() -> None:
+    spec = _make_battery_spec()
+    result = compute_aging_step(
+        spec,
+        soh=1.0,
+        cell_temp_k=298.15,  # 25C, above the 293.15K onset
+        soc=0.5,
+        applied_current_a=-spec.capacity_nominal_ah.value,  # negative = charging
+        dt_s=3600.0,
+    )
+    assert result.cold_charge_plating_delta == 0.0
+
+
+def test_cold_charge_plating_matches_matadi_derived_anchor_at_5c_1c() -> None:
+    """Locks in `cold_charge_plating_rate_per_efc_per_k` (Q-0028): solved from
+    Matadi et al.'s cited 0.75 loss / 50 cycles at 5C, treated as ~0.015 SOH
+    loss per EFC, 15K below the 293.15K onset, at the reference C-rate of 1.0
+    -- see aging.py's module docstring, 'Cold-charging lithium plating', for
+    the full derivation and its known EOL-threshold-mismatch imprecision. If
+    this test needs to change, the coefficient was re-derived against the
+    same anchor, not casually adjusted.
+    """
+    spec = _make_battery_spec()
+    capacity_ah = spec.capacity_nominal_ah.value
+    result = compute_aging_step(
+        spec,
+        soh=1.0,
+        cell_temp_k=273.15 + 5.0,
+        soc=0.5,
+        applied_current_a=-capacity_ah,  # C-rate = 1.0, charging
+        dt_s=3600.0,  # exactly 1 EFC at C-rate 1.0
+    )
+    assert result.cold_charge_plating_delta == pytest.approx(0.015, rel=1e-9)
+
+
+def test_cold_charge_plating_scales_linearly_with_c_rate_at_fixed_temperature() -> None:
+    spec = _make_battery_spec()
+    capacity_ah = spec.capacity_nominal_ah.value
+    at_1c = compute_aging_step(
+        spec, soh=1.0, cell_temp_k=278.15, soc=0.5, applied_current_a=-capacity_ah, dt_s=3600.0
+    )
+    at_2c = compute_aging_step(
+        spec, soh=1.0, cell_temp_k=278.15, soc=0.5, applied_current_a=-2.0 * capacity_ah, dt_s=1800.0
+    )
+    # Same EFC throughput (1.0) at both C-rates (dt halved when current doubled);
+    # cold_charge_plating_c_rate_sensitivity=1.0 means the RATE (not just
+    # throughput) doubles too, so the resulting delta should double.
+    assert at_2c.cold_charge_plating_delta == pytest.approx(2.0 * at_1c.cold_charge_plating_delta, rel=1e-9)
+
+
+def test_combined_aging_delta_includes_cold_charge_plating_when_charging_cold() -> None:
+    spec = _make_battery_spec()
+    result = compute_aging_step(
+        spec,
+        soh=1.0,
+        cell_temp_k=278.15,
+        soc=0.5,
+        applied_current_a=-spec.capacity_nominal_ah.value,
+        dt_s=3600.0,
+    )
+    assert result.cold_charge_plating_delta > 0.0
+    assert result.new_soh == pytest.approx(
+        1.0 - result.calendar_delta - result.cycle_delta - result.cold_charge_plating_delta
+    )
 
 
 def test_extrapolation_beyond_anchor_envelope_rate_is_bounded() -> None:

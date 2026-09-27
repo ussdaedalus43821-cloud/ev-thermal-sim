@@ -2002,12 +2002,33 @@ code it calls is.
   aging coefficients, so the change is universal, not per-profile), and
   needs a written implementation plan reviewed before any code changes
   per this project's standing practice, not just a Q-NNNN resolution.
-- **Not resolved here — reported back for review, not decided.** Per this
-  project's own escalation bar (a decision that determines a citable,
-  published number and changes what an existing term's coefficients mean
-  cannot be decided silently), this entry stays open pending the user's
-  confirmation of: the functional-form recommendation (option 1), the
-  calibration approach (option 1+2 combined), and whether to pull Matadi
-  et al.'s primary paper before finalizing the exact rate coefficient.
-  Implementation does not start until this resolves.
+- **Resolution (2026-09-27): approved as documented — option 1 (new
+  separate charge-only additive term) and calibration options 1+2
+  combined (Matadi et al.'s ratio for the rate, Yang & Wang's onset
+  temperature), without first pulling Matadi et al.'s primary paper.**
+  Implemented in full: `BatterySpec.cold_charge_plating_onset_temp_k`/
+  `_rate_per_efc_per_k`/`_temp_sensitivity`/`_c_rate_sensitivity` (all six
+  reference profiles plus the Blue Bird commercial profile, identical
+  values, per the "shared aging coefficients by design" rule), a new
+  `compute_aging_step` term gated on `applied_current_a < 0` and
+  `cell_temp_k < onset`, and a new `AgingStepResult.cold_charge_plating_
+  delta` / `LongHorizonCheckpoint.cold_charge_plating_soh_loss_cumulative`
+  pair kept separately attributable, not folded into `cycle_delta`.
+  **A load-bearing gap found mid-implementation, not in this entry's
+  original scope, surfaced before proceeding rather than silently fixed
+  or silently skipped**: `TripPhaseAging.mean_c_rate` is `abs(current_a)`-
+  based, and was the ONLY current information that survived into
+  `simulate_long_horizon`'s Tier-2 day-loop — gating the new term on
+  signed current as planned would have been silently inert for every
+  Tier-2/long-horizon number, exactly the numbers this milestone exists to
+  change. Fixed by adding a new, separate `TripPhaseAging.mean_current_a`
+  (signed) field, threaded through `_phase_aging`/`_degenerate_phase`/
+  `_interpolate_characterization` and the Tier-2 day-loop's current
+  computation — additive, doesn't change either existing term's behavior
+  (both already `abs()` internally), confirmed by the existing Tier-1-vs-
+  Tier-2 validation test (`test_long_horizon_validation.py`) still passing
+  unchanged. See `docs/MILESTONES.md`'s corresponding milestone for the
+  full record and the real verification result (preconditioning flips
+  from the earlier net-negative finding to a real, substantial net
+  benefit once this term gives it something real to protect against).
 

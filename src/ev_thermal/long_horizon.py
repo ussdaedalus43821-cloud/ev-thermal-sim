@@ -240,6 +240,7 @@ def _phase_aging(
     weighted_temp = 0.0
     weighted_soc = 0.0
     weighted_c_rate = 0.0
+    weighted_current_a = 0.0
     throughput_ah = 0.0
     covered_s = 0.0
     peak_temp_k = float("-inf")
@@ -252,6 +253,7 @@ def _phase_aging(
         weighted_temp += temp_k * overlap_s
         weighted_soc += soc[i] * overlap_s
         weighted_c_rate += (abs(current_a[i]) / capacity_ah) * overlap_s
+        weighted_current_a += current_a[i] * overlap_s
         throughput_ah += abs(current_a[i]) * overlap_s / 3600.0
         covered_s += overlap_s
         peak_temp_k = max(peak_temp_k, temp_k, cell_temp_k[i + 1])
@@ -264,6 +266,7 @@ def _phase_aging(
         peak_cell_temp_k=peak_temp_k,
         mean_soc=weighted_soc / covered_s,
         mean_c_rate=weighted_c_rate / covered_s,
+        mean_current_a=weighted_current_a / covered_s,
         throughput_ah=throughput_ah,
     )
 
@@ -288,6 +291,7 @@ def _degenerate_phase(
         peak_cell_temp_k=cell_temp_k[index],
         mean_soc=soc[index],
         mean_c_rate=abs(current_a[index]) / capacity_ah,
+        mean_current_a=current_a[index],
         throughput_ah=0.0,
     )
 
@@ -1181,6 +1185,8 @@ def _interpolate_characterization(
                 + fraction * (hi_phase.peak_cell_temp_k - lo_phase.peak_cell_temp_k),
                 mean_soc=lo_phase.mean_soc + fraction * (hi_phase.mean_soc - lo_phase.mean_soc),
                 mean_c_rate=lo_phase.mean_c_rate + fraction * (hi_phase.mean_c_rate - lo_phase.mean_c_rate),
+                mean_current_a=lo_phase.mean_current_a
+                + fraction * (hi_phase.mean_current_a - lo_phase.mean_current_a),
                 throughput_ah=lo_phase.throughput_ah + fraction * (hi_phase.throughput_ah - lo_phase.throughput_ah),
             )
             for lo_phase, hi_phase in zip(lo.phases, hi.phases, strict=True)
@@ -1278,6 +1284,7 @@ def simulate_long_horizon(
     odometer_km = 0.0
     calendar_loss_cumulative = 0.0
     cycle_loss_cumulative = 0.0
+    cold_charge_plating_loss_cumulative = 0.0
 
     def ambient_fn(elapsed_s: float) -> float:
         day_of_year = day0 + elapsed_s / 86400.0
@@ -1296,18 +1303,18 @@ def simulate_long_horizon(
             characterization = apply_trip_start_offset(characterization, pack_temp_k, spec)
 
             for phase in characterization.phases:
-                current_a = phase.mean_c_rate * spec.capacity_nominal_ah.value
                 result = compute_aging_step(
                     spec,
                     soh=soh,
                     cell_temp_k=phase.mean_cell_temp_k,
                     soc=phase.mean_soc,
-                    applied_current_a=current_a,
+                    applied_current_a=phase.mean_current_a,
                     dt_s=phase.duration_s,
                 )
                 soh = result.new_soh
                 calendar_loss_cumulative += result.calendar_delta
                 cycle_loss_cumulative += result.cycle_delta
+                cold_charge_plating_loss_cumulative += result.cold_charge_plating_delta
 
             odometer_km += characterization.odometer_km_delta
             trip_delta_soc = characterization.final_soc - charging_profile.typical_start_soc.value
@@ -1400,6 +1407,7 @@ def simulate_long_horizon(
                 battery_soh=soh,
                 calendar_soh_loss_cumulative=calendar_loss_cumulative,
                 cycle_soh_loss_cumulative=cycle_loss_cumulative,
+                cold_charge_plating_soh_loss_cumulative=cold_charge_plating_loss_cumulative,
                 battery_soc=soc,
                 pack_cell_temp_k=pack_temp_k,
                 odometer_km=odometer_km,

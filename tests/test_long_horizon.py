@@ -175,7 +175,29 @@ def test_phase_aging_matches_hand_computed_time_weighted_average() -> None:
     assert phase.peak_cell_temp_k == pytest.approx(310.0)
     assert phase.mean_soc == pytest.approx(0.5)
     assert phase.mean_c_rate == pytest.approx(0.15)
+    assert phase.mean_current_a == pytest.approx(15.0)
     assert phase.throughput_ah == pytest.approx(300.0 / 3600.0)
+
+
+def test_phase_aging_mean_current_a_preserves_charging_sign() -> None:
+    """Q-0028: mean_current_a must stay SIGNED (unlike mean_c_rate's abs()) --
+    this is the only current information that survives into Tier-2's phase
+    replay (simulate_long_horizon never sees real per-step current), so a
+    charge-only aging mechanism is silently unreachable in Tier-2 if this
+    regresses back to an abs()'d value.
+    """
+    phase = _phase_aging(
+        phase_name="charging",
+        time_s=[0.0, 10.0],
+        cell_temp_k=[280.0, 280.0],
+        soc=[0.5, 0.5],
+        current_a=[-50.0],
+        capacity_ah=100.0,
+        start_s=0.0,
+        end_s=10.0,
+    )
+    assert phase.mean_current_a == pytest.approx(-50.0)
+    assert phase.mean_c_rate == pytest.approx(0.5)
 
 
 def test_phase_aging_raises_on_empty_window() -> None:
@@ -918,6 +940,10 @@ def test_interpolate_characterization_midpoint_averages_neighbors() -> None:
         characterizations[0].phases[0].mean_cell_temp_k + characterizations[1].phases[0].mean_cell_temp_k
     ) / 2.0
     assert midpoint.phases[0].mean_cell_temp_k == pytest.approx(expected)
+    expected_current_a = (
+        characterizations[0].phases[0].mean_current_a + characterizations[1].phases[0].mean_current_a
+    ) / 2.0
+    assert midpoint.phases[0].mean_current_a == pytest.approx(expected_current_a)
 
 
 def test_interpolate_characterization_clamps_outside_range() -> None:
@@ -976,6 +1002,51 @@ def test_simulate_long_horizon_soh_is_monotonically_non_increasing() -> None:
     soh_trace = [c.battery_soh for c in result.checkpoints]
     assert all(a >= b - 1e-12 for a, b in zip(soh_trace, soh_trace[1:], strict=False))
     assert soh_trace[-1] < soh_trace[0]
+
+
+def _make_day_type_mix_with_fast_charge() -> list[AnnualDayTypeMix]:
+    return [
+        AnnualDayTypeMix(trip_type=TripType.CITY_STOP_AND_GO, occurrences_per_year=_sourced(100)),
+        AnnualDayTypeMix(trip_type=TripType.FAST_CHARGE_SESSION, occurrences_per_year=_sourced(20)),
+    ]
+
+
+def test_simulate_long_horizon_cold_charging_accrues_cold_charge_plating_loss() -> None:
+    """Q-0028 regression guard: without `TripPhaseAging.mean_current_a`
+    preserving sign through Tier-2 phase replay, this would be silently zero
+    even though the mechanism (`aging.compute_aging_step`) is real and
+    unit-tested in isolation (see tests/test_aging.py) -- `simulate_long_
+    horizon` never replays real per-step current, only phase-level summaries.
+    """
+    profile = _make_long_horizon_profile()
+    scenario = _make_scenario(profile, ambient_temp_k=263.15)  # -10C mean annual
+    characterizations = characterize_all_trips(profile, scenario)
+    result = simulate_long_horizon(
+        profile=profile,
+        trip_characterizations=characterizations,
+        day_type_mix=_make_day_type_mix_with_fast_charge(),
+        climate=scenario.climate,
+        charging_profile=scenario.charging_profile,
+        duration_years=1,
+        seed=1,
+    )
+    assert result.checkpoints[-1].cold_charge_plating_soh_loss_cumulative > 0.0
+
+
+def test_simulate_long_horizon_warm_charging_has_no_cold_charge_plating_loss() -> None:
+    profile = _make_long_horizon_profile()
+    scenario = _make_scenario(profile, ambient_temp_k=308.15)  # 35C mean annual, above the 293.15K onset
+    characterizations = characterize_all_trips(profile, scenario)
+    result = simulate_long_horizon(
+        profile=profile,
+        trip_characterizations=characterizations,
+        day_type_mix=_make_day_type_mix_with_fast_charge(),
+        climate=scenario.climate,
+        charging_profile=scenario.charging_profile,
+        duration_years=1,
+        seed=1,
+    )
+    assert result.checkpoints[-1].cold_charge_plating_soh_loss_cumulative == 0.0
 
 
 def test_simulate_long_horizon_odometer_only_advances_on_trip_days() -> None:

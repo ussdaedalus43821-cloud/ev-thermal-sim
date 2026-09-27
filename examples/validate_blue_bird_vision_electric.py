@@ -422,9 +422,10 @@ def step_c_long_horizon(
     total_loss_pct = (1.0 - final.battery_soh) * 100
     calendar_pct = final.calendar_soh_loss_cumulative * 100
     cycle_pct = final.cycle_soh_loss_cumulative * 100
+    cold_charge_plating_pct = final.cold_charge_plating_soh_loss_cumulative * 100
     print(
         f"Total SOH loss over {duration_days} days: {total_loss_pct:.4f}% "
-        f"(calendar={calendar_pct:.4f}%, cycle={cycle_pct:.4f}%)"
+        f"(calendar={calendar_pct:.4f}%, cycle={cycle_pct:.4f}%, cold-charge={cold_charge_plating_pct:.4f}%)"
     )
     print(
         "Order-of-magnitude cross-check against the passenger-fleet flagship record "

@@ -172,32 +172,60 @@ file holds the items that are genuinely discrete standalone work items.
   `ChargingProfile.preconditioning_enabled`) now lives in
   `long_horizon._precondition_phase`/`characterize_fast_charge_session`.
   See `docs/MILESTONES.md`'s corresponding milestone for the full
-  implementation record and the honest net-negative SOH finding (the
-  heater's own SOC/cycling cost currently outweighs the charge-current
-  benefit it claws back, for the sourced 2kW/25min figures).
+  implementation record. **Superseded finding, not current**: this
+  milestone originally found preconditioning net-negative for SOH (the
+  heater's own SOC/cycling cost outweighing the charge-current benefit it
+  claws back) — that finding held only because the aging model had no
+  cold-charging degradation term for preconditioning to protect against.
+  Once Q-0028 (below) added one, preconditioning flips to a real,
+  substantial net benefit in the same verification setup. Don't cite the
+  old net-negative number.
   **Still open, not this milestone's scope:**
   - `preconditioning_heater_power_w` (2kW, Kia Niro EV) and
     `PRECONDITIONING_DURATION_S` (1500s / 25min, `long_horizon.py`) are
     both real-range-sourced placeholders (1.5-3kW and ~20-30min are real,
     but not vehicle-specific point values) — a future pass could source
-    exact per-vehicle figures, which would directly change the net-
-    negative finding's magnitude (possibly its sign, for a
-    higher-powered heater).
+    exact per-vehicle figures, which would change the net-benefit
+    magnitude found above.
   - No reference profile's canonical `day_type_mix` (flagship comparison,
     the Blue Bird school-bus script) includes any `FAST_CHARGE_SESSION`
-    occurrences at all, so this mechanism's aggregate-SOH effect is
-    currently invisible in every existing published scenario — the
-    net-negative finding above came from an ad hoc, uncommitted
-    verification mix built only to confirm the mechanism moves a number
-    in the expected direction of causality, not a canonical one.
+    occurrences at all, so neither this mechanism's nor Q-0028's
+    aggregate-SOH effect is visible in any existing published scenario —
+    every number cited for either mechanism came from an ad hoc,
+    uncommitted verification mix built only to confirm the mechanism
+    moves a number in the expected direction, not a canonical one.
   - The i3's real cold-weather pre-departure (wallbox) preconditioning
     capability remains unmodeled and uncited (Q-0027) — a different real
     phenomenon from this milestone's fast-charge-arrival mechanism, with
     no schema field of its own yet.
   - The Kia Niro mistake-library entry that Q-0023 eliminated (its
     original candidate was preconditioning/cabin-priority-related)
-    becomes worth revisiting now that real preconditioning exists — not
-    scoped here, flagged for whoever picks up the mistake library next.
+    becomes worth revisiting now that real preconditioning exists AND
+    now has something real (Q-0028) to protect against — not scoped
+    here, flagged for whoever picks up the mistake library next.
+- **Done: cold-charging lithium-plating degradation (Q-0028).** A real,
+  previously-missing aging mechanism, not a preconditioning tuning —
+  `aging.compute_aging_step` gained a separate, charge-only term for
+  lithium plating during cold charging, calibrated from real (if
+  imperfect, citation-hop-removed) literature: Yang & Wang's onset
+  temperature (~293.15K at the 1C reference) and Matadi et al.'s cited
+  rate (a real cell losing 75% capacity in 50 cycles at 5°C). See
+  `docs/MILESTONES.md` for the full record, including a genuine
+  mid-implementation finding that `TripPhaseAging` had never carried
+  signed current (only `abs()`), which would have made the new term
+  silently inert throughout Tier-2 — fixed via a new `mean_current_a`
+  field. **Still open:**
+  - The rate coefficient carries a known EOL-threshold-mismatch
+    imprecision (flagged in `aging.py`'s docstring) — pulling Matadi et
+    al.'s own paper directly (not just Yang & Wang's citation of it)
+    would tighten this.
+  - No reference profile's canonical `day_type_mix` includes
+    `FAST_CHARGE_SESSION` occurrences (see above) — this mechanism's real
+    aggregate effect is not visible in any currently-published number.
+  - `cold_charge_plating_temp_sensitivity`/`_c_rate_sensitivity` are both
+    assumed linear (1.0), not fit — a single anchor point can't constrain
+    more than one free parameter, and the real literature suggests a
+    convex (accelerating) shape near onset.
 - **`FAST_CHARGE_SESSION` day interaction with the daily charge-reset
   event is unresolved (Q-0015, raised not resolved).** Currently no
   special-casing — a fast-charge day's session and the day's normal reset

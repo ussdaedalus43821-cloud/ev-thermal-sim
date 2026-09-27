@@ -438,6 +438,49 @@ class BatterySpec(BaseModel):
             "docstring — a placeholder assumption, not a calibrated fit."
         ),
     )
+    cold_charge_plating_onset_temp_k: Sourced[float] = Field(
+        ...,
+        description=(
+            "Milestone: cold-charging lithium plating (Q-0028). Cell temperature "
+            "at/above which charging causes no extra (lithium-plating) aging beyond "
+            "cycle_aging_rate_per_efc's own SEI-growth term, at the reference C-rate "
+            "of 1.0 -- below it, cold_charge_plating_rate_per_efc_per_k's term "
+            "activates. See aging.py's module docstring, 'Cold-charging lithium "
+            "plating', for the real literature this was sourced from and why it's "
+            "held fixed at a single reference C-rate rather than the full C-rate-"
+            "coupled onset surface the source literature shows."
+        ),
+    )
+    cold_charge_plating_rate_per_efc_per_k: Sourced[float] = Field(
+        ...,
+        description=(
+            "Milestone: cold-charging lithium plating (Q-0028). Fraction of SOH "
+            "lost per equivalent full cycle (EFC) of CHARGING throughput per "
+            "Kelvin the cell is below cold_charge_plating_onset_temp_k, at the "
+            "reference C-rate of 1.0. Zero contribution during discharge and "
+            "at/above the onset temperature -- see aging.py's docstring for the "
+            "full formula and calibration provenance."
+        ),
+    )
+    cold_charge_plating_temp_sensitivity: Sourced[float] = Field(
+        ...,
+        description=(
+            "Milestone: cold-charging lithium plating (Q-0028). Exponent n in "
+            "rate * (onset_temp_k - cell_temp_k)^n -- a placeholder assumption "
+            "(linear), not a calibrated fit; see aging.py's docstring."
+        ),
+    )
+    cold_charge_plating_c_rate_sensitivity: Sourced[float] = Field(
+        ...,
+        description=(
+            "Milestone: cold-charging lithium plating (Q-0028). Exponent n in "
+            "rate * (applied C-rate)^n for the cold-charging plating term -- a "
+            "placeholder assumption, not a calibrated fit; independent of (not "
+            "reused from) cycle_aging_c_rate_sensitivity, since the two "
+            "mechanisms' real C-rate sensitivities are not the same. See "
+            "aging.py's docstring."
+        ),
+    )
     resistance_growth_per_soh_loss: Sourced[float] = Field(
         ...,
         description=(
@@ -794,6 +837,20 @@ class TripPhaseAging(BaseModel):
     mean_c_rate: float = Field(
         ..., description="abs(current_a) / capacity_nominal_ah, averaged over this phase."
     )
+    mean_current_a: float = Field(
+        ...,
+        description=(
+            "Milestone: cold-charging lithium plating (Q-0028). SIGNED mean "
+            "current over this phase (this project's convention: negative = "
+            "charging, positive = discharging) -- unlike mean_c_rate, NOT "
+            "abs()'d. Needed because compute_aging_step's cold_charge_plating "
+            "term is charge-only (gated on applied_current_a < 0), and a Tier-2 "
+            "long-horizon run never replays real per-step current -- it "
+            "reconstructs aging purely from this phase-level summary, so the "
+            "sign has to survive here or the charge-only gate is silently "
+            "unreachable outside Tier-1's own per-second stepping."
+        ),
+    )
     throughput_ah: float = Field(
         ..., description="Amp-hours of charge moved (either direction) during this phase."
     )
@@ -1061,6 +1118,20 @@ class AgingStepResult(BaseModel):
     )
     cycle_delta: float = Field(
         ..., description="SOH lost this step from cycle (throughput) aging alone (non-negative)."
+    )
+    cold_charge_plating_delta: float = Field(
+        ...,
+        description=(
+            "Milestone: cold-charging lithium plating (Q-0028). SOH lost this "
+            "step from cold-charging plating alone (non-negative); zero unless "
+            "applied_current_a < 0 (charging) and cell_temp_k is below "
+            "BatterySpec.cold_charge_plating_onset_temp_k. Kept separate from "
+            "cycle_delta, not folded into it, despite both being throughput-"
+            "driven -- the two mechanisms have opposite temperature directions "
+            "(SEI growth vs. lithium plating) and this project's own causal-"
+            "trace goal calls for keeping physically distinct mechanisms "
+            "separately attributable, not merged into a less-specific bucket."
+        ),
     )
 
 
@@ -1532,6 +1603,16 @@ class LongHorizonCheckpoint(BaseModel):
     )
     cycle_soh_loss_cumulative: float = Field(
         ..., description="Cumulative SOH lost to cycle (throughput) aging alone, since day 0."
+    )
+    cold_charge_plating_soh_loss_cumulative: float = Field(
+        ...,
+        description=(
+            "Milestone: cold-charging lithium plating (Q-0028). Cumulative SOH "
+            "lost to cold-charging lithium plating alone, since day 0. Kept "
+            "separate from cycle_soh_loss_cumulative, not folded into it, for "
+            "the same attribution reason calendar_soh_loss_cumulative is kept "
+            "separate from cycle_soh_loss_cumulative."
+        ),
     )
     battery_soc: float = Field(..., description="0-1, at end of this day.")
     pack_cell_temp_k: float = Field(..., description="Lumped battery pack temperature at end of this day.")

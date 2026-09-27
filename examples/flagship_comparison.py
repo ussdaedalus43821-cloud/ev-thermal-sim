@@ -155,11 +155,19 @@ def build_scenario(profile: ManufacturerProfile, climate: Climate, seed: int) ->
 
 
 class ComparisonResult:
-    def __init__(self, label: str, total_loss: float, calendar_loss: float, cycle_loss: float) -> None:
+    def __init__(
+        self,
+        label: str,
+        total_loss: float,
+        calendar_loss: float,
+        cycle_loss: float,
+        cold_charge_plating_loss: float,
+    ) -> None:
         self.label = label
         self.total_loss = total_loss
         self.calendar_loss = calendar_loss
         self.cycle_loss = cycle_loss
+        self.cold_charge_plating_loss = cold_charge_plating_loss
 
 
 def run_one(profile_path: Path, climate: Climate, duration_days: int, seed: int, label: str) -> ComparisonResult:
@@ -183,6 +191,7 @@ def run_one(profile_path: Path, climate: Climate, duration_days: int, seed: int,
         total_loss=1.0 - checkpoint.battery_soh,
         calendar_loss=checkpoint.calendar_soh_loss_cumulative,
         cycle_loss=checkpoint.cycle_soh_loss_cumulative,
+        cold_charge_plating_loss=checkpoint.cold_charge_plating_soh_loss_cumulative,
     )
 
 
@@ -201,10 +210,13 @@ def main() -> None:
 
     print(f"Comparison over {args.duration_days} days, seed={args.seed}")
     print()
-    header = f"{'':<22}{'total':>10}{'calendar':>10}{'cycle':>10}"
+    header = f"{'':<22}{'total':>10}{'calendar':>10}{'cycle':>10}{'cold-charge':>13}"
     print(header)
     for r in (result_a, result_b):
-        print(f"{r.label:<22}{r.total_loss * 100:>9.4f}%{r.calendar_loss * 100:>9.4f}%{r.cycle_loss * 100:>9.4f}%")
+        print(
+            f"{r.label:<22}{r.total_loss * 100:>9.4f}%{r.calendar_loss * 100:>9.4f}%"
+            f"{r.cycle_loss * 100:>9.4f}%{r.cold_charge_plating_loss * 100:>12.4f}%"
+        )
     print()
     print(f"total ratio (A/B):    {result_a.total_loss / result_b.total_loss:.4f}")
     print(f"calendar ratio (A/B): {result_a.calendar_loss / result_b.calendar_loss:.4f}")

@@ -14,6 +14,7 @@ import pytest
 from pydantic import ValidationError
 
 from ev_thermal.schema import (
+    AgingStepResult,
     AnnualDayTypeMix,
     AuxLoads,
     BatterySpec,
@@ -115,6 +116,10 @@ def make_battery_spec() -> BatterySpec:
         cycle_aging_rate_per_efc=sourced(1.350e-4),
         cycle_aging_activation_temp_k=sourced(3728.7),
         cycle_aging_c_rate_sensitivity=sourced(1.0),
+        cold_charge_plating_onset_temp_k=sourced(293.15),
+        cold_charge_plating_rate_per_efc_per_k=sourced(0.001),
+        cold_charge_plating_temp_sensitivity=sourced(1.0),
+        cold_charge_plating_c_rate_sensitivity=sourced(1.0),
         resistance_growth_per_soh_loss=sourced(1.0),
         cold_soak_offset_k=sourced(3.0),
         hot_soak_offset_k=sourced(8.0),
@@ -277,7 +282,17 @@ def make_trip_phase_aging(phase_name: str = "cruise") -> TripPhaseAging:
         peak_cell_temp_k=310.0,
         mean_soc=0.6,
         mean_c_rate=0.8,
+        mean_current_a=144.0,
         throughput_ah=12.0,
+    )
+
+
+def make_aging_step_result() -> AgingStepResult:
+    return AgingStepResult(
+        new_soh=0.9995,
+        calendar_delta=0.0003,
+        cycle_delta=0.0001,
+        cold_charge_plating_delta=0.0001,
     )
 
 
@@ -302,6 +317,7 @@ def make_long_horizon_checkpoint() -> LongHorizonCheckpoint:
         battery_soh=0.92,
         calendar_soh_loss_cumulative=0.05,
         cycle_soh_loss_cumulative=0.03,
+        cold_charge_plating_soh_loss_cumulative=0.01,
         battery_soc=0.55,
         pack_cell_temp_k=301.0,
         odometer_km=36_000.0,
@@ -794,6 +810,15 @@ def test_trip_phase_aging_round_trip() -> None:
     phase = make_trip_phase_aging()
     restored = TripPhaseAging.model_validate_json(phase.model_dump_json())
     assert restored == phase
+
+
+def test_aging_step_result_round_trip() -> None:
+    result = make_aging_step_result()
+    restored = AgingStepResult.model_validate_json(result.model_dump_json())
+    assert restored == result
+    assert restored.new_soh == pytest.approx(
+        1.0 - restored.calendar_delta - restored.cycle_delta - restored.cold_charge_plating_delta
+    )
 
 
 def test_trip_characterization_round_trip() -> None:

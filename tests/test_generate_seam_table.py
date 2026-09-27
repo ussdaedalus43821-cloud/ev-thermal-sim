@@ -18,6 +18,7 @@ def _make_checkpoint(day_index: int, battery_soh: float) -> LongHorizonCheckpoin
         battery_soh=battery_soh,
         calendar_soh_loss_cumulative=1.0 - battery_soh,
         cycle_soh_loss_cumulative=0.0,
+        cold_charge_plating_soh_loss_cumulative=0.0,
         battery_soc=0.8,
         pack_cell_temp_k=298.15,
         odometer_km=0.0,

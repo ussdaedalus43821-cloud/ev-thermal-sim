@@ -3362,3 +3362,125 @@ whole history to find.
   before this milestone, +12 matching the new tests exactly), 3 slow
   tests unaffected. `mypy --strict`, `ruff check` clean on every file
   touched.
+- **Milestone "Cold-charging lithium-plating degradation" (done,
+  2026-09-27, `docs/DESIGN_QUESTIONS.md` Q-0028):** raised by the user
+  directly, explicitly separated from the preconditioning milestone
+  above: the reason to build this is that `aging.py`'s cycle-aging term
+  is missing a real physical mechanism, independent of whether fixing it
+  happens to change the preconditioning story.
+  **The gap**: `compute_aging_step`'s only cycle-aging temperature
+  dependence was a single Arrhenius scale calibrated to SEI-growth-like
+  behavior — monotonically WORSE as temperature rises, monotonically
+  BETTER as it falls. Correct for SEI growth, wrong for lithium plating
+  during charging specifically, which gets WORSE as temperature drops —
+  the opposite direction — because low temperature slows solid-state
+  diffusion/intercalation kinetics faster than it slows the charge
+  current pushing ions in, depositing metallic lithium on the anode
+  instead. Charge-specific (discharge doesn't push lithium into the
+  anode), so gated on `applied_current_a < 0`.
+  **Survey finding: the user's own premise (documented Nissan Leaf
+  cold-climate fleet data) did not hold up, checked directly rather than
+  assumed.** Geotab's own 2026 fleet reports (22,700+ and 6,300+ EVs)
+  explicitly disclaim insufficient cold-only fleet samples to isolate
+  this effect; their published climate finding is a hot-climate penalty
+  instead (~0.4%/year), and their fast-charging finding (DC-fast-charge-
+  heavy vehicles up to ~3.0%/year vs ~1.5%/year for AC-heavy ones)
+  doesn't separate out ambient temperature during those sessions. Leaf
+  fleet data specifically is dominated by the well-known hot-climate
+  (Phoenix) signal, not a cold-climate one. Flagged honestly rather than
+  inventing a number to match the premise.
+  **Real anchors found instead — lab-level, one citation-hop removed for
+  the rate, same class of source as this project's existing single
+  cycle-aging anchor**: Yang & Wang, "Understanding the Trilemma of Fast
+  Charging, Energy Density and Cycle Life of Lithium-ion Batteries"
+  (Penn State ECEC, DOE/OSTI, peer-reviewed physics-based aging model,
+  read directly): lithium plating is negligible above an onset
+  temperature that itself rises with C-rate (their simulated PHEV cell:
+  ~20°C floor at 1C charge, ~40°C at 2C, >50°C at 3C). Cited within it,
+  Matadi et al.'s real experimental number (not simulated, but relayed
+  through Yang & Wang's citation, not read from Matadi et al.'s own
+  paper): a 16Ah graphite/NMC cell lost 75% capacity in 50 cycles at 5°C
+  vs. 4000 cycles to (presumably conventional, ~20-30%) EOL at 25°C — a
+  known, flagged EOL-threshold mismatch between the two figures, not
+  glossed over.
+  **Mechanism, per `docs/DESIGN_QUESTIONS.md` Q-0028's approved
+  recommendation**: a new, separate additive term in `compute_aging_step`
+  (not a modification of the existing Arrhenius term, which would have
+  silently broken its documented anchor-fit provenance), active only
+  during charging below a new `BatterySpec.cold_charge_plating_onset_
+  temp_k` (293.15K, Yang & Wang's 1C floor), scaling with how far below
+  onset the cell is and with C-rate — `BatterySpec.cold_charge_plating_
+  rate_per_efc_per_k` (0.001, solved from the Matadi-derived target of
+  ~0.015 SOH-fraction lost per EFC at 5°C/1C, 15K below onset, with
+  `cold_charge_plating_temp_sensitivity` assumed linear at 1.0 — a single
+  anchor point can constrain at most one free parameter, same reasoning
+  `cycle_aging_c_rate_sensitivity`'s own precedent already used) and
+  `cold_charge_plating_c_rate_sensitivity` (1.0, also assumed, kept
+  independent of `cycle_aging_c_rate_sensitivity` since the two
+  mechanisms' real C-rate sensitivities aren't the same). A genuinely new,
+  separately-attributable delta (`AgingStepResult.cold_charge_plating_
+  delta`, `LongHorizonCheckpoint.cold_charge_plating_soh_loss_cumulative`)
+  — never folded into `cycle_delta`, matching this project's causal-trace
+  goal and the precedent `precondition` set as its own phase rather than
+  folding into `ramp`. All six reference profiles plus the Blue Bird
+  commercial profile received identical coefficient values, per the
+  "shared aging coefficients by design" rule.
+  **A load-bearing architectural gap found mid-implementation, surfaced
+  before proceeding rather than silently fixed or silently narrowed in
+  scope**: `TripPhaseAging.mean_c_rate` is `abs(current_a)`-based, and was
+  the ONLY current information that survives into `simulate_long_
+  horizon`'s Tier-2 day-loop (`sim.py`'s three `compute_aging_step` call
+  sites pass real signed current, but none of those feed the 20-year
+  comparison numbers — those all go through Tier-2 phase replay). Gating
+  the new term on signed current as originally planned would have been
+  silently inert for every Tier-2/long-horizon number — exactly the
+  numbers this milestone exists to change. Fixed by adding a new,
+  separate `TripPhaseAging.mean_current_a` (signed, NOT `abs()`'d) field,
+  threaded through `_phase_aging`/`_degenerate_phase`/
+  `_interpolate_characterization` and `simulate_long_horizon`'s day-loop
+  current computation (now `phase.mean_current_a` directly, replacing
+  `phase.mean_c_rate * capacity_ah`, which was always positive).
+  Purely additive — doesn't change either existing term's behavior, since
+  both already `abs()` internally — confirmed by `test_long_horizon_
+  validation.py`'s existing Tier-1-vs-Tier-2 cross-check still passing
+  unchanged after the fix.
+  **Real verification result, run end-to-end, not assumed**: with a
+  day-type mix that actually includes `FAST_CHARGE_SESSION` occurrences
+  (an ad hoc, uncommitted verification mix, since none of the six
+  reference profiles' canonical mixes do — same limitation flagged in the
+  preconditioning milestone above), Kia Niro EV under Minneapolis cold
+  over 20 years: unpreconditioned 29.10% total loss (18.40% calendar,
+  1.08% cycle, **9.61% cold-charge-plating**) vs. preconditioned 20.85%
+  total loss (18.36% calendar, 1.31% cycle, **1.18% cold-charge-
+  plating**) — preconditioning cuts plating-driven loss by ~8x and comes
+  out net-positive by 8.25 percentage points overall. **This resolves the
+  preconditioning milestone's own net-negative finding as a genuine
+  artifact of an incomplete aging model, not a wrong result at the
+  time** — the earlier finding was honestly reported and correct given
+  what the model then captured (preconditioning's only benefit was
+  "charge more in a fixed window," smaller than its own SOC cost); adding
+  the real missing mechanism this term represents gives preconditioning
+  something real to protect against, and it does, as expected. Neither
+  finding was tuned to produce this outcome — this term was built on its
+  own physical merits, and the reconciliation is a consequence, not the
+  goal. No reference profile's canonical day-type mix includes fast-charge
+  occurrences, so none of the six passenger flagship comparisons' or the
+  Blue Bird commercial validation's published numbers moved (confirmed by
+  re-running both: every `cold-charge` column reads exactly 0.0000%) —
+  this mechanism, like the Milestone D chiller finding, is real and
+  tested but currently invisible in every existing published scenario.
+  `examples/flagship_comparison.py` and `examples/validate_blue_bird_
+  vision_electric.py` both gained a `cold-charge` breakdown column/field
+  for this reason, so the mechanism's (currently-zero) contribution is
+  visible rather than silently absent from the display.
+  New tests (9 total): `tests/test_schema.py` (1, `AgingStepResult`
+  round-trip), `tests/test_aging.py` (5, anchor-reproduction for the
+  Matadi-derived rate, charge/discharge gating, onset-temperature
+  gating, C-rate scaling, combined-delta sum), `tests/test_long_horizon.py`
+  (3, signed-current preservation through `_phase_aging` and
+  `_interpolate_characterization`, and the Tier-2 cold-vs-warm regression
+  guard that would have caught the sign-loss gap above). Full suite: 334
+  passed (was 325, +9 matching exactly), 3 slow tests unaffected
+  (including `test_long_horizon_validation.py`'s Tier-1-vs-Tier-2
+  cross-check). `mypy --strict`, `ruff check` clean on every file touched,
+  including `examples/`.
