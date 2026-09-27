@@ -80,6 +80,12 @@ CAVEATS = [
     "cooling.py's chiller path is real and validated (Q-0021) but Columbus's climate doesn't get "
     "hot enough to meaningfully engage it -- these numbers carry the same radiator-dominated "
     "thermal behavior as a non-chiller-equipped profile would show under this specific climate.",
+    "cycle_aging_rate_per_efc's 75kWh reference-pack-capacity assumption (Q-0006/Q-0007) scales "
+    "this profile's own cycle-aging output EXACTLY linearly (confirmed empirically: cycle loss at "
+    "50/100/200kWh is 0.66x/1.33x/2.67x the 75kWh value) -- currently a modest effect on the total "
+    "(cycle is 1.21pp of 73.74pp total loss at 20yr under this profile's own school-route duty "
+    "cycle, calendar-dominated), but would become load-bearing for any future scenario with "
+    "heavier cycling/fast-charge exposure than this one has.",
 ]
 
 

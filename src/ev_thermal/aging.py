@@ -96,7 +96,19 @@ fix below):
     fixed. Superseded a prior `cycle_aging_rate_per_ah = 6.660e-7` (solved
     the same anchor without EFC normalization; see the "EFC normalization"
     section below for why that formulation was replaced, not just
-    renamed).
+    renamed). **The original 100,000 kWh/82% SOH anchor was never tied to
+    a real named vehicle or fleet, checked directly (docs/DESIGN_QUESTIONS.md
+    Q-0007's own follow-up) — the 75kWh reference capacity isn't standing
+    in for a discoverable real number, since none exists in this project's
+    records.** `cycle_aging_rate_per_efc` scales EXACTLY linearly with this
+    assumed reference capacity (confirmed empirically, not just derived:
+    doubling/quadrupling it exactly doubles/quadruples `cycle_soh_loss_
+    cumulative` for every profile) — real, not cosmetic, for the absolute
+    cycle-aging number, but only a ~7% relative effect on the flagship
+    comparison's headline A/B ratio across a 50-200kWh test range, since
+    calendar aging dominates every currently-published scenario. Would
+    become directly load-bearing for any future cycle-aging-dominated
+    scenario. See Q-0007's follow-up for the full sensitivity check.
 Treat every cycle-aging coefficient as a placeholder assumption pending real
 throughput-vs-temperature fleet or lab data, with more skepticism than the
 calendar-aging coefficients above.

@@ -3484,3 +3484,41 @@ whole history to find.
   (including `test_long_horizon_validation.py`'s Tier-1-vs-Tier-2
   cross-check). `mypy --strict`, `ruff check` clean on every file touched,
   including `examples/`.
+- **Follow-up investigation (2026-09-27, `docs/DESIGN_QUESTIONS.md`
+  Q-0007): is the 75kWh cycle-aging reference-capacity assumption's
+  arbitrariness cosmetic or load-bearing?** Raised by the user directly.
+  **Checked, not assumed: the original "82% SOH at 100,000 kWh" anchor was
+  never tied to a real named vehicle or fleet anywhere in this project's
+  records** — every mention of it (`aging.py`'s docstring, Q-0007 itself,
+  every profile YAML's own `source` field) describes it only as "one fleet
+  anchor," unlike the calendar-aging anchors, which at least name real
+  vehicles/climates. The 75kWh assumption isn't standing in for a
+  discoverable real number; there was never one to recover.
+  **Sensitivity check, run empirically (not just derived) at 50/100/200kWh
+  reference capacities**, for both the flagship comparison (Leaf/Guam vs.
+  Model3/Seattle, 20yr point estimate) and the Blue Bird/Columbus 20yr
+  school-bus run: `cycle_soh_loss_cumulative` scales EXACTLY linearly with
+  the assumed reference capacity for every profile (confirmed to four
+  significant figures — e.g. Leaf/Guam cycle loss: 1.4758%/2.2138%/
+  2.9517%/5.9034% at 50/75/100/200kWh, an exact 1:1.5:2:4 ratio). **Real,
+  not cosmetic, for the absolute cycle-aging number — but only a modest
+  effect on the published headline comparisons**, since calendar aging
+  dominates every currently-published scenario (Leaf/Guam: 49.28pp
+  calendar vs. 1.48-5.90pp cycle across the tested range; Model3/Seattle:
+  14.65pp vs. 0.08-0.33pp; Blue Bird: 72.52pp vs. 0.81-3.23pp). The
+  flagship comparison's A/B total-loss ratio moves ~7% relative (3.4464 at
+  50kWh to 3.6855 at 200kWh) across the full 4x test range — real, not
+  zero, but not enough to change which vehicle looks worse or by roughly
+  how much. Would become directly load-bearing for a future cycle-aging-
+  dominated scenario (e.g. once `FAST_CHARGE_SESSION` lands in a canonical
+  day-type mix, see Q-0028's own open follow-up).
+  **Documented, not just found**: a one-line consequence note added to
+  Q-0007's resolution in `docs/DESIGN_QUESTIONS.md`; the same finding
+  folded into `aging.py`'s "Coefficient provenance" docstring; and a new
+  caveat added to the Blue Bird seam table row's `caveats` list
+  (`examples/generate_seam_table.py`), joining the calendar-extrapolation
+  caveat, since that row is the one place this number reaches an external
+  consumer (Transition). No code behavior changed — this was a
+  documentation-and-verification pass, not a coefficient change; the
+  75kWh value itself is unchanged. Full suite unaffected (still 334
+  passed); `mypy --strict`, `ruff check` clean.

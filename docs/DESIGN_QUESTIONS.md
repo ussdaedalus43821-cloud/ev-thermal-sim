@@ -341,6 +341,44 @@ Format:
   `aging.py`'s "Coefficient provenance" section. See docs/MILESTONES.md's
   deferred work for the full implementation record and the corrected
   Leaf/Model3 comparison numbers.
+- **Follow-up (2026-09-27), raised by the user: does the original anchor
+  ever specify a real pack size, and is the 75kWh assumption's
+  arbitrariness cosmetic or load-bearing?** Checked directly, not
+  assumed: no. The original "82% SOH at 100,000 kWh" anchor has never
+  been tied to a named vehicle, fleet, or study anywhere in this
+  project's records (`aging.py`'s docstring, this entry, and every
+  profile YAML's own `source` field all describe it only as "one fleet
+  anchor" / "a fleet pack throughput number" — unlike the calendar-aging
+  anchors, which at least name real vehicles/climates as their basis).
+  The 75kWh assumption doesn't paper over a discoverable real number; it
+  stands because there was never a real number to recover.
+  **Sensitivity check, run empirically at 50/100/200kWh (not just derived
+  algebraically), for both the flagship comparison (Leaf/Guam vs.
+  Model3/Seattle, 20yr) and the Blue Bird/Columbus 20yr school-bus run**:
+  `cycle_soh_loss_cumulative` scales EXACTLY linearly with the assumed
+  reference capacity for every profile (confirmed: doubling/quadrupling
+  the reference exactly doubles/quadruples cycle loss, to four significant
+  figures) — an unsurprising consequence of `cycle_aging_rate_per_efc`
+  itself being directly proportional to the assumed reference capacity.
+  **Not purely cosmetic, but not currently story-changing either**: because
+  calendar aging dominates every currently-published scenario (Leaf/Guam:
+  49.28pp calendar vs. 1.48-5.90pp cycle across the tested range; Blue
+  Bird: 72.52pp calendar vs. 0.81-3.23pp cycle), the flagship comparison's
+  headline A/B ratio moves only ~7% relative (3.4464 at 50kWh to 3.6855 at
+  200kWh) across a 4x range of the assumption — real, not zero, but not
+  enough to change which vehicle looks worse or by roughly how much. This
+  would NOT hold for a cycle-aging-dominated scenario (e.g. once
+  `FAST_CHARGE_SESSION` occurrences are added to a canonical day-type mix
+  — see `docs/ROADMAP.md`'s Q-0028 follow-ups), where this assumption
+  would become directly load-bearing for the absolute number.
+  **Consequence note added per the user's request**: this reference
+  capacity scales all cycle-aging output linearly; comparative (ratio)
+  results are only mildly sensitive to it under today's calendar-dominated
+  published scenarios, absolute cycle-loss numbers are not invariant at
+  all. A caveat reflecting this was added to the Blue Bird seam table
+  row's `caveats` list (`examples/generate_seam_table.py`), joining the
+  calendar-extrapolation caveat, since that row is the one place this
+  number reaches an external consumer (Transition).
 
 ## Q-0008 — Monte Carlo v1 scope: which parameters get sampled?
 
