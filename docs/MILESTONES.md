@@ -3713,3 +3713,54 @@ whole history to find.
   ratified methodology to a new field is not a new design decision. Full
   suite unaffected (still 334 passed); `mypy --strict`, `ruff check`
   clean on every file touched.
+- **First user test of the dashboard (2026-09-27) — finding recorded,
+  not yet fixed (see `docs/DESIGN_QUESTIONS.md` Q-0030).** The user (who
+  built every mechanism the dashboard visualizes) used
+  `src/ev_thermal/dashboard/app.py` for the first time, with a live
+  server started for direct interactive use.
+  **What happened, as reported, not reconstructed**: ran Nissan Leaf and
+  Tesla Model 3 at 45°C ambient, 1800s trip duration, driver aggression
+  1.0, 1% road grade — the two vehicles produced nearly identical
+  component-temperature charts, neither crossed its derate line, no
+  causal events fired. The user's own words: "I have no idea what this
+  means." Their own diagnosis: "The mechanism is correct; the dashboard
+  teaches nothing. It assumes the viewer already knows what to look at."
+  **Investigated directly, not just taken at face value** (a fork
+  verified this before any fix was proposed — see Q-0030 for the full
+  record): two distinct causes, not one.
+  1. **A real bug**, separate from "the UI needs better guidance":
+     `run_scenario`'s thermal-node `initial_temp_k` comes from each
+     vehicle profile's own fixed YAML value (298.15K/25°C), completely
+     independent of the dashboard's own ambient-temperature slider. At
+     the user's 45°C setting, both vehicles' batteries actually started
+     the simulated trip at 25°C and only drifted to ~26-27°C over 1800s
+     — the dashboard silently ran 20°C below what the user asked for.
+     The project already has a real mechanism for "vehicle has soaked to
+     ambient before the trip starts" (the cold/hot-soak archetype logic
+     `characterize_trip` already uses) — the dashboard just never calls
+     it, calling `run_scenario` directly with each profile's raw
+     reference-condition thermal state instead.
+  2. A genuinely short (1800s, moderate-aggression) single driving trip
+     may be structurally the wrong lens regardless of the bug above:
+     every number this project has published this session (flagship
+     comparisons, mistake-library deltas) comes from either cumulative
+     multi-year SOH divergence or a DC fast-charge session's high
+     current — not one moderate 30-minute commute. Checked directly:
+     even at the dashboard's slider maximum (aggression 1.3), the same
+     20°C-below-ambient bug meant nothing crossed derate either.
+  **A DC fast-charge check, run to see whether that's a safe alternative
+  scenario for the dashboard to expose, found a second, separate,
+  unresolved problem**: at 45°C ambient, 50kW DC charge, 1800s, BOTH
+  vehicles cross derate (Leaf 45.0→46.9°C, Model3 45.0→48.2°C) — a real
+  signal, but Model3 (actively cooled) ends up HOTTER than Leaf
+  (passive), the wrong direction for this project's own teaching point.
+  Not root-caused yet (plausible cause: the dashboard charges both
+  vehicles at the same flat 50kW regardless of pack size, giving Leaf's
+  24kWh pack a much higher C-rate than Model3's 80.5kWh pack) — flagged,
+  not fixed, and NOT safe to build a "fast-charge mode" around until this
+  is understood, since it would risk teaching something backwards.
+  **Per the user's explicit instruction, nothing was fixed as part of
+  this entry** — this is a finding record only. See Q-0030 for the
+  scoped follow-up work and the user's own listed candidate fixes (side-
+  by-side mode, a multi-year SOH preset, a plain-language "what to
+  notice" panel).

@@ -2248,3 +2248,55 @@ code it calls is.
   original no-fast-charge baseline, not just via the fast-charge-specific
   hangover this milestone's re-run first surfaced.
 
+## Q-0030 — Dashboard "teaching layer": the mechanism is correct, the presentation teaches nothing
+
+- Date: 2026-09-27
+- Context: the dashboard's first real user test (the user themselves,
+  who built every mechanism it visualizes — see `docs/MILESTONES.md`'s
+  corresponding entry for the full finding record). Ran Nissan Leaf vs.
+  Tesla Model 3 at 45°C ambient, 1800s, driver aggression 1.0, 1% grade:
+  nearly identical temperature charts, no derate crossed, no causal
+  events, and the user's own words: "I have no idea what this means...
+  the dashboard teaches nothing. It assumes the viewer already knows
+  what to look at." Investigation (already done, see the MILESTONES.md
+  entry) found two causes: (1) a real bug — `initial_temp_k` ignores the
+  ambient slider entirely, so the battery starts every run at a fixed
+  25°C regardless of what ambient the user picks; (2) a single moderate
+  30-minute drive may be structurally the wrong scenario to show this
+  project's actual teaching content (multi-year SOH divergence, or
+  fast-charge sessions specifically), independent of the bug.
+- **Concrete gaps, not abstractions, per the user's own list**:
+  - No annotation — the charts show raw data with no explanation of what
+    a viewer should be looking for or why it matters.
+  - No comparison mode — the dashboard runs exactly one vehicle at a
+    time; there is no way to see two vehicles' results side by side
+    without manually running each and remembering the first.
+  - Default slider values sit below the interesting region — even before
+    the `initial_temp_k` bug is fixed, the default settings (25°C
+    ambient, moderate aggression) don't produce visible divergence.
+  - No plain-language summary of what happened after a run — a viewer is
+    left to interpret four raw charts and an event feed with zero
+    framing.
+  - (Found during investigation, not on the user's own list, but the
+    same class of gap): the `initial_temp_k` bug itself, and the DC
+    fast-charge scenario's wrong-direction result — both mean the
+    dashboard currently has NO scenario, not even a hand-picked one,
+    that reliably demonstrates the project's own thermal-architecture
+    thesis correctly.
+- Options considered: none yet — explicitly not scoped. The user's own
+  candidate fixes, listed for the record, not chosen from yet: (a) a
+  side-by-side comparison mode; (b) a "5-year life" preset showing SOH
+  divergence instead of instantaneous temperature (would require wiring
+  the dashboard to Tier-2 `simulate_long_horizon`, which it currently
+  never touches at all); (c) a plain-language "what to notice" panel
+  generated after each run.
+- Blocking: yes — this is the project's primary interactive artifact,
+  and it currently cannot demonstrate its own thesis to a first-time
+  viewer.
+- **Not resolved here — explicitly deferred by the user's own
+  instruction.** "Do not implement a fix yet... I want to see the
+  writeups before we scope the fix, and I want to do one more playtest
+  with someone who isn't me before building anything." This entry
+  records the gap and the candidate options; it does not choose one.
+  Revisit after the second playtest.
+
