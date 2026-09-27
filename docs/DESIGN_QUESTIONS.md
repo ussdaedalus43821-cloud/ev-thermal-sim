@@ -352,14 +352,20 @@ Format:
   anchors, which at least name real vehicles/climates as their basis).
   The 75kWh assumption doesn't paper over a discoverable real number; it
   stands because there was never a real number to recover.
-  **Sensitivity check, run empirically at 50/100/200kWh (not just derived
-  algebraically), for both the flagship comparison (Leaf/Guam vs.
-  Model3/Seattle, 20yr) and the Blue Bird/Columbus 20yr school-bus run**:
-  `cycle_soh_loss_cumulative` scales EXACTLY linearly with the assumed
-  reference capacity for every profile (confirmed: doubling/quadrupling
-  the reference exactly doubles/quadruples cycle loss, to four significant
-  figures) — an unsurprising consequence of `cycle_aging_rate_per_efc`
-  itself being directly proportional to the assumed reference capacity.
+  **`cycle_soh_loss_cumulative` scales exactly linearly with the assumed
+  reference capacity BY CONSTRUCTION, not as an empirical finding**:
+  `cycle_aging_rate_per_efc = 0.18 * reference_kwh / 100,000` is directly
+  proportional to `reference_kwh`, and `cycle_delta = cycle_aging_rate_
+  per_efc * throughput_efc` multiplies straight through with no other
+  term depending on `reference_kwh` — the reference capacity is a literal
+  scale factor on the rate constant, so linearity is a property of the
+  formula, not something that could have come out otherwise. Verified at
+  50/100/200kWh (not to test whether it's linear, which the algebra
+  already guarantees, but to confirm no other code path breaks that
+  property) for both the flagship comparison (Leaf/Guam vs.
+  Model3/Seattle, 20yr) and the Blue Bird/Columbus 20yr school-bus run:
+  doubling/quadrupling the reference exactly doubles/quadruples cycle
+  loss, to four significant figures, as expected.
   **Not purely cosmetic, but not currently story-changing either**: because
   calendar aging dominates every currently-published scenario (Leaf/Guam:
   49.28pp calendar vs. 1.48-5.90pp cycle across the tested range; Blue
@@ -379,8 +385,23 @@ Format:
   row's `caveats` list (`examples/generate_seam_table.py`), joining the
   calendar-extrapolation caveat, since that row is the one place this
   number reaches an external consumer (Transition).
-
-## Q-0008 — Monte Carlo v1 scope: which parameters get sampled?
+- **Second follow-up (2026-09-27): does this sensitivity also apply to the
+  mistake library's three existing entries?** Each `MistakeCase` runs
+  through `simulate_long_horizon` too, so checked directly rather than
+  assumed. Computed each entry's calendar-vs-cycle breakdown of its own
+  `soh_delta` (the failure/counterfactual difference each entry's whole
+  lesson rests on) at both its default 5yr horizon and a 20yr point
+  estimate: Leaf (no active cooling) is calendar-dominated with cycle
+  aging actually working slightly AGAINST the delta (cycle is
+  -5.9% to -6.0% of the delta — small in magnitude either way, since the
+  whole delta itself is tiny here, 0.05-0.22pp); e-tron (shared
+  powertrain loop) is 0.27% cycle at both horizons; i3 (DX compressor
+  failure) is 1.37-1.38% cycle at both horizons. **All three are
+  calendar-dominated, none close to the user's stated 20% threshold — no
+  caveat added to any entry.** Confirmed, not assumed: this only holds
+  because none of the three entries' scenarios involve meaningful
+  fast-charge/high-C-rate exposure; would need re-checking if a future
+  entry's failure mode is itself charge-cycling-related.
 
 - Date: 2026-09-24
 - Context: `MCConfig`/`Confidence` are schema-only; `mc.py` is a stub. Full

@@ -3494,15 +3494,19 @@ whole history to find.
   anchor," unlike the calendar-aging anchors, which at least name real
   vehicles/climates. The 75kWh assumption isn't standing in for a
   discoverable real number; there was never one to recover.
-  **Sensitivity check, run empirically (not just derived) at 50/100/200kWh
-  reference capacities**, for both the flagship comparison (Leaf/Guam vs.
+  **`cycle_soh_loss_cumulative` scales exactly linearly with the assumed
+  reference capacity BY CONSTRUCTION, not as an empirically-discovered
+  property**: the reference capacity is a direct multiplier on
+  `cycle_aging_rate_per_efc`, and nothing else in `cycle_delta`'s formula
+  depends on it, so linearity is guaranteed by the algebra. Verified at
+  50/100/200kWh, for both the flagship comparison (Leaf/Guam vs.
   Model3/Seattle, 20yr point estimate) and the Blue Bird/Columbus 20yr
-  school-bus run: `cycle_soh_loss_cumulative` scales EXACTLY linearly with
-  the assumed reference capacity for every profile (confirmed to four
-  significant figures — e.g. Leaf/Guam cycle loss: 1.4758%/2.2138%/
-  2.9517%/5.9034% at 50/75/100/200kWh, an exact 1:1.5:2:4 ratio). **Real,
-  not cosmetic, for the absolute cycle-aging number — but only a modest
-  effect on the published headline comparisons**, since calendar aging
+  school-bus run, only to confirm no other code path breaks that property
+  (confirmed to four significant figures — e.g. Leaf/Guam cycle loss:
+  1.4758%/2.2138%/2.9517%/5.9034% at 50/75/100/200kWh, an exact 1:1.5:2:4
+  ratio, as expected). **Real, not cosmetic, for the absolute cycle-aging
+  number — but only a modest effect on the published headline
+  comparisons**, since calendar aging
   dominates every currently-published scenario (Leaf/Guam: 49.28pp
   calendar vs. 1.48-5.90pp cycle across the tested range; Model3/Seattle:
   14.65pp vs. 0.08-0.33pp; Blue Bird: 72.52pp vs. 0.81-3.23pp). The
@@ -3522,3 +3526,17 @@ whole history to find.
   documentation-and-verification pass, not a coefficient change; the
   75kWh value itself is unchanged. Full suite unaffected (still 334
   passed); `mypy --strict`, `ruff check` clean.
+  **Extended (2026-09-27) to check the mistake library's three entries
+  too**, since each `MistakeCase` also runs through `simulate_long_
+  horizon`: computed the calendar-vs-cycle breakdown of each entry's own
+  `soh_delta` at 5yr and 20yr. All three are calendar-dominated (Leaf:
+  cycle actually opposes the delta slightly, -5.9% to -6.0% of a tiny
+  0.05-0.22pp delta; e-tron: 0.27% cycle; i3: 1.37-1.38% cycle), none
+  close to a 20%-of-delta threshold — confirmed, no caveat needed on any
+  entry. Also corrected the wording of this entry's own consequence note
+  and the two mirror copies (`aging.py`, the Blue Bird seam-row caveat):
+  the linear scaling is exact BY CONSTRUCTION (the reference capacity is
+  a direct multiplier on `cycle_aging_rate_per_efc`, nothing else in
+  `cycle_delta`'s formula depends on it), not an empirically-discovered
+  property — the 50/100/200kWh runs confirmed no other code path breaks
+  that guarantee, they didn't establish it.

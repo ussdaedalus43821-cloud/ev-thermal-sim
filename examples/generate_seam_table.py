@@ -81,11 +81,13 @@ CAVEATS = [
     "hot enough to meaningfully engage it -- these numbers carry the same radiator-dominated "
     "thermal behavior as a non-chiller-equipped profile would show under this specific climate.",
     "cycle_aging_rate_per_efc's 75kWh reference-pack-capacity assumption (Q-0006/Q-0007) scales "
-    "this profile's own cycle-aging output EXACTLY linearly (confirmed empirically: cycle loss at "
-    "50/100/200kWh is 0.66x/1.33x/2.67x the 75kWh value) -- currently a modest effect on the total "
-    "(cycle is 1.21pp of 73.74pp total loss at 20yr under this profile's own school-route duty "
-    "cycle, calendar-dominated), but would become load-bearing for any future scenario with "
-    "heavier cycling/fast-charge exposure than this one has.",
+    "this profile's own cycle-aging output exactly linearly BY CONSTRUCTION, not as an empirical "
+    "finding (the reference capacity is a direct multiplier on the rate constant) -- verified at "
+    "50/100/200kWh (cycle loss = 0.66x/1.33x/2.67x the 75kWh value) only to confirm no other code "
+    "path breaks that property. Currently a modest effect on the total (cycle is 1.21pp of 73.74pp "
+    "total loss at 20yr under this profile's own school-route duty cycle, calendar-dominated), but "
+    "would become load-bearing for any future scenario with heavier cycling/fast-charge exposure "
+    "than this one has.",
 ]
 
 
