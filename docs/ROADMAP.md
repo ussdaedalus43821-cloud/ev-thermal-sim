@@ -231,11 +231,28 @@ seam" milestone.
   keys `climate_zone` by a descriptive per-location string instead
   (`"columbus_oh"`); Transition-side wiring will need to resolve this
   collision for real, not treat it as solved.
-- **Transition-side wiring is not started**: a `manufacturerProfileKey`-
-  style field on `VehicleClass` pointing at the new Blue Bird profile, and
-  actually consuming the now-real seam table (shape proposed in
-  `docs/seam_reconnaissance.md` §5, first populated above) — the user's
-  own seam-table plan's step 5, its own milestone, not started here.
+- **Done: Transition-side wiring** — `VehicleClass.manufacturerProfileKey?:
+  string` and `Route.batterySohPercent: number | null` exist in
+  `Transition/src/types.ts`, School Bus Depot's one vehicle class points
+  at `"blue_bird_vision_electric"`, and `rollEvents()` decrements each
+  converted route's `batterySohPercent` monthly from the seam table
+  (`Transition/src/seamTable.ts`, generated from `examples/
+  generate_seam_table.py`'s output, not hand-transcribed), displayed on
+  the Overview tab. Scoped, by the user's explicit choice, to **track
+  only — no cash/uptime/DSCR consequence yet**. See `docs/MILESTONES.md`'s
+  "Transition-side wiring" milestone for the full record, including the
+  `Route`↔`VehicleClass` link gap this surfaced (routes don't reference
+  their vehicle class directly; the lookup uses `vehicleClasses[0]`, a v1
+  simplification valid only while every preset has exactly one class) and
+  the still-unresolved `climate_zone` keying collision noted above (this
+  wiring matches on `vehicleClass` only, so the collision wasn't yet
+  forced to a decision). Committed in `Transition` (`0c6c5c2`) but not
+  pushed — flagged for the user, same as the prior `Transition` commit.
+  **Open follow-ups, not built here**: any actual gameplay consequence for
+  `batterySohPercent` (a cost, an event, a DSCR effect); a real per-route
+  `VehicleClass` reference for a genuinely multi-class fleet; resolving
+  the `climate_zone` collision once a route needs to match on it; and a
+  seam-table row for Tank Wash's truck class, which still has none.
 - **Done: `Climate`'s `altitude_m`/`solar_irradiance_w_per_m2` are now on
   Transition's `ClimateZone`** (as `altitudeFt`/`solarIrradianceWPerM2`,
   Fahrenheit/imperial convention matching that file's existing temperature
