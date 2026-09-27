@@ -120,13 +120,17 @@ related code:
   but not realistic in absolute magnitude yet.
 - **Entropic heat is inert** until a real dOCV/dT is sourced for any
   profile — most consequential for fast-charge SOH-loss estimates.
-- **The Transition seam is partially built**: the first commercial-vehicle
-  profile exists (`configs/profiles_commercial/`) and has now been
-  validated the way the six passenger profiles were (real Tier-1
-  characterization + a 90-day Tier-2 trajectory, both physically
-  plausible), but Transition-side wiring doesn't exist yet. See
-  `docs/ROADMAP.md`'s "Transition seam" section and
-  `docs/seam_reconnaissance.md`.
+- **The Transition seam has a first real, end-to-end wired path, track-only.**
+  The Blue Bird Vision Electric profile is validated (real Tier-1
+  characterization + 90-day and 20-year Tier-2 trajectories), a real
+  `SeamTableRow`/`SeamTable` exists (`examples/generate_seam_table.py`),
+  and `Transition/src/engine.ts` now updates each converted route's
+  `batterySohPercent` monthly from that table — but with **no gameplay
+  consequence wired to it yet** (no cash/uptime/DSCR effect), by explicit
+  scope choice. Tank Wash's truck class still has no seam-table row, and
+  `Route` has no direct link to its `VehicleClass` (the wiring assumes one
+  vehicle class per fleet). See `docs/ROADMAP.md`'s "Transition seam"
+  section and `docs/seam_reconnaissance.md`.
 - **Fork branching v2** (Tier-2/long-horizon checkpoint resume) is
   deferred — only full-fidelity per-second forking exists today.
 - **Calendar aging's linear-in-time formulation is a known extrapolation
