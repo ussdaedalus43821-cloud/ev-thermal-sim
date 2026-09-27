@@ -1698,21 +1698,30 @@ code it calls is.
      loop; the heat source itself needs a schema home (see below).
   2. A hand-set offset (Q-0004's already-rejected option 2, reconsidered
      and re-rejected for the same reason).
-- **Open sub-question, not resolved here — needs its own answer before
-  implementation**: where does the heater's own rating live in the
-  schema? `ThermalArchitecture.battery_preconditioning` is currently a
-  bare `bool`. Candidates: (a) richen it into a small structured field
-  (e.g. `BatteryPreconditioningSpec | None`, carrying `heater_power_w:
+- **Where the heater's own rating lives in the schema**: `Thermal
+  Architecture.battery_preconditioning` is currently a bare `bool`.
+  Candidates: (a) richen it into a small structured field (e.g.
+  `BatteryPreconditioningSpec | None`, carrying `heater_power_w:
   Sourced[float]`, `None` meaning "not capable" — replaces the bool
   entirely); (b) keep the bool and add a sibling `Sourced[float] | None`
   power field alongside it; (c) reuse/extend the existing chiller/heat-
   pump machinery (`CoolingLoop.chiller_power_w` or `heat_pump_present`)
   run in reverse for heat-pump-equipped vehicles specifically, with a
   separate dedicated field only for non-heat-pump PTC-heater vehicles.
-  Option (c) is the most physically faithful for vehicles that actually
-  share hardware this way (real for some heat-pump EVs) but adds real
-  branching complexity for a first version. Flagging rather than
-  resolving — this determines a schema shape, not just a value.
+  **Resolution (2026-09-27): option (b), approved.** Keep
+  `battery_preconditioning: bool` as-is (its existing meaning and all six
+  profiles' current values are untouched by this). Add a new sibling
+  field named `preconditioning_heater_power_w: Sourced[float] | None`
+  (not `battery_heater_w` — the user's own naming correction: the
+  mechanism is preconditioning-specific, and the field name shouldn't
+  imply a general-purpose pack heater exists that this project doesn't
+  otherwise model). `None` when `battery_preconditioning` is `False`,
+  matching the existing `chiller_capacity_w`-style "absent means not
+  modeled" convention already used elsewhere in this schema. Option (c)
+  rejected for this first version as the branching complexity the entry
+  itself already flagged — revisit only if a specific heat-pump-equipped
+  profile's real preconditioning mechanism is found to genuinely share
+  hardware this way.
 - Real-world figures found (not invented; per this project's "research or
   ask" rule), for whichever option above the resolution picks:
   - **Heater power**: 1.5-3 kW is a real, sourced range for passenger-EV
@@ -1732,6 +1741,16 @@ code it calls is.
     Niro (and now needing i3's `battery_preconditioning: true` itself
     re-examined — see Q-0027).
 - Blocking: yes
+- **Resolution (2026-09-27): approved in full.** Architecture option 2
+  (session-characterization variant), gating-signal option 1 (reuse the
+  two existing fields, no new gate field), heating-phase option 1 (a
+  real, physically-stepped pre-session phase), and the heater-rating
+  schema sub-question's option (b) — all as detailed above. Real
+  parameters (1.5-3kW heater power, 20-25°C target, ~20-30min duration)
+  to be sourced/placeholder-tagged per profile at implementation time,
+  same `Sourced[T]`/`confidence`/`source` discipline as everywhere else
+  in this schema. Whether i3 receives this mechanism at all is gated by
+  Q-0027, not decided here.
 
 ## Q-0027 — `ThermalArchitecture.battery_preconditioning`: the BMW i3's real citation doesn't actually support what this field claims to mean
 
@@ -1791,4 +1810,22 @@ code it calls is.
 - Blocking: yes (affects which profiles receive Q-0026's mechanism, and
   is a real, evidence-based inaccuracy independent of whether Q-0026
   itself proceeds).
+- **Resolution (2026-09-27): option 3.** Set the BMW i3's
+  `battery_preconditioning` to `false` — the field's own documented
+  meaning is fast-charge-specific, and the only citation backing the
+  current `true` is about a different, real capability (cold-weather
+  pre-departure wallbox warming). This is a correction (removing an
+  unsupported claim), not a new invented figure, and is trivially
+  reversible if a real fast-charge-specific i3 citation surfaces later.
+  The i3's real cold-departure preconditioning capability stays
+  unmodeled and uncited in the schema — flagged in the YAML's own field
+  note as a known, separate gap, not conflated with this field or
+  silently dropped. Decided without a second review round: this is a
+  data-correctness fix (removing an overclaim, not establishing a
+  citable number), reversible, and doesn't change any field's meaning —
+  doesn't meet this project's own escalation bar the way Q-0026's
+  architecture decisions did. Consequence for Q-0026: the i3 does NOT
+  receive the new preconditioning mechanism at implementation time;
+  only profiles with a real, correctly-scoped `battery_preconditioning:
+  true` do (Kia Niro EV, today).
 
