@@ -3033,3 +3033,76 @@ whole history to find.
   **What's still open**: Milestone D (BMW i3's DX-refrigerant schema
   abstraction) is now unblocked per the user's own sequencing — its own
   future milestone, not started here.
+- **Milestone D — BMW i3 DX-refrigerant loop abstraction (done, 2026-09-26,
+  `docs/DESIGN_QUESTIONS.md` Q-0024):** plan-reviewed before implementation
+  (per the standing schema/architecture plan-review expectation), then
+  built and validated in this session. The i3's real battery cooling
+  (direct-expansion R134a refrigerant) is no longer approximated via an
+  unrealistically tight `resistance_to_ambient_k_per_w` — it's a real,
+  controllable, below-ambient-capable mechanism.
+  **New**: `RefrigerantLoop` schema type (`src/ev_thermal/refrigerant.py`
+  physics module, `controller.py`'s `commanded_refrigerant_duty`, wired
+  into both `sim.py` per-second call sites and `long_horizon.py`'s Tier-2
+  parked-period model) — structurally parallel to `CoolingLoop` but with no
+  glycol/radiator/pump/fan fields, since a DX loop has no separate coolant
+  thermal mass and applies its heat removal as a direct sink on its served
+  component(s) instead of a coolant-node edge.
+  **Sourced, not invented**: `capacity_w`/`power_w` (3500W/1140W) come from
+  a real, paired datasheet for a comparable automotive HV electric scroll
+  compressor using the same refrigerant (Guchen GC20A320) — same "real
+  comparable product, not the exact OEM part" methodology Blue Bird's
+  `chiller_capacity_w` already established (Q-0021).
+  **A real correctness bug found and fixed mid-implementation, not
+  glossed over**: the first version applied `capacity_w * duty` as an
+  UNBOUNDED direct sink, which — checked by actually running the real i3
+  profile, not assumed safe by analogy to the chiller — let a single
+  ~20-minute characterized trip cool the pack ~14-20K, compounding across
+  `simulate_long_horizon`'s day-to-day carryover into a full year settling
+  at an implausible -4°C to -19°C (activation_temp_k is 20°C). Root cause:
+  no resistance rate-limited the transfer, unlike every other cooling path
+  in this codebase. Fixed by reusing `ThermalNode.resistance_to_coolant_
+  k_per_w` (already present on every component, already noted "unused"
+  on the i3's battery pending exactly this) as a genuine cap:
+  `heat_removed_w = min(capacity_share_w * duty, (component_temp_k -
+  activation_temp_k) / resistance_to_coolant_k_per_w)`. This also required
+  rebuilding `relax_parked_temp_k`'s Tier-2 refrigerant branch from a
+  (wrong) "borrow the ambient path's own weak conductance" target-shift
+  trick into a genuine two-conductance weighted-average target — the
+  ambient path's weakness had nothing to do with how fast a refrigerant
+  loop can actually move heat, so reusing it as the mechanism's rate limit
+  was the real bug, not a step-size problem. See Q-0024 for the full
+  before/after reasoning and both options considered.
+  **Verified end-to-end after the fix, real numbers, not assumed
+  plausible**: a 1-hour Tier-1 run at 45°C ambient holds the pack near
+  25°C (barely moves — the resistance-capped transfer rate at that
+  differential is tiny, exactly the "resistance is the binding constraint"
+  finding); a 1-year Tier-2 run under Guam settles 22.8-25.0°C (final
+  SOH 98.50%) and under Seattle 5.0-21.7°C (final SOH 99.23%) — both
+  physically plausible ranges tracking their climates, both directions
+  correct (hotter climate ages faster). Confirmed the resistance term
+  dominates in practice (a 20K differential over the real ~0.3 K/W
+  resistance implies ~67W, far below the 3500W nominal capacity) — the
+  capacity cap is a real but rarely-binding backstop, not chased into a
+  fully rigorous two-regime Tier-2 treatment (a documented simplification).
+  **A second, smaller finding, flagged not silently fixed**: the i3
+  battery's own `resistance_to_coolant_k_per_w` (0.3 K/W, set before this
+  field was ever read by anything) is noticeably weaker than the same
+  field's value on other actively-cooled profiles (~0.015-0.05) — now that
+  it's genuinely load-bearing, its magnitude deserves real scrutiny, not
+  performed here (see `docs/ROADMAP.md`).
+  New tests: `tests/test_refrigerant.py` (NEW, 7 tests covering the
+  resistance/capacity cap interplay), plus `RefrigerantLoop` round-trip
+  (`test_schema.py`), `commanded_refrigerant_duty` ramp shape
+  (`test_controller.py`), an i3-topology end-to-end Tier-1 test
+  (`test_sim.py`), and 6 Tier-2 `relax_parked_temp_k`/SOC-decrement tests
+  (`test_long_horizon.py`). Full suite (314 tests, up from 295; 311 fast +
+  3 slow), `mypy --strict`, `ruff` all pass.
+  **What's still open, deliberately not attempted here** (matching the
+  chiller's own 4-milestone arc — implementation first, validation as
+  explicit follow-ups): multi-climate/duty-cycle validation beyond the two
+  climates checked above; re-examining `resistance_to_coolant_k_per_w`'s
+  magnitude against other profiles' convention; and the actual decision on
+  whether i3-vs-Leaf battery comparisons are now publication-safe — the
+  `CLAUDE.md`/`model_reference.md` caveat stays in place, reworded to say
+  why (not yet re-validated under the real mechanism across climates), not
+  lifted.

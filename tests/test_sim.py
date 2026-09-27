@@ -49,6 +49,7 @@ from tests.test_controller import _make_vehicle_dynamics
 from tests.test_cooling import _make_chiller_loop, _make_cooling_loop
 from tests.test_inverter import _make_inverter_spec
 from tests.test_motor import _make_motor_spec
+from tests.test_refrigerant import _make_refrigerant_loop
 
 
 def _sourced(value: float) -> Sourced[float]:
@@ -228,6 +229,44 @@ def test_chiller_engages_and_cools_below_ambient_in_full_fidelity_run() -> None:
 
     coolant_node = coolant_node_name(chiller_loop.name)
     assert min(result.time_series.node_temps_k[coolant_node]) < hot_ambient_k
+
+
+def test_refrigerant_loop_engages_and_cools_below_ambient_in_full_fidelity_run() -> None:
+    """End-to-end (Milestone D): a battery served only by a RefrigerantLoop
+    (no CoolingLoop at all, matching the BMW i3's real topology), held parked
+    at a hot ambient, must show the loop actually engaging
+    (commanded_refrigerant_duty > 0, refrigerant_heat_removed_w > 0) and
+    pulling the BATTERY node itself below ambient -- there's no separate
+    coolant node for a DX loop (see refrigerant.py's module docstring), so
+    this checks the served component's own temperature directly, unlike the
+    chiller test above which checks its loop's coolant node.
+    """
+    profile = _make_profile()
+    refrigerant_loop = _make_refrigerant_loop()
+    # Matches the real BMW i3's own topology: a CoolingLoop still exists for
+    # motor+inverter, just not the battery (which is refrigerant-only) --
+    # not an empty cooling_loops list, which no real profile ever has and
+    # which _choose_target_dt_s's coolant-near-ambient check isn't written
+    # to tolerate (a separate, pre-existing gap, not in this milestone's scope).
+    motor_inverter_loop = _make_cooling_loop().model_copy(update={"serves": ["motor", "inverter"]})
+    profile = profile.model_copy(
+        update={
+            "thermal_architecture": profile.thermal_architecture.model_copy(
+                update={"cooling_loops": [motor_inverter_loop], "refrigerant_loops": [refrigerant_loop]}
+            )
+        }
+    )
+    hot_ambient_k = refrigerant_loop.full_duty_temp_k.value + 30.0
+    scenario = _make_scenario(profile, ambient_temp_k=hot_ambient_k)
+    result = run_scenario(profile, scenario, duration_s=1800.0, target_speed_mps=lambda _t: 0.0)
+
+    refrigerant_duties = [step[refrigerant_loop.name] for step in result.time_series.refrigerant_duty]
+    assert max(refrigerant_duties) > 0.0
+    assert max(result.time_series.refrigerant_heat_removed_w) > 0.0
+    assert result.energy_totals.refrigerant_rejected_j > 0.0
+    assert result.energy_totals.cooling_parasitic_j > 0.0
+
+    assert min(result.time_series.node_temps_k["battery_pack"]) < hot_ambient_k
 
 
 def test_determinism_same_seed_gives_same_final_state_and_events() -> None:

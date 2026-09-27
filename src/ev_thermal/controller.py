@@ -49,6 +49,15 @@ floors): a real refrigerant compressor genuinely idles at zero, it doesn't
 need to keep spinning below its engagement point. Always `0.0` for a loop
 with `chiller_present=False`.
 
+`commanded_refrigerant_duty` (Milestone D) is a `RefrigerantLoop`'s own duty,
+computed the same `_duty_ramp` shape as pump/fan/chiller but against that
+loop's own `activation_temp_k`/`full_duty_temp_k` (its two real setpoints
+define the ramp span directly, unlike pump/fan/chiller which share
+`DUTY_RAMP_SPAN_K`/`pump_aggressiveness`) and against `component_temps_k`
+(there's no coolant node for a DX loop to have its own temperature). `min_duty=0.0`,
+same reasoning as the chiller. Empty (`{}`) when `refrigerant_loops` is
+`None`/empty, e.g. every profile except the BMW i3.
+
 `coolant_temps_k` and the `serves`-matching below are keyed by `CoolingLoop.
 name`/`ThermalNode.name`, never by sim.py's internal `coolant_{loop_name}`
 node-naming convention — this module's interface is loop-level, staying
@@ -83,6 +92,7 @@ from ev_thermal.schema import (
     CoolingLoop,
     InverterSpec,
     MotorSpec,
+    RefrigerantLoop,
     VehicleDynamics,
 )
 from ev_thermal.vehicle import STANDARD_GRAVITY_M_PER_S2, motor_torque_request_nm
@@ -126,6 +136,7 @@ def step_controller(
     speed_rad_per_s: float,
     coolant_temps_k: dict[str, float],
     sim_time_s: float,
+    refrigerant_loops: list[RefrigerantLoop] | None = None,
     pump_aggressiveness: float = 1.0,
 ) -> ControllerStepResult:
     """Arbitrate the driver's torque request against every component's limit
@@ -254,11 +265,25 @@ def step_controller(
             else 0.0
         )
 
+    commanded_refrigerant_duty: dict[str, float] = {}
+    for refrigerant_loop in refrigerant_loops or []:
+        served_temps_k = [
+            component_temps_k[name] for name in refrigerant_loop.serves if name in component_temps_k
+        ]
+        max_served_temp_k = max(served_temps_k)  # serves is guaranteed non-empty (load-time check)
+        commanded_refrigerant_duty[refrigerant_loop.name] = _duty_ramp(
+            max_served_temp_k,
+            refrigerant_loop.activation_temp_k.value,
+            refrigerant_loop.full_duty_temp_k.value - refrigerant_loop.activation_temp_k.value,
+            0.0,  # idles at zero duty, like the chiller -- a real compressor doesn't need to keep spinning
+        )
+
     return ControllerStepResult(
         commanded_torque_nm=commanded_torque_nm,
         commanded_pump_duty=commanded_pump_duty,
         commanded_fan_duty=commanded_fan_duty,
         commanded_chiller_duty=commanded_chiller_duty,
+        commanded_refrigerant_duty=commanded_refrigerant_duty,
         battery_current_demand_a=battery_current_demand_a,
         causal_events=causal_events,
     )

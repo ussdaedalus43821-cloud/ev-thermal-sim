@@ -106,13 +106,25 @@ research only confirms a heat pump exists as an optional upgrade, not what
 the base trim uses instead), and the usual placeholder equivalent-circuit/
 inverter/hydraulics fields.
 
-**Caution — battery ambient-resistance value is an approximation, not a
-measurement:** `resistance_to_ambient_k_per_w` on the i3's battery
-(`configs/profiles/bmw_i3.yaml`) stands in for a refrigerant cooling loop
-that the schema does not yet support. It is NOT physically the ambient
-resistance. Real i3 battery thermal behavior requires Milestone D
-(refrigerant loop abstraction — see docs/MILESTONES.md). Do not use i3-vs-Leaf
-battery comparisons for publication until Milestone D lands.
+**Milestone D (done) — the battery's DX refrigerant cooling is now a real
+`RefrigerantLoop`**, not approximated via `resistance_to_ambient_k_per_w`
+(that field is now just a weak secondary path, same convention as other
+profiles' nodes). See `docs/DESIGN_QUESTIONS.md` Q-0024 and
+`docs/MILESTONES.md`'s corresponding milestone for the full record,
+including a resistance-cap correctness bug found and fixed mid-
+implementation (an unbounded direct heat sink implausibly overcooled the
+pack; fixed by reusing `ThermalNode.resistance_to_coolant_k_per_w` as a
+genuine rate limit — the same field, previously noted "unused" on this
+profile, now the mechanism's binding constraint in practice).
+
+**Caution, still open:** validated under two climates (Guam, Seattle) so
+far, not yet the broader multi-climate/duty-cycle pass the six passenger
+profiles' other mechanisms have had — do not use i3-vs-Leaf battery
+comparisons for publication until that follow-up validation lands. Also
+flagged: the battery's `resistance_to_coolant_k_per_w` (0.3 K/W) is
+noticeably weaker than other actively-cooled profiles' placeholder values
+for the same field (~0.015-0.05) and predates this field becoming
+load-bearing — not re-derived, a real follow-up (see `docs/ROADMAP.md`).
 
 ### Kia Niro EV (64 kWh, heat-pump trim, 2018+)
 

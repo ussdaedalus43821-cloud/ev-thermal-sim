@@ -15,6 +15,7 @@ from tests.test_battery import _make_battery_spec
 from tests.test_cooling import _make_chiller_loop, _make_cooling_loop
 from tests.test_inverter import _make_inverter_spec
 from tests.test_motor import _make_motor_spec
+from tests.test_refrigerant import _make_refrigerant_loop
 
 _NOMINAL_TEMP_K = 298.15
 _BATTERY_VOLTAGE_V = 350.0
@@ -224,3 +225,58 @@ def test_chiller_duty_ramps_up_above_thermostat_full_open() -> None:
     assert 0.0 < mild.commanded_chiller_duty[chiller_loop.name] < 1.0
     assert hot.commanded_chiller_duty[chiller_loop.name] == 1.0
     assert hot.commanded_chiller_duty[chiller_loop.name] > mild.commanded_chiller_duty[chiller_loop.name]
+
+
+# --- Milestone D: commanded_refrigerant_duty ---
+
+
+def _step_with_refrigerant_loop(battery_cell_temp_k: float) -> ControllerStepResult:
+    refrigerant_loop = _make_refrigerant_loop()
+    return step_controller(
+        100.0,
+        _make_motor_spec(),
+        _make_inverter_spec(),
+        _make_battery_spec(),
+        _make_vehicle_dynamics(),
+        [],
+        _NOMINAL_TEMP_K,
+        _NOMINAL_TEMP_K,
+        0.5,
+        battery_cell_temp_k,
+        0.0,
+        _BATTERY_VOLTAGE_V,
+        100.0,
+        {},
+        sim_time_s=0.0,
+        refrigerant_loops=[refrigerant_loop],
+    )
+
+
+def test_refrigerant_duty_is_empty_when_no_refrigerant_loops() -> None:
+    result = _step(battery_cell_temp_k=340.0)  # far above any reasonable threshold
+
+    assert result.commanded_refrigerant_duty == {}
+
+
+def test_refrigerant_duty_is_zero_at_or_below_activation_temp() -> None:
+    refrigerant_loop = _make_refrigerant_loop()
+    result = _step_with_refrigerant_loop(battery_cell_temp_k=refrigerant_loop.activation_temp_k.value)
+
+    assert result.commanded_refrigerant_duty[refrigerant_loop.name] == 0.0
+
+
+def test_refrigerant_duty_ramps_up_between_activation_and_full_duty() -> None:
+    refrigerant_loop = _make_refrigerant_loop()
+    activation_k = refrigerant_loop.activation_temp_k.value
+    full_duty_k = refrigerant_loop.full_duty_temp_k.value
+    midpoint_k = (activation_k + full_duty_k) / 2.0
+
+    below = _step_with_refrigerant_loop(battery_cell_temp_k=activation_k)
+    mid = _step_with_refrigerant_loop(battery_cell_temp_k=midpoint_k)
+    at_full = _step_with_refrigerant_loop(battery_cell_temp_k=full_duty_k)
+    above = _step_with_refrigerant_loop(battery_cell_temp_k=full_duty_k + 20.0)
+
+    assert below.commanded_refrigerant_duty[refrigerant_loop.name] == 0.0
+    assert 0.0 < mid.commanded_refrigerant_duty[refrigerant_loop.name] < 1.0
+    assert at_full.commanded_refrigerant_duty[refrigerant_loop.name] == 1.0
+    assert above.commanded_refrigerant_duty[refrigerant_loop.name] == 1.0

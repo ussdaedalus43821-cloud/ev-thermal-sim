@@ -28,6 +28,7 @@ from ev_thermal.long_horizon import (
     _parked_soc_trajectory,
     _phase_aging,
     _pump_soc_decrement,
+    _refrigerant_soc_decrement,
     _soak_patched_temps_k,
     _speed_from_waypoints,
     ambient_bucket_temps_k,
@@ -562,6 +563,161 @@ def test_relax_parked_temp_k_chiller_requires_coolant_path() -> None:
         start_t_s=0.0, duration_s=3600.0, step_s=3600.0,
     )
     assert no_coolant_path == ambient_only
+
+
+def test_relax_parked_temp_k_refrigerant_absent_converges_to_ambient_not_below() -> None:
+    samples = relax_parked_temp_k(
+        start_temp_k=330.0,
+        tau_s=1000.0,
+        ambient_fn=lambda _t: 313.15,
+        start_t_s=0.0,
+        duration_s=3600.0 * 50,
+        step_s=3600.0,
+        capacitance_j_per_k=400_000.0,
+    )
+    assert samples[-1][1] == pytest.approx(313.15, abs=0.01)
+
+
+def test_relax_parked_temp_k_refrigerant_present_settles_near_activation_not_ambient() -> None:
+    """Milestone D: with a REAL, comparatively strong resistance_to_coolant_
+    k_per_w conductance (not the ambient path's own deliberately weak one --
+    see this function's own Milestone D docstring section on why an earlier
+    version borrowed the wrong conductance), the pack settles close to
+    activation_temp_k, not partway toward ambient. tau_s=414_000s here
+    matches the BMW i3's own real residual-ambient-leak magnitude
+    (resistance_to_ambient_k_per_w=2.0 * capacitance_j_per_k=207_000, scaled
+    to this test's own capacitance), so refrigerant_resistance_k_per_w=0.05
+    genuinely dominates it, same ratio Milestone D's real profile relies on.
+    """
+    samples = relax_parked_temp_k(
+        start_temp_k=330.0,
+        tau_s=414_000.0,
+        ambient_fn=lambda _t: 313.15,
+        start_t_s=0.0,
+        duration_s=3600.0 * 200,
+        step_s=3600.0,
+        capacitance_j_per_k=400_000.0,
+        refrigerant_present=True,
+        refrigerant_resistance_k_per_w=0.05,
+        refrigerant_activation_temp_k=293.15,
+        refrigerant_full_duty_temp_k=303.15,
+    )
+    final_temp_k = samples[-1][1]
+    assert 293.15 <= final_temp_k < 300.0  # near activation_temp_k, well short of ambient(313.15)
+
+
+def test_relax_parked_temp_k_refrigerant_hand_computed_single_step_at_full_duty() -> None:
+    """One step, start_temp_k chosen >= full_duty_temp_k so duty is
+    unambiguously 1.0 -- checked against the exact closed form (a weighted
+    target between ambient, via the ambient path's conductance, and
+    activation_temp_k, via the refrigerant path's conductance), same
+    approach as the chiller's own hand-computed single-step test.
+    """
+    capacitance_j_per_k = 400_000.0
+    tau_s = 1000.0
+    refrigerant_resistance_k_per_w = 0.05
+    activation_temp_k = 293.15
+    ambient_k = 313.15
+    start_temp_k = 310.0  # >= full_duty_temp_k(303.15)
+
+    ambient_conductance_w_per_k = capacitance_j_per_k / tau_s
+    refrigerant_conductance_w_per_k = 1.0 / refrigerant_resistance_k_per_w  # duty=1.0
+    total_conductance_w_per_k = ambient_conductance_w_per_k + refrigerant_conductance_w_per_k
+    expected_target_k = (
+        ambient_conductance_w_per_k * ambient_k + refrigerant_conductance_w_per_k * activation_temp_k
+    ) / total_conductance_w_per_k
+    expected_tau_s = capacitance_j_per_k / total_conductance_w_per_k
+    expected = expected_target_k + (start_temp_k - expected_target_k) * math.exp(-3600.0 / expected_tau_s)
+
+    samples = relax_parked_temp_k(
+        start_temp_k=start_temp_k,
+        tau_s=tau_s,
+        ambient_fn=lambda _t: ambient_k,
+        start_t_s=0.0,
+        duration_s=3600.0,
+        step_s=3600.0,
+        capacitance_j_per_k=capacitance_j_per_k,
+        refrigerant_present=True,
+        refrigerant_resistance_k_per_w=refrigerant_resistance_k_per_w,
+        refrigerant_activation_temp_k=activation_temp_k,
+        refrigerant_full_duty_temp_k=303.15,
+    )
+    assert samples[1][1] == pytest.approx(expected)
+
+
+def test_relax_parked_temp_k_refrigerant_requires_capacitance() -> None:
+    """refrigerant_present/refrigerant_resistance_k_per_w are ignored
+    without capacitance_j_per_k (needed to derive the ambient path's own G) --
+    same "missing prerequisite means no-op" gating the chiller's coolant-path
+    requirement uses.
+    """
+    no_capacitance = relax_parked_temp_k(
+        start_temp_k=330.0, tau_s=1000.0, ambient_fn=lambda _t: 290.0,
+        start_t_s=0.0, duration_s=3600.0, step_s=3600.0,
+        refrigerant_present=True, refrigerant_resistance_k_per_w=0.05,
+        refrigerant_activation_temp_k=293.15, refrigerant_full_duty_temp_k=303.15,
+    )
+    ambient_only = relax_parked_temp_k(
+        start_temp_k=330.0, tau_s=1000.0, ambient_fn=lambda _t: 290.0,
+        start_t_s=0.0, duration_s=3600.0, step_s=3600.0,
+    )
+    assert no_capacitance == ambient_only
+
+
+def test_relax_parked_temp_k_refrigerant_ignored_when_coolant_path_also_active() -> None:
+    """A profile is never expected to have both a CoolingLoop-based chiller
+    AND a RefrigerantLoop serving the same battery -- refrigerant_active is
+    gated on `not coolant_path_active`, so passing both sets of arguments
+    together falls back to the coolant path's own (chiller-absent) behavior,
+    not some undefined combination of both mechanisms.
+    """
+    with_refrigerant_args_too = relax_parked_temp_k(
+        start_temp_k=330.0,
+        tau_s=None,
+        ambient_fn=lambda _t: 313.15,
+        start_t_s=0.0,
+        duration_s=3600.0,
+        step_s=3600.0,
+        capacitance_j_per_k=400_000.0,
+        coolant_resistance_k_per_w=0.05,
+        thermostat_temp_k=308.15,
+        thermostat_full_open_temp_k=313.15,
+        refrigerant_present=True,
+        refrigerant_resistance_k_per_w=0.05,
+        refrigerant_activation_temp_k=293.15,
+        refrigerant_full_duty_temp_k=303.15,
+    )
+    coolant_path_only = relax_parked_temp_k(
+        start_temp_k=330.0,
+        tau_s=None,
+        ambient_fn=lambda _t: 313.15,
+        start_t_s=0.0,
+        duration_s=3600.0,
+        step_s=3600.0,
+        capacitance_j_per_k=400_000.0,
+        coolant_resistance_k_per_w=0.05,
+        thermostat_temp_k=308.15,
+        thermostat_full_open_temp_k=313.15,
+    )
+    assert with_refrigerant_args_too == coolant_path_only
+
+
+def test_refrigerant_soc_decrement_only_counts_intervals_after_charge_event() -> None:
+    """Mirrors test_pump_soc_decrement_only_counts_intervals_after_charge_
+    event's own reset-step convention exactly (Milestone D)."""
+    temp_samples = [(0.0, 310.0), (3600.0, 310.0), (7200.0, 310.0), (10800.0, 310.0)]
+    charge_event_s = 5000.0  # falls inside the [3600, 7200) interval
+
+    decrement = _refrigerant_soc_decrement(
+        temp_samples,
+        charge_event_s,
+        activation_temp_k=293.15,
+        full_duty_temp_k=303.15,
+        refrigerant_decay_per_hour_at_full_duty=0.05,
+    )
+    # Only the [7200, 10800) interval starts at/after charge_event_s -- one
+    # hour at full duty (310K > full_duty_temp_k) and the given decay rate.
+    assert decrement == pytest.approx(0.05)
 
 
 def test_pump_soc_decrement_only_counts_intervals_after_charge_event() -> None:

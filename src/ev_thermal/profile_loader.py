@@ -22,11 +22,11 @@ def load_profile(path: str | Path) -> ManufacturerProfile:
 
     Raises `FileNotFoundError` if `path` doesn't exist, `ValueError` if the
     file isn't valid YAML, doesn't parse to a mapping (e.g. an empty or
-    comment-only stub), or has a `CoolingLoop` with an empty `serves` list
-    (a data error — no loop can serve nothing; see below), and
-    `pydantic.ValidationError` (propagated unmodified — it already reports
-    a clear per-field path and reason) if the mapping doesn't satisfy
-    `ManufacturerProfile`.
+    comment-only stub), or has a `CoolingLoop`/`RefrigerantLoop` with an
+    empty `serves` list (a data error — no loop can serve nothing; see
+    below), and `pydantic.ValidationError` (propagated unmodified — it
+    already reports a clear per-field path and reason) if the mapping
+    doesn't satisfy `ManufacturerProfile`.
     """
     path = Path(path)
     text = path.read_text()
@@ -50,6 +50,12 @@ def load_profile(path: str | Path) -> ManufacturerProfile:
         if not loop.serves:
             raise ValueError(
                 f"{path}: CoolingLoop {loop.name!r} has an empty serves list — "
+                "a loop must serve at least one component"
+            )
+    for refrigerant_loop in profile.thermal_architecture.refrigerant_loops:
+        if not refrigerant_loop.serves:
+            raise ValueError(
+                f"{path}: RefrigerantLoop {refrigerant_loop.name!r} has an empty serves list — "
                 "a loop must serve at least one component"
             )
 

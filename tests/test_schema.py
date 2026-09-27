@@ -33,6 +33,7 @@ from ev_thermal.schema import (
     MCConfig,
     MistakeCase,
     MotorSpec,
+    RefrigerantLoop,
     Scenario,
     SeamTable,
     SeamTableRow,
@@ -180,6 +181,18 @@ def make_cooling_loop() -> CoolingLoop:
         thermostat_full_open_temp_k=sourced(313.15),
         radiator_frontal_area_m2=sourced(0.25),
         fan_max_air_velocity_mps=sourced(6.0),
+    )
+
+
+def make_refrigerant_loop() -> RefrigerantLoop:
+    return RefrigerantLoop(
+        name="battery_refrigerant_loop",
+        refrigerant_type="R134a",
+        capacity_w=sourced(3500.0),
+        power_w=sourced(1140.0),
+        activation_temp_k=sourced(293.15),
+        full_duty_temp_k=sourced(303.15),
+        serves=["battery_pack"],
     )
 
 
@@ -462,6 +475,30 @@ def test_thermal_architecture_round_trip_with_heat_pump_type_and_waste_heat_reco
     assert restored.heat_pump_type.value is HeatPumpType.INTEGRATED_MULTI_MODE
     assert restored.heat_pump_recovers_powertrain_waste_heat is not None
     assert restored.heat_pump_recovers_powertrain_waste_heat.value is True
+
+
+def test_thermal_architecture_defaults_to_no_refrigerant_loops() -> None:
+    """Every profile except the BMW i3 doesn't set refrigerant_loops at all
+    (Milestone D) -- the empty default_factory=list must round-trip cleanly.
+    """
+    architecture = make_thermal_architecture()
+    assert architecture.refrigerant_loops == []
+    restored = ThermalArchitecture.model_validate_json(architecture.model_dump_json())
+    assert restored.refrigerant_loops == []
+
+
+def test_refrigerant_loop_round_trip() -> None:
+    architecture = make_thermal_architecture().model_copy(
+        update={"refrigerant_loops": [make_refrigerant_loop()]}
+    )
+    restored = ThermalArchitecture.model_validate_json(architecture.model_dump_json())
+    assert restored == architecture
+    assert len(restored.refrigerant_loops) == 1
+    restored_loop = restored.refrigerant_loops[0]
+    assert restored_loop.refrigerant_type == "R134a"
+    assert restored_loop.capacity_w.value == 3500.0
+    assert restored_loop.power_w.value == 1140.0
+    assert restored_loop.serves == ["battery_pack"]
 
 
 # --- ManufacturerProfile (deep nesting) ---

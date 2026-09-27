@@ -13,13 +13,17 @@
 # (charge 0-60C, discharge -25-60C) that a single min_operating_temp_k
 # field can't represent.
 #
-# CAUTION -- battery.thermal_node.resistance_to_ambient_k_per_w below is an
-# APPROXIMATION, not physically the ambient resistance: the i3's real DX
-# (direct expansion) refrigerant cooling is an active loop to a colder-than-
-# air sink, and this schema doesn't yet support a refrigerant-loop
-# abstraction (see docs/MILESTONES.md's Milestone D). See that field's own note for
-# the full caveat and docs/model_reference.md's BMW i3 section. Do not use
-# i3-vs-Leaf battery comparisons for publication until Milestone D lands.
+# Milestone D (done): the battery's real DX (direct expansion) refrigerant
+# cooling is now a real thermal_architecture.refrigerant_loops entry
+# (RefrigerantLoop), not approximated via battery.thermal_node.
+# resistance_to_ambient_k_per_w the way it was before -- that field is now
+# just a weak secondary path, same convention as other profiles' nodes. See
+# docs/DESIGN_QUESTIONS.md's Milestone D entry and docs/model_reference.md's
+# BMW i3 section. CAUTION, still open: this hasn't yet been re-validated
+# under multiple climates/duty cycles the way the six passenger profiles'
+# other mechanisms have (see docs/ROADMAP.md's "Thermal / cooling physics"
+# section) -- do not use i3-vs-Leaf battery comparisons for publication
+# until that follow-up validation lands.
 #
 # model_year_range: research states an open-ended "2013+"; no end year is
 # given, so this uses [2013, 2013] rather than inventing one.
@@ -114,7 +118,7 @@ battery:
       value: 0.3
       confidence: low
       source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
-      note: "no conventional coolant loop connects to this node — the i3 uses direct-expansion refrigerant, not a glycol loop; this value is unused since no CoolingLoop below lists 'battery' in serves. See cooling_mechanism."
+      note: "Milestone D: no conventional coolant LOOP connects to this node (the i3 uses direct-expansion refrigerant, not glycol -- see cooling_mechanism), but this field is now genuinely used: it's the resistance from the battery to its own RefrigerantLoop (thermal_architecture.refrigerant_loops, below), the same role this field plays for a CoolingLoop-served component elsewhere. This value predates Milestone D (set when the field really was unused) and is noticeably weaker (higher K/W) than other profiles' battery resistance_to_coolant_k_per_w placeholders (~0.015-0.05) -- not re-derived when the field became load-bearing; flagged in docs/DESIGN_QUESTIONS.md's Milestone D entry as a real follow-up, not silently accepted as correct."
     initial_temp_k: 298.15
     max_temp_k:
       value: 333.15
@@ -127,10 +131,10 @@ battery:
       source: "default, not manufacturer-specific (docs/research/profiles_v1.md's derating-curve caveat)"
       note: "45C default — research gives the hard operating-range ceiling (60C) but no separate derate-onset threshold below it"
     resistance_to_ambient_k_per_w:
-      value: 0.02
+      value: 2.0
       confidence: low
-      source: "approximation — DX refrigerant cooling to colder-than-air sink, not modeled as a proper loop"
-      note: "This value stands in for a refrigerant cooling loop that the schema does not yet support. It is NOT physically the ambient resistance. Real i3 battery thermal behavior requires Milestone D (refrigerant loop abstraction). Do not use i3-vs-Leaf battery comparisons for publication until Milestone D lands."
+      source: "placeholder — estimated from physical plausibility, not sourced"
+      note: "Milestone D: the battery's real DX refrigerant cooling is now its own RefrigerantLoop (thermal_architecture.refrigerant_loops, below), not approximated here — this field is now just a weak secondary path alongside that dominant active refrigerant path, same 'not fully adiabatic' convention already used on e.g. the Audi e-tron's battery/motor nodes, magnitude not chased."
   capacity_nominal_ah:
     value: 61.8
     confidence: high
@@ -461,11 +465,40 @@ thermal_architecture:
         value: 6.0
         confidence: low
         source: "placeholder — outside docs/research/profiles_v1.md's scope, not vehicle-specific"
+  refrigerant_loops:
+    # Milestone D: the battery's real direct-expansion (DX) refrigerant
+    # cooling, previously approximated as an unrealistically tight
+    # resistance_to_ambient_k_per_w on the battery node (see that field's
+    # own note below). capacity_w/power_w are real, paired datasheet figures
+    # for a comparable automotive HV electric scroll A/C compressor using
+    # the same refrigerant (R134a) — not the i3's actual OEM part, same
+    # "real comparable product, not the exact vehicle" sourcing methodology
+    # already used for Blue Bird's chiller_capacity_w — see
+    # docs/DESIGN_QUESTIONS.md's Milestone D entry.
+    - name: "battery_refrigerant_loop"
+      refrigerant_type: "R134a"
+      capacity_w:
+        value: 3500.0
+        confidence: low
+        source: "Guchen GC20A320 electric scroll AC compressor datasheet (guchen-eac.com/what/high-voltage-electric-compressor/320v-electric-scroll-compressor.html): 3500W rated cooling capacity, DC320V, R134a — a comparable real automotive HV compressor, not the i3's actual OEM part"
+      power_w:
+        value: 1140.0
+        confidence: low
+        source: "same Guchen GC20A320 datasheet as capacity_w above: 1140W rated power, paired with the 3500W capacity figure on the same real product"
+      activation_temp_k:
+        value: 293.15
+        confidence: high
+        source: "docs/research/profiles_v1.md — BMW i3: 'Target ~20C'"
+      full_duty_temp_k:
+        value: 303.15
+        confidence: low
+        source: "placeholder — 10K opening band above activation_temp_k, matching the Audi e-tron battery_loop's own thermostat_temp_k/thermostat_full_open_temp_k span convention; not independently researched"
+      serves: ["battery_pack"]
   thermal_network:
     nodes: {}
     edges: []
     ambient_coupling: {}
-  shared_loop: false  # battery uses DX refrigerant (no loop at all); motor+inverter share the one glycol loop
+  shared_loop: false  # battery uses DX refrigerant (its own RefrigerantLoop, not a CoolingLoop); motor+inverter share the one glycol loop
   heat_pump_present: false  # base trim modeled — research: "Heat pump optional"
   heat_pump_type:
     value: "resistive_ptc"

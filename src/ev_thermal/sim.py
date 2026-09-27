@@ -146,6 +146,7 @@ from ev_thermal.cooling import AIR_DENSITY_KG_PER_M3, step_cooling
 from ev_thermal.driver import step_driver
 from ev_thermal.inverter import compute_inverter_heat
 from ev_thermal.motor import compute_motor_heat
+from ev_thermal.refrigerant import step_refrigerant_loop
 from ev_thermal.schema import (
     CausalEvent,
     Confidence,
@@ -153,6 +154,7 @@ from ev_thermal.schema import (
     DTPolicy,
     EnergyTotals,
     ManufacturerProfile,
+    RefrigerantLoop,
     RunResult,
     Scenario,
     SimState,
@@ -307,6 +309,45 @@ def _combined_thermal_network(profile: ManufacturerProfile, coolant_nodes: dict[
     return ThermalNetwork(nodes=nodes, edges=edges, ambient_coupling={})
 
 
+def _step_refrigerant_loops(
+    refrigerant_loops: list[RefrigerantLoop],
+    commanded_duty: dict[str, float],
+    component_temps_k: dict[str, float],
+    component_resistances_to_coolant_k_per_w: dict[str, float],
+) -> tuple[dict[str, float], float]:
+    """Returns (component_name -> heat_removed_w, total compressor power_w)
+    across every `RefrigerantLoop` (Milestone D). Computed from START-of-step
+    temps, same convention every other quantity in `advance_one_step`/
+    `advance_charging_step` uses -- this runs before the battery step (which
+    needs total power for `battery_current_request_a`), well before
+    `heat_inputs_w` even exists; the caller applies the returned dict to
+    `heat_inputs_w` separately, once that's built (step 6). Split evenly if
+    a loop's `serves` names more than one component -- untested case for now
+    (every current profile's RefrigerantLoop serves exactly one component),
+    not chased further. See `refrigerant.step_refrigerant_loop`'s own
+    docstring for why heat_removed_w is resistance-capped, not just
+    capacity*duty.
+    """
+    heat_removed_w_by_component: dict[str, float] = {}
+    total_power_w = 0.0
+    for loop in refrigerant_loops:
+        duty = commanded_duty[loop.name]
+        if not loop.serves:
+            continue
+        total_power_w += loop.power_w.value * duty
+        capacity_share_w = loop.capacity_w.value / len(loop.serves)
+        for name in loop.serves:
+            component_temp_k = component_temps_k.get(name)
+            resistance_k_per_w = component_resistances_to_coolant_k_per_w.get(name)
+            if component_temp_k is None or resistance_k_per_w is None:
+                continue
+            heat_removed_w, _power_w = step_refrigerant_loop(
+                loop, duty, component_temp_k, resistance_k_per_w, capacity_share_w
+            )
+            heat_removed_w_by_component[name] = heat_removed_w_by_component.get(name, 0.0) + heat_removed_w
+    return heat_removed_w_by_component, total_power_w
+
+
 def _is_driving(speed_mps: float, target_speed_mps: float) -> bool:
     """`target_speed_mps` is considered alongside `speed_mps` (not just current
     speed) so that pulling away from a stop — current speed 0, target speed
@@ -438,6 +479,7 @@ def advance_one_step(
     aged_battery_spec = apply_soh_to_battery_spec(battery_spec, state.battery_soh)
     vehicle_dynamics = profile.vehicle_dynamics
     cooling_loops = profile.thermal_architecture.cooling_loops
+    refrigerant_loops = profile.thermal_architecture.refrigerant_loops
 
     motor_name = motor_spec.thermal_node.name
     inverter_name = inverter_spec.thermal_node.name
@@ -506,6 +548,7 @@ def advance_one_step(
         motor_speed_rad_per_s,
         coolant_temps_k,
         state.sim_time_s,
+        refrigerant_loops=refrigerant_loops,
         pump_aggressiveness=pump_aggressiveness,
     )
     causal_events.extend(controller_result.causal_events)
@@ -556,12 +599,41 @@ def advance_one_step(
     }
     total_heat_rejected_w = sum(result.heat_rejected_w for result in cooling_results.values())
     total_chiller_heat_removed_w = sum(result.chiller_heat_removed_w for result in cooling_results.values())
-    cooling_parasitic_w = sum(
-        result.pump_power_w + result.fan_power_w + result.chiller_power_w for result in cooling_results.values()
+
+    # 3.6. refrigerant loops (Milestone D) -- no coolant to gate on, so this
+    # runs unconditionally at the commanded duty; see refrigerant.py's module
+    # docstring for why heat_removed_w is resistance-capped, and this
+    # function's own docstring for why it returns a dict to apply later
+    # (step 6) instead of mutating heat_inputs_w directly the way cooling_
+    # results's chiller path does.
+    component_temps_k_for_refrigerant = {
+        motor_name: state.node_temps_k[motor_name],
+        inverter_name: state.node_temps_k[inverter_name],
+        battery_name: state.node_temps_k[battery_name],
+    }
+    component_resistances_to_coolant_k_per_w = {
+        motor_name: motor_spec.thermal_node.resistance_to_coolant_k_per_w.value,
+        inverter_name: inverter_spec.thermal_node.resistance_to_coolant_k_per_w.value,
+        battery_name: battery_spec.thermal_node.resistance_to_coolant_k_per_w.value,
+    }
+    refrigerant_heat_removed_w_by_component, refrigerant_parasitic_w = _step_refrigerant_loops(
+        refrigerant_loops,
+        controller_result.commanded_refrigerant_duty,
+        component_temps_k_for_refrigerant,
+        component_resistances_to_coolant_k_per_w,
     )
-    # Cooling-loop electrics (pump/chiller compressor/fan) are HV-bus
-    # components in a real EV, not 12V accessories -- same treatment as
-    # hvac_power_w above, no dc_dc_converter_efficiency correction.
+    total_refrigerant_heat_removed_w = sum(refrigerant_heat_removed_w_by_component.values())
+
+    # cooling_parasitic_w folds in the refrigerant compressor's own draw
+    # (Milestone D) -- same HV-bus parasitic-draw bucket pump/fan/chiller
+    # already share, not a separate accounting category.
+    cooling_parasitic_w = (
+        sum(result.pump_power_w + result.fan_power_w + result.chiller_power_w for result in cooling_results.values())
+        + refrigerant_parasitic_w
+    )
+    # Cooling-loop electrics (pump/chiller/refrigerant compressor/fan) are
+    # HV-bus components in a real EV, not 12V accessories -- same treatment
+    # as hvac_power_w above, no dc_dc_converter_efficiency correction.
     cooling_current_a = cooling_parasitic_w / state.battery_voltage_v
 
     # 4. battery (no thermal integration yet)
@@ -615,6 +687,8 @@ def advance_one_step(
             for loop in cooling_loops
         },
     }
+    for name, refrigerant_heat_removed_w in refrigerant_heat_removed_w_by_component.items():
+        heat_inputs_w[name] = heat_inputs_w.get(name, 0.0) - refrigerant_heat_removed_w
     new_temps_k = step_thermal_network(
         network,
         state.node_temps_k,
@@ -681,8 +755,10 @@ def advance_one_step(
         pump_duty=controller_result.commanded_pump_duty,
         fan_duty=controller_result.commanded_fan_duty,
         chiller_duty=controller_result.commanded_chiller_duty,
+        refrigerant_duty=controller_result.commanded_refrigerant_duty,
         heat_rejected_w=total_heat_rejected_w,
         chiller_heat_removed_w=total_chiller_heat_removed_w,
+        refrigerant_heat_removed_w=total_refrigerant_heat_removed_w,
         motor_loss_w=motor_heat.total_heat_w,
         inverter_loss_w=inverter_heat.total_loss_w,
         battery_loss_w=battery_electrical.irreversible_heat_w + battery_electrical.entropic_heat_w,
@@ -739,6 +815,7 @@ def advance_charging_step(
     motor_spec = profile.motors[0]
     inverter_spec = profile.inverter
     cooling_loops = profile.thermal_architecture.cooling_loops
+    refrigerant_loops = profile.thermal_architecture.refrigerant_loops
 
     motor_name = motor_spec.thermal_node.name
     inverter_name = inverter_spec.thermal_node.name
@@ -777,6 +854,7 @@ def advance_charging_step(
         0.0,
         coolant_temps_k,
         state.sim_time_s,
+        refrigerant_loops=refrigerant_loops,
         pump_aggressiveness=pump_aggressiveness,
     )
 
@@ -806,8 +884,33 @@ def advance_charging_step(
     }
     total_heat_rejected_w = sum(result.heat_rejected_w for result in cooling_results.values())
     total_chiller_heat_removed_w = sum(result.chiller_heat_removed_w for result in cooling_results.values())
-    cooling_parasitic_w = sum(
-        result.pump_power_w + result.fan_power_w + result.chiller_power_w for result in cooling_results.values()
+
+    # refrigerant loops (Milestone D) -- same treatment as advance_one_step;
+    # see that function's own comments and _step_refrigerant_loops'/
+    # refrigerant.py's module docstrings.
+    component_temps_k_for_refrigerant = {
+        motor_name: state.node_temps_k[motor_name],
+        inverter_name: state.node_temps_k[inverter_name],
+        battery_name: state.node_temps_k[battery_name],
+    }
+    component_resistances_to_coolant_k_per_w = {
+        motor_name: motor_spec.thermal_node.resistance_to_coolant_k_per_w.value,
+        inverter_name: inverter_spec.thermal_node.resistance_to_coolant_k_per_w.value,
+        battery_name: battery_spec.thermal_node.resistance_to_coolant_k_per_w.value,
+    }
+    refrigerant_heat_removed_w_by_component, refrigerant_parasitic_w = _step_refrigerant_loops(
+        refrigerant_loops,
+        controller_result.commanded_refrigerant_duty,
+        component_temps_k_for_refrigerant,
+        component_resistances_to_coolant_k_per_w,
+    )
+    total_refrigerant_heat_removed_w = sum(refrigerant_heat_removed_w_by_component.values())
+
+    # cooling_parasitic_w folds in the refrigerant compressor's own draw
+    # (Milestone D), same bucket pump/fan/chiller already share.
+    cooling_parasitic_w = (
+        sum(result.pump_power_w + result.fan_power_w + result.chiller_power_w for result in cooling_results.values())
+        + refrigerant_parasitic_w
     )
 
     charge_current_request_a = -(charge_power_request_w - cooling_parasitic_w) / state.battery_voltage_v
@@ -842,6 +945,8 @@ def advance_charging_step(
             for loop in cooling_loops
         },
     }
+    for name, refrigerant_heat_removed_w in refrigerant_heat_removed_w_by_component.items():
+        heat_inputs_w[name] = heat_inputs_w.get(name, 0.0) - refrigerant_heat_removed_w
     new_temps_k = step_thermal_network(
         network,
         state.node_temps_k,
@@ -884,8 +989,10 @@ def advance_charging_step(
         pump_duty=controller_result.commanded_pump_duty,
         fan_duty=controller_result.commanded_fan_duty,
         chiller_duty=controller_result.commanded_chiller_duty,
+        refrigerant_duty=controller_result.commanded_refrigerant_duty,
         heat_rejected_w=total_heat_rejected_w,
         chiller_heat_removed_w=total_chiller_heat_removed_w,
+        refrigerant_heat_removed_w=total_refrigerant_heat_removed_w,
         motor_loss_w=0.0,
         inverter_loss_w=0.0,
         battery_loss_w=battery_electrical.irreversible_heat_w + battery_electrical.entropic_heat_w,
@@ -939,6 +1046,7 @@ def run_scenario(
     network = _combined_thermal_network(profile, coolant_nodes)
 
     zero_duty_by_loop = {loop.name: 0.0 for loop in profile.thermal_architecture.cooling_loops}
+    zero_duty_by_refrigerant_loop = {loop.name: 0.0 for loop in profile.thermal_architecture.refrigerant_loops}
     time_series = SimTimeSeries(
         time_s=[state.sim_time_s],
         speed_mps=[state.speed_mps],
@@ -952,8 +1060,10 @@ def run_scenario(
         pump_duty=[dict(zero_duty_by_loop)],
         fan_duty=[dict(zero_duty_by_loop)],
         chiller_duty=[dict(zero_duty_by_loop)],
+        refrigerant_duty=[dict(zero_duty_by_refrigerant_loop)],
         heat_rejected_w=[0.0],
         chiller_heat_removed_w=[0.0],
+        refrigerant_heat_removed_w=[0.0],
         active_limit_event_types=[[]],
     )
     all_causal_events: list[CausalEvent] = []
@@ -964,6 +1074,7 @@ def run_scenario(
     battery_loss_j = 0.0
     radiator_rejected_j = 0.0
     chiller_rejected_j = 0.0
+    refrigerant_rejected_j = 0.0
     aux_j = 0.0
     cooling_parasitic_j = 0.0
 
@@ -1012,8 +1123,10 @@ def run_scenario(
             time_series.pump_duty.append(record.pump_duty)
             time_series.fan_duty.append(record.fan_duty)
             time_series.chiller_duty.append(record.chiller_duty)
+            time_series.refrigerant_duty.append(record.refrigerant_duty)
             time_series.heat_rejected_w.append(record.heat_rejected_w)
             time_series.chiller_heat_removed_w.append(record.chiller_heat_removed_w)
+            time_series.refrigerant_heat_removed_w.append(record.refrigerant_heat_removed_w)
             time_series.active_limit_event_types.append(record.active_limit_event_types)
 
         motor_loss_j += record.motor_loss_w * dt_s
@@ -1021,6 +1134,7 @@ def run_scenario(
         battery_loss_j += record.battery_loss_w * dt_s
         radiator_rejected_j += record.heat_rejected_w * dt_s
         chiller_rejected_j += record.chiller_heat_removed_w * dt_s
+        refrigerant_rejected_j += record.refrigerant_heat_removed_w * dt_s
         aux_j += record.aux_power_w * dt_s
         cooling_parasitic_j += record.cooling_parasitic_w * dt_s
 
@@ -1032,6 +1146,7 @@ def run_scenario(
         battery_loss_j=battery_loss_j,
         radiator_rejected_j=radiator_rejected_j,
         chiller_rejected_j=chiller_rejected_j,
+        refrigerant_rejected_j=refrigerant_rejected_j,
         aux_j=aux_j,
         cooling_parasitic_j=cooling_parasitic_j,
     )
@@ -1082,6 +1197,7 @@ def run_charging_session(
     network = _combined_thermal_network(profile, coolant_nodes)
 
     zero_duty_by_loop = {loop.name: 0.0 for loop in profile.thermal_architecture.cooling_loops}
+    zero_duty_by_refrigerant_loop = {loop.name: 0.0 for loop in profile.thermal_architecture.refrigerant_loops}
     time_series = SimTimeSeries(
         time_s=[state.sim_time_s],
         speed_mps=[state.speed_mps],
@@ -1095,8 +1211,10 @@ def run_charging_session(
         pump_duty=[dict(zero_duty_by_loop)],
         fan_duty=[dict(zero_duty_by_loop)],
         chiller_duty=[dict(zero_duty_by_loop)],
+        refrigerant_duty=[dict(zero_duty_by_refrigerant_loop)],
         heat_rejected_w=[0.0],
         chiller_heat_removed_w=[0.0],
+        refrigerant_heat_removed_w=[0.0],
         active_limit_event_types=[[]],
     )
     all_causal_events: list[CausalEvent] = []
@@ -1107,6 +1225,7 @@ def run_charging_session(
     battery_loss_j = 0.0
     radiator_rejected_j = 0.0
     chiller_rejected_j = 0.0
+    refrigerant_rejected_j = 0.0
     aux_j = 0.0
     cooling_parasitic_j = 0.0
 
@@ -1153,8 +1272,10 @@ def run_charging_session(
             time_series.pump_duty.append(record.pump_duty)
             time_series.fan_duty.append(record.fan_duty)
             time_series.chiller_duty.append(record.chiller_duty)
+            time_series.refrigerant_duty.append(record.refrigerant_duty)
             time_series.heat_rejected_w.append(record.heat_rejected_w)
             time_series.chiller_heat_removed_w.append(record.chiller_heat_removed_w)
+            time_series.refrigerant_heat_removed_w.append(record.refrigerant_heat_removed_w)
             time_series.active_limit_event_types.append(record.active_limit_event_types)
 
         motor_loss_j += record.motor_loss_w * dt_s
@@ -1162,6 +1283,7 @@ def run_charging_session(
         battery_loss_j += record.battery_loss_w * dt_s
         radiator_rejected_j += record.heat_rejected_w * dt_s
         chiller_rejected_j += record.chiller_heat_removed_w * dt_s
+        refrigerant_rejected_j += record.refrigerant_heat_removed_w * dt_s
         aux_j += record.aux_power_w * dt_s
         cooling_parasitic_j += record.cooling_parasitic_w * dt_s
 
@@ -1173,6 +1295,7 @@ def run_charging_session(
         battery_loss_j=battery_loss_j,
         radiator_rejected_j=radiator_rejected_j,
         chiller_rejected_j=chiller_rejected_j,
+        refrigerant_rejected_j=refrigerant_rejected_j,
         aux_j=aux_j,
         cooling_parasitic_j=cooling_parasitic_j,
     )

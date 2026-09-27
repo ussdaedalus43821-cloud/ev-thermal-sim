@@ -1406,3 +1406,112 @@ code it calls is.
   `docs/MILESTONES.md`'s corresponding milestone for the run's actual
   numbers, checked directly rather than assumed from this design
   reasoning alone.
+
+## Q-0024 — Milestone D: BMW i3 DX-refrigerant loop abstraction — schema shape, sourcing, and a resistance-cap correction found mid-implementation
+
+- Date: 2026-09-26
+- Context: the schema had no way to represent an active refrigerant loop
+  (the BMW i3's DX battery cooling) as anything other than a `CoolingLoop`
+  (glycol/radiator-shaped) or a node's plain `resistance_to_ambient_k_per_w`
+  (a fixed, always-on, symmetric conductance to ambient air, incapable of
+  holding a component below ambient). This milestone was explicitly plan-
+  reviewed before implementation (per the standing "plan review before
+  schema/architecture changes" expectation) — this entry documents the
+  approved design AND a correctness finding made only once real numbers
+  were run, which changed part of that design mid-implementation.
+- **Schema (as planned, unchanged from the reviewed plan)**: new
+  `RefrigerantLoop` (`name`, `refrigerant_type`, `capacity_w`, `power_w`,
+  `activation_temp_k`, `full_duty_temp_k`, `serves`), structurally parallel
+  to `CoolingLoop` but with no glycol/radiator/pump/fan fields — a DX loop
+  has no separate coolant thermal mass, so it contributes a direct heat
+  sink to its served component(s), not a new graph node/edge.
+  `ThermalArchitecture.refrigerant_loops: list[RefrigerantLoop] =
+  default_factory=list` — empty for every profile but the i3.
+- **Sourcing (as planned)**: `docs/research/profiles_v1.md`'s i3 entry
+  gives the refrigerant type (R134a) and a real target (~20°C,
+  `activation_temp_k`, confidence high) but no compressor capacity/power.
+  Real, paired datasheet numbers for a comparable automotive HV electric
+  scroll compressor using the same refrigerant were found and used:
+  Guchen GC20A320 — 3500W rated cooling capacity, 1140W rated power,
+  DC320V, R134a (guchen-eac.com/what/high-voltage-electric-compressor/
+  320v-electric-scroll-compressor.html) — same "real comparable product,
+  not the exact OEM part" methodology already established for Blue Bird's
+  `chiller_capacity_w` (Q-0021). `full_duty_temp_k` (303.15K/30°C) is a
+  10K opening band above `activation_temp_k`, matching the Audi e-tron
+  battery_loop's own thermostat-pair span convention (placeholder, not
+  independently researched).
+- **A correctness finding made mid-implementation, not planned for, and
+  requiring a real design change before this milestone could be considered
+  done**: the FIRST implementation applied `capacity_w * duty` as an
+  UNBOUNDED direct heat sink on the served component (mirroring `cooling.
+  py`'s chiller, which also has no flow-rate/heat-exchanger-effectiveness
+  term). Running the real i3 profile end-to-end (a real `characterize_
+  all_trips` call, not a synthetic fixture) surfaced that this let a
+  single ~20-minute `HOT_SOAK_COMMUTE` trip cool the pack ~14-20K —
+  physically implausible for any real compressor/thermal-mass pairing, and
+  it compounded across `simulate_long_horizon`'s day-to-day carried-over
+  pack temperature, driving a full-year Guam run to an implausible -4°C
+  to -19°C range (activation_temp_k is 20°C). Root cause: unlike a
+  `CoolingLoop`-served component (whose `resistance_to_coolant_k_per_w`
+  already rate-limits how fast heat reaches its coolant node before the
+  chiller ever acts), the first `RefrigerantLoop` implementation gave the
+  compressor direct, resistance-free access to the component's full
+  thermal mass — no real cooling mechanism in this codebase, or in
+  reality, works that way.
+  - Options considered: (1) keep the direct sink, but bound
+    `relax_parked_temp_k`'s Tier-2 step size finer so duty gets recomputed
+    before overshoot (tried first; only patched Tier-2's coarse
+    approximation, left Tier-1's own implausible per-trip cooling rate
+    unaddressed — rejected, treats a symptom not the cause). (2) Reuse
+    `ThermalNode.resistance_to_coolant_k_per_w` (already present on every
+    component, and already documented on the i3's battery node as "unused"
+    pending exactly this) as a genuine rate limit: `heat_removed_w =
+    min(capacity_share_w * duty, (component_temp_k - activation_temp_k) /
+    resistance_to_coolant_k_per_w)`. No new schema field — reuses an
+    existing one for its evidently-intended purpose. (Approved — see
+    resolution.)
+  - **Resolution: option 2.** `refrigerant.step_refrigerant_loop` gained
+    `component_temp_k`/`resistance_to_coolant_k_per_w` params and the
+    resistance cap; `sim.py`'s `_step_refrigerant_loops` (replacing the
+    earlier `_apply_refrigerant_heat_sinks`) computes it per (loop,
+    served-component) pair, since `serves` could in principle list more
+    than one component (untested case; capacity is split evenly, not
+    chased further — every current profile's RefrigerantLoop serves
+    exactly one). `long_horizon.py`'s Tier-2 parked-period model was
+    correspondingly rebuilt: `relax_parked_temp_k`'s refrigerant branch now
+    models a genuine two-conductance weighted-average target (ambient path
+    G vs. `1/resistance_to_coolant_k_per_w` scaled by duty, targeting
+    `activation_temp_k`) instead of the earlier (wrong) approach of
+    borrowing the ambient path's own deliberately-weak conductance as the
+    chiller-style target-shift denominator — that reuse was the real bug,
+    not merely a step-size problem, since the ambient path's weakness has
+    nothing to do with how fast a refrigerant loop can move heat. Verified
+    directly, not assumed: re-running the same real i3/Guam/Seattle 1-year
+    Tier-2 checks after the fix shows a physically plausible pack-
+    temperature range (Guam: 22.8-25.0°C settling near but above the 20°C
+    target under continuous heat load, matching real finite-conductance
+    HVAC behavior; Seattle: 5.0-21.7°C tracking the seasonal ambient) and
+    plausible SOH deltas (Guam 98.50%, Seattle 99.23% after 1 year).
+    Confirmed the resistance term is the binding constraint in practice
+    (a 20K differential over a real ~0.3 K/W resistance implies ~67W, far
+    below the 3500W nominal compressor capacity) — the capacity cap is a
+    real but rarely-binding backstop, kept for correctness, not chased
+    further into a fully rigorous two-regime (conductance-limited vs.
+    capacity-limited) Tier-2 treatment, a documented simplification.
+  - **A second, smaller finding surfaced by this fix, flagged not
+    silently fixed**: the i3 battery's own `resistance_to_coolant_k_per_w`
+    (0.3 K/W) — set before this field was ever read by anything, per its
+    own prior "unused" note — is noticeably weaker (higher K/W, i.e. less
+    tightly coupled) than the same field's placeholder value on other
+    actively-cooled profiles (e-tron 0.015, Leaf's counterfactual 0.02,
+    ~0.02-0.05 elsewhere). Now that Milestone D makes it genuinely
+    load-bearing, this magnitude deserves real scrutiny — not re-derived
+    here, since doing so wasn't this milestone's scope and the current
+    value already produces physically plausible behavior; flagged in the
+    YAML's own field note and `docs/ROADMAP.md` as a concrete follow-up.
+- Blocking: yes
+- **Resolution (2026-09-26): schema/sourcing as originally planned; the
+  resistance-cap correction (option 2 above) approved and implemented**,
+  since the unbounded-sink version was demonstrably wrong, not just
+  imprecise. See `docs/MILESTONES.md`'s corresponding milestone for the
+  full implementation record and every number here traced to an actual run.

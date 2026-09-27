@@ -186,6 +186,36 @@ class CoolingLoop(BaseModel):
     )
 
 
+class RefrigerantLoop(BaseModel):
+    """A direct-expansion (DX) refrigerant cooling path (e.g. the BMW i3's battery
+    cooling) — structurally parallel to `CoolingLoop` but for a system with no
+    glycol, pump, radiator, or fan: refrigerant evaporates directly against the
+    served component(s), so there is no separate coolant thermal mass (see
+    docs/MILESTONES.md's Milestone D). Capable of holding a served component
+    BELOW ambient, the same capability `CoolingLoop.chiller_present` adds to a
+    glycol loop, but as the sole/primary cooling mechanism rather than a second
+    stage bolted onto a radiator path.
+    """
+
+    name: str
+    refrigerant_type: str = Field(..., description="e.g. 'R134a'.")
+    capacity_w: Sourced[float] = Field(
+        ..., description="Heat-removal capacity at full duty, in watts."
+    )
+    power_w: Sourced[float] = Field(
+        ..., description="Compressor electrical draw at full duty, in watts."
+    )
+    activation_temp_k: Sourced[float] = Field(
+        ..., description="Duty starts ramping above this served-component temperature."
+    )
+    full_duty_temp_k: Sourced[float] = Field(
+        ..., description="Duty reaches 1.0 at/above this served-component temperature."
+    )
+    serves: list[str] = Field(
+        ..., description="Names of components this loop cools directly, e.g. ['battery_pack']."
+    )
+
+
 class VehicleDynamics(BaseModel):
     """Physical properties needed for later energy-consumption modeling in `vehicle.py`/`driver.py`."""
 
@@ -590,6 +620,14 @@ class ThermalArchitecture(BaseModel):
     """How a vehicle's cooling hardware is wired together."""
 
     cooling_loops: list[CoolingLoop]
+    refrigerant_loops: list[RefrigerantLoop] = Field(
+        default_factory=list,
+        description=(
+            "Direct-expansion refrigerant cooling paths (Milestone D) — separate from "
+            "cooling_loops since a DX system has no coolant thermal mass of its own. "
+            "Empty for every profile except the BMW i3."
+        ),
+    )
     thermal_network: ThermalNetwork
     shared_loop: bool = Field(
         ..., description="True if battery and powertrain (motor/inverter) share one coolant loop."
@@ -1251,6 +1289,13 @@ class ControllerStepResult(BaseModel):
             "see controller.py's module docstring."
         ),
     )
+    commanded_refrigerant_duty: dict[str, float] = Field(
+        default_factory=dict,
+        description=(
+            "RefrigerantLoop.name -> commanded duty, 0-1, for that loop (Milestone D). Empty for "
+            "profiles with no refrigerant_loops."
+        ),
+    )
     battery_current_demand_a: float = Field(
         ...,
         description=(
@@ -1278,14 +1323,20 @@ class EnergyTotals(BaseModel):
     chiller_rejected_j: float = Field(
         default=0.0, description="Sum of heat actively removed by any loop's chiller over the run."
     )
+    refrigerant_rejected_j: float = Field(
+        default=0.0,
+        description="Sum of heat actively removed by any RefrigerantLoop over the run (Milestone D).",
+    )
     aux_j: float = Field(..., description="Sum of auxiliary (HVAC/accessory) electrical draw over the run.")
     cooling_parasitic_j: float = Field(
         default=0.0,
         description=(
-            "Sum of cooling-loop parasitic electrical draw (pump+fan+chiller) over the run, charged "
-            "to the battery the same way aux_j is. Q-0021: this closes a pre-existing gap where "
-            "pump/fan draw was computed by step_cooling but never charged to battery_current_request_a "
-            "or tracked here."
+            "Sum of cooling-loop parasitic electrical draw (pump+fan+chiller+refrigerant compressor) "
+            "over the run, charged to the battery the same way aux_j is. Q-0021: this closes a "
+            "pre-existing gap where pump/fan draw was computed by step_cooling but never charged to "
+            "battery_current_request_a or tracked here. A RefrigerantLoop's compressor draw (Milestone "
+            "D) shares this same bucket rather than getting its own — it's the same HV-bus parasitic-"
+            "draw category."
         ),
     )
 
@@ -1329,8 +1380,12 @@ class SimTimeSeries(BaseModel):
     chiller_duty: list[dict[str, float]] = Field(
         default_factory=list, description="Per-step CoolingLoop.name -> commanded chiller duty, 0-1."
     )
+    refrigerant_duty: list[dict[str, float]] = Field(
+        default_factory=list, description="Per-step RefrigerantLoop.name -> commanded duty, 0-1 (Milestone D)."
+    )
     heat_rejected_w: list[float] = Field(default_factory=list, description="Radiator-only, see SimStepRecord.")
     chiller_heat_removed_w: list[float] = Field(default_factory=list)
+    refrigerant_heat_removed_w: list[float] = Field(default_factory=list)
     active_limit_event_types: list[list[str]] = Field(
         default_factory=list, description="controller.py CausalEvent.event_types active at each step."
     )
@@ -1375,9 +1430,16 @@ class SimStepRecord(BaseModel):
     pump_duty: dict[str, float]
     fan_duty: dict[str, float]
     chiller_duty: dict[str, float]
+    refrigerant_duty: dict[str, float] = Field(
+        default_factory=dict, description="RefrigerantLoop.name -> commanded duty, 0-1, this step (Milestone D)."
+    )
     heat_rejected_w: float = Field(..., description="Radiator-only, summed across loops (chiller is separate).")
     chiller_heat_removed_w: float = Field(
         default=0.0, description="Heat actively removed by any loop's chiller this step, summed across loops."
+    )
+    refrigerant_heat_removed_w: float = Field(
+        default=0.0,
+        description="Heat actively removed by any RefrigerantLoop this step, summed across loops (Milestone D).",
     )
     motor_loss_w: float
     inverter_loss_w: float
@@ -1386,8 +1448,9 @@ class SimStepRecord(BaseModel):
     cooling_parasitic_w: float = Field(
         default=0.0,
         description=(
-            "Pump+fan+chiller electrical draw this step, summed across loops, in watts. Charged to "
-            "the battery the same way aux_power_w is (Q-0021's pre-existing-gap fix)."
+            "Pump+fan+chiller+refrigerant-compressor electrical draw this step, summed across loops, "
+            "in watts. Charged to the battery the same way aux_power_w is (Q-0021's pre-existing-gap "
+            "fix; a RefrigerantLoop's compressor draw shares this bucket, Milestone D)."
         ),
     )
     active_limit_event_types: list[str] = Field(

@@ -58,16 +58,31 @@ file holds the items that are genuinely discrete standalone work items.
   structural ceiling. Accepting the trip/day-level model can't surface
   this effect at these thermal-mass and duty-cycle magnitudes is the
   honest conclusion, not a search for a different parameter or mechanism.
-- **Milestone D (scheduled but not next): refrigerant-loop schema
-  abstraction.** The schema has no way to represent an active refrigerant
-  loop (the BMW i3's DX system, or a battery chiller circuit) as anything
-  other than a `CoolingLoop` (glycol-shaped) or the node-level ambient
-  path. The i3's profile currently approximates DX cooling with an
-  unrealistically low `resistance_to_ambient_k_per_w` on its battery node
-  — a stand-in, not a real refrigerant-thermodynamics model. **Do not use
-  i3-vs-Leaf battery comparisons for publication until this lands.**
-  Deliberately ordered behind aging/long-horizon capability (now built) —
-  was correctly sequenced, not abandoned.
+- **Done: Milestone D — refrigerant-loop schema abstraction**
+  (`docs/DESIGN_QUESTIONS.md` Q-0024). The BMW i3's real DX battery
+  cooling is now a real `RefrigerantLoop` (schema + `refrigerant.py` +
+  `controller.py`/`sim.py`/`long_horizon.py` wiring), not approximated via
+  `resistance_to_ambient_k_per_w`. A resistance-cap correctness bug (an
+  unbounded direct heat sink let a single trip implausibly overcool the
+  pack) was found and fixed mid-implementation by reusing `ThermalNode.
+  resistance_to_coolant_k_per_w` as a genuine rate limit — see Q-0024 and
+  `docs/MILESTONES.md`'s corresponding milestone for the full record.
+  **Do not use i3-vs-Leaf battery comparisons for publication yet** — the
+  mechanism is real and validated under two climates (Guam, Seattle), but
+  not yet the broader multi-climate/duty-cycle validation pass the six
+  passenger profiles' other mechanisms have had; that's the actual
+  remaining gate on lifting this caveat, not the schema/mechanism itself.
+- **Open follow-up: the BMW i3 battery's `resistance_to_coolant_k_per_w`
+  (0.3 K/W) is noticeably weaker than the same field's placeholder value
+  on other actively-cooled profiles (e-tron 0.015, Leaf's counterfactual
+  0.02, ~0.02-0.05 elsewhere).** It predates Milestone D (set when the
+  field was genuinely unused) and now that it's load-bearing for the
+  refrigerant loop's rate limit, its magnitude deserves real scrutiny —
+  not performed yet. Revisit alongside any future i3 spec-sourcing pass.
+- **Open follow-up: multi-climate/duty-cycle validation for the i3's new
+  RefrigerantLoop**, matching the chiller's own post-implementation
+  investigation arc (hot-soak fix, real-climate check, real capacity
+  sourcing) — this milestone validated under Guam and Seattle only.
 - **`controller.py`'s cooling-command policy (`_duty_ramp`, pump/fan duty
   vs. temperature above thermostat) is an explicit `TODO(tuning)`
   placeholder, not a calibrated policy.**

@@ -107,12 +107,20 @@ related code:
   it has an active battery coolant loop — don't cite the old Model3/Seattle
   figure. See `docs/ROADMAP.md`'s "Thermal / cooling physics" section for
   open (threshold re-derivation, hotter test climates).
-  Milestone D (BMW i3's standalone DX-refrigerant abstraction) is
-  unaffected and separate — still don't use i3-vs-Leaf battery comparisons
-  for publication. **Milestone D is now unblocked**: the mistake library
-  has its second real entry (Audi e-tron shared-loop case, `docs/
-  DESIGN_QUESTIONS.md` Q-0023), the user's own stated precondition for
-  starting it — not started here.
+  **Milestone D (BMW i3's DX-refrigerant abstraction) is done** (`docs/
+  DESIGN_QUESTIONS.md` Q-0024): the i3's battery cooling is now a real
+  `RefrigerantLoop`, not an approximated `resistance_to_ambient_k_per_w`.
+  A resistance-cap correctness bug (an unbounded direct sink let a single
+  trip implausibly overcool the pack) was found and fixed mid-
+  implementation by reusing `ThermalNode.resistance_to_coolant_k_per_w` as
+  a genuine rate limit. **Still don't use i3-vs-Leaf battery comparisons
+  for publication** — validated under two climates (Guam, Seattle) so far,
+  not yet the broader multi-climate/duty-cycle pass the six passenger
+  profiles' other mechanisms have had; that gap, not the mechanism itself,
+  is what's left before this caveat can be lifted. See `docs/ROADMAP.md`'s
+  "Thermal / cooling physics" section for this and the i3 battery's own
+  `resistance_to_coolant_k_per_w` magnitude (0.3 K/W, weaker than other
+  profiles' convention, now load-bearing and flagged for re-examination).
 - **Preconditioning is deferred entirely, not approximated** (`docs/
   DESIGN_QUESTIONS.md` Q-0004) — every fast-charge characterization is
   equally pessimistic across all profiles; this is the single biggest

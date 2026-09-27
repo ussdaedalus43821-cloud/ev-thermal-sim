@@ -635,6 +635,16 @@ def _chiller_duty(temp_k: float, thermostat_full_open_temp_k: float) -> float:
     return min(1.0, max(0.0, (temp_k - thermostat_full_open_temp_k) / DUTY_RAMP_SPAN_K))
 
 
+def _refrigerant_duty(temp_k: float, activation_temp_k: float, full_duty_temp_k: float) -> float:
+    """Mirrors controller.py's commanded_refrigerant_duty exactly (Milestone
+    D) -- unlike `_chiller_duty` above, the span comes from the loop's own
+    two real setpoints, not the shared DUTY_RAMP_SPAN_K constant (a
+    RefrigerantLoop's control span is defined by its own hardware, not the
+    CoolingLoop tuning knob -- see controller.py's own docstring).
+    """
+    return min(1.0, max(0.0, (temp_k - activation_temp_k) / (full_duty_temp_k - activation_temp_k)))
+
+
 def relax_parked_temp_k(
     start_temp_k: float,
     tau_s: float | None,
@@ -648,6 +658,10 @@ def relax_parked_temp_k(
     thermostat_full_open_temp_k: float | None = None,
     chiller_present: bool = False,
     chiller_capacity_w: float | None = None,
+    refrigerant_present: bool = False,
+    refrigerant_resistance_k_per_w: float | None = None,
+    refrigerant_activation_temp_k: float | None = None,
+    refrigerant_full_duty_temp_k: float | None = None,
 ) -> list[tuple[float, float]]:
     """Exact per-interval exponential relaxation toward ambient, treating ambient
     as piecewise-constant within each `step_s` interval -- NOT a single closed-
@@ -708,6 +722,44 @@ def relax_parked_temp_k(
     here (unlike the ambient-only branch below, which already handles
     tau_s=None on its own).
 
+    ## Refrigerant loop (Milestone D)
+
+    `refrigerant_present`/`refrigerant_resistance_k_per_w`/`refrigerant_
+    activation_temp_k`/`refrigerant_full_duty_temp_k` model a DX
+    `RefrigerantLoop` as a conductance to a FIXED virtual sink held at
+    `refrigerant_activation_temp_k` (not ambient), gated by duty --
+    `refrigerant_resistance_k_per_w / duty` is that conductance's
+    resistance, reusing `BatterySpec.thermal_node.resistance_to_coolant_k_
+    per_w` (the SAME field a `CoolingLoop`-served component's coolant edge
+    uses in the real per-second model -- see refrigerant.step_refrigerant_
+    loop's own docstring for why this reuse, not a new field, is correct).
+    This combines with the ambient path exactly like two parallel resistors
+    to a weighted-average target: `target_k = (G_ambient*ambient +
+    G_refrigerant*activation_temp_k) / (G_ambient+G_refrigerant)`. An
+    earlier version of this branch instead borrowed G from the (deliberately
+    weak) ambient path itself, matching the chiller's own coolant-path-
+    conductance trick -- found wrong while validating Milestone D, not a
+    stylistic preference: a DX loop's real resistance-to-component coupling
+    has nothing to do with how weak its passive ambient leak is, and
+    reusing the ambient path's G produced an absurd implied target (the
+    ambient path's G is orders of magnitude smaller than what a real
+    compressor's resistance-limited transfer implies), overshooting the
+    pack far below its own activation_temp_k before duty could react. This
+    conductance-based version has no such failure mode: with a realistic
+    resistance_to_coolant_k_per_w, `refrigerant_capacity_w`'s own ceiling
+    essentially never binds (confirmed: a modest 20K differential over a
+    real ~0.3 K/W resistance implies ~67W, far below a real compressor's
+    multi-kW rating), so this Tier-2 approximation deliberately does NOT
+    also cap by capacity_w -- a documented simplification, not an
+    oversight, consistent with this function's existing coarser-than-Tier-1
+    treatment elsewhere. Only engages in the branch that would otherwise be
+    plain ambient-only relaxation (`coolant_path_active` is False) -- a
+    profile is never expected to have both a `CoolingLoop`-based chiller
+    AND a `RefrigerantLoop` serving the same battery. Duty is
+    `_refrigerant_duty` (mirrors `_chiller_duty`'s shape but against the
+    loop's own two setpoints, not `DUTY_RAMP_SPAN_K` -- see that function
+    and controller.py's own docstring).
+
     Returns `[(elapsed_t_s, pack_temp_k), ...]` at each step boundary, including
     the starting point, for calendar-aging quadrature (`parked_calendar_aging`).
     """
@@ -718,6 +770,14 @@ def relax_parked_temp_k(
         and capacitance_j_per_k is not None
     )
     chiller_active = chiller_present and chiller_capacity_w is not None and coolant_path_active
+    refrigerant_active = (
+        refrigerant_present
+        and refrigerant_resistance_k_per_w is not None
+        and refrigerant_activation_temp_k is not None
+        and refrigerant_full_duty_temp_k is not None
+        and capacitance_j_per_k is not None
+        and not coolant_path_active
+    )
     samples: list[tuple[float, float]] = [(start_t_s, start_temp_k)]
     if duration_s <= 0.0:
         return samples
@@ -744,7 +804,24 @@ def relax_parked_temp_k(
                     target_k = ambient - chiller_heat_removed_w / total_conductance_w_per_k
                 temp_k = target_k + (temp_k - target_k) * math.exp(-dt / effective_tau_s)
         elif tau_s is not None:
-            temp_k = ambient + (temp_k - ambient) * math.exp(-dt / tau_s)
+            if refrigerant_active:
+                assert capacitance_j_per_k is not None  # narrows for mypy; refrigerant_active already guarantees this
+                assert refrigerant_resistance_k_per_w is not None
+                assert refrigerant_activation_temp_k is not None
+                assert refrigerant_full_duty_temp_k is not None
+                duty = _refrigerant_duty(temp_k, refrigerant_activation_temp_k, refrigerant_full_duty_temp_k)
+                ambient_conductance_w_per_k = capacitance_j_per_k / tau_s
+                refrigerant_conductance_w_per_k = 0.0 if duty <= 0.0 else duty / refrigerant_resistance_k_per_w
+                total_conductance_w_per_k = ambient_conductance_w_per_k + refrigerant_conductance_w_per_k
+                if total_conductance_w_per_k > 0.0:
+                    effective_tau_s = capacitance_j_per_k / total_conductance_w_per_k
+                    target_k = (
+                        ambient_conductance_w_per_k * ambient
+                        + refrigerant_conductance_w_per_k * refrigerant_activation_temp_k
+                    ) / total_conductance_w_per_k
+                    temp_k = target_k + (temp_k - target_k) * math.exp(-dt / effective_tau_s)
+            else:
+                temp_k = ambient + (temp_k - ambient) * math.exp(-dt / tau_s)
         elapsed_s += dt
         samples.append((start_t_s + elapsed_s, temp_k))
     return samples
@@ -828,6 +905,27 @@ def _chiller_soc_decrement(
             continue
         duty = _chiller_duty(temp0, thermostat_full_open_temp_k)
         total += duty * chiller_decay_per_hour_at_full_duty * ((t1 - t0) / 3600.0)
+    return total
+
+
+def _refrigerant_soc_decrement(
+    temp_samples: list[tuple[float, float]],
+    charge_event_s: float,
+    activation_temp_k: float,
+    full_duty_temp_k: float,
+    refrigerant_decay_per_hour_at_full_duty: float,
+) -> float:
+    """RefrigerantLoop compressor's own electrical draw during a parked period
+    (Milestone D), same treatment/reset-step exclusion as
+    `_chiller_soc_decrement` -- a separate sum since it uses `_refrigerant_
+    duty`, not `_chiller_duty`.
+    """
+    total = 0.0
+    for (t0, temp0), (t1, _temp1) in zip(temp_samples[:-1], temp_samples[1:], strict=True):
+        if t0 < charge_event_s:
+            continue
+        duty = _refrigerant_duty(temp0, activation_temp_k, full_duty_temp_k)
+        total += duty * refrigerant_decay_per_hour_at_full_duty * ((t1 - t0) / 3600.0)
     return total
 
 
@@ -1021,6 +1119,13 @@ def simulate_long_horizon(
     battery_loop = next(
         (loop for loop in profile.thermal_architecture.cooling_loops if battery_node_name in loop.serves), None
     )
+    # Milestone D: a DX RefrigerantLoop is mutually exclusive with battery_loop
+    # in every profile so far (the BMW i3 has no CoolingLoop serving its
+    # battery at all) -- see relax_parked_temp_k's own docstring for why
+    # refrigerant_active is itself gated on `not coolant_path_active`.
+    refrigerant_loop = next(
+        (loop for loop in profile.thermal_architecture.refrigerant_loops if battery_node_name in loop.serves), None
+    )
     accessory_power_w = profile.aux_loads.accessory_load_w.value / profile.aux_loads.dc_dc_converter_efficiency.value
     pack_voltage_v = battery_ocv_v(spec, charging_profile.typical_end_soc.value, spec.reference_temp_k.value)
     decay_per_hour = (accessory_power_w / pack_voltage_v) / spec.capacity_nominal_ah.value
@@ -1033,6 +1138,11 @@ def simulate_long_horizon(
         0.0
         if battery_loop is None or not battery_loop.chiller_present or battery_loop.chiller_power_w is None
         else (battery_loop.chiller_power_w.value / pack_voltage_v) / spec.capacity_nominal_ah.value
+    )
+    refrigerant_decay_per_hour_at_full_duty = (
+        0.0
+        if refrigerant_loop is None
+        else (refrigerant_loop.power_w.value / pack_voltage_v) / spec.capacity_nominal_ah.value
     )
 
     day0 = start_day_of_year if start_day_of_year is not None else _default_start_day_of_year()
@@ -1085,7 +1195,30 @@ def simulate_long_horizon(
             parked_start_s = day_start_s
 
         charge_event_s = day_start_s + charging_profile.charge_reset_hour.value * 3600.0
-        if battery_loop is None:
+        refrigerant_loss_soc = 0.0
+        if battery_loop is None and refrigerant_loop is not None:
+            temp_samples = relax_parked_temp_k(
+                pack_temp_k,
+                tau_s,
+                ambient_fn,
+                parked_start_s,
+                parked_duration_s,
+                capacitance_j_per_k=spec.thermal_node.capacitance_j_per_k.value,
+                refrigerant_present=True,
+                refrigerant_resistance_k_per_w=spec.thermal_node.resistance_to_coolant_k_per_w.value,
+                refrigerant_activation_temp_k=refrigerant_loop.activation_temp_k.value,
+                refrigerant_full_duty_temp_k=refrigerant_loop.full_duty_temp_k.value,
+            )
+            pump_loss_soc = 0.0
+            chiller_loss_soc = 0.0
+            refrigerant_loss_soc = _refrigerant_soc_decrement(
+                temp_samples,
+                charge_event_s,
+                refrigerant_loop.activation_temp_k.value,
+                refrigerant_loop.full_duty_temp_k.value,
+                refrigerant_decay_per_hour_at_full_duty,
+            )
+        elif battery_loop is None:
             temp_samples = relax_parked_temp_k(pack_temp_k, tau_s, ambient_fn, parked_start_s, parked_duration_s)
             pump_loss_soc = 0.0
             chiller_loss_soc = 0.0
@@ -1133,7 +1266,7 @@ def simulate_long_horizon(
         calendar_loss_cumulative += parked_loss
         soh = max(0.0, soh - parked_loss)
         pack_temp_k = temp_samples[-1][1]
-        soc = max(0.0, soc_samples[-1][1] - pump_loss_soc - chiller_loss_soc)
+        soc = max(0.0, soc_samples[-1][1] - pump_loss_soc - chiller_loss_soc - refrigerant_loss_soc)
 
         checkpoints.append(
             LongHorizonCheckpoint(
