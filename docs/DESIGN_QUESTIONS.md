@@ -1606,3 +1606,189 @@ code it calls is.
   matching the real documented consequence's severity (total,
   unrecoverable loss of the vehicle's only active battery-cooling path).
   See `docs/MILESTONES.md`'s corresponding milestone for the full record.
+
+## Q-0026 — Preconditioning: architecture, the "charge stop is coming" signal, and where the real heater load lives
+
+- Date: 2026-09-27
+- Context: Q-0004 deferred preconditioning entirely, explicitly rejecting a
+  temp-offset placeholder as "modeling the effect without the mechanism,"
+  and named the blocker as needing "a 'the vehicle knows a charge stop is
+  coming' signal that doesn't exist anywhere in this simulator (no route/
+  navigation concept)." Before scoping an implementation, that blocker
+  itself needed checking, not accepted at face value — it changes the
+  size of this milestone by roughly 3-5x depending on the answer.
+  **Finding: the route/navigation dependency is NOT real — it's
+  reducible, and already reduced.** `TripType.FAST_CHARGE_SESSION` is
+  already its own independent day-type-mix category, characterized by
+  `characterize_fast_charge_session` — a standalone Tier-1 run with no
+  composition with any preceding drive archetype at all (confirmed by
+  reading it directly: it starts from `initialize_sim_state` at a fixed
+  ambient-bucket temp, not chained from any drive's `final_node_temps_k`).
+  `simulate_long_horizon`'s day loop already knows, for every simulated
+  day, whether that day's occurrence IS a fast-charge session (it's how
+  `day_type_mix`'s weighting already works). "The vehicle knows a charge
+  stop is coming" is therefore not a real-world-route-modeling problem —
+  it's already exactly as knowable as any other day-type-mix membership
+  fact, today, with zero new machinery. Q-0004's own phrasing conflated
+  "the vehicle would need a route/navigation system to know this in
+  reality" with "the SIMULATOR needs a route/navigation concept to know
+  this" — true of the former, false of the latter, since the simulator
+  already decides day types by category, not by simulating an actual
+  drive-to-charger sequence.
+  **A second finding, load-bearing for where this has to live**:
+  `apply_trip_start_offset` (Tier-2's linear-offset replay mechanism) only
+  shifts `mean_cell_temp_k`/`peak_cell_temp_k`/`final_node_temps_k` by a
+  constant — it does NOT re-derive `current_a`/SOC trajectory at the
+  shifted temperature. This means preconditioning's real practical
+  benefit — a warmer pack draws more current during the charge ramp,
+  because `battery.available_charge_current_a`'s `_cold_derate_scale`
+  term is directly temperature-gated — CANNOT be captured by a Tier-2
+  offset trick the way hot/cold-soak commute archetypes' temperature
+  effects are. It has to be baked into `characterize_fast_charge_session`
+  itself, at Tier-1, exactly like `archetype.initial_soak` already bakes
+  cold/hot soak into driving archetypes' own initial state.
+- Options considered (where preconditioning lives):
+  1. **A new `TripType` archetype** (e.g. "drive that ends at a charger").
+     Rejected once the above finding landed: there's no drive to compose
+     with in the first place (`characterize_fast_charge_session` doesn't
+     consume any driving state), so a new archetype would have nothing
+     architecturally distinct to represent beyond what option 2 already
+     covers more directly.
+  2. **A second Tier-1 characterization variant of the EXISTING
+     `FAST_CHARGE_SESSION` archetype** — `characterize_fast_charge_session`
+     gains a `preconditioned: bool` parameter; when true, prepends a real
+     heating phase (see below) to the session's initial state before the
+     existing `run_charging_session` call, exactly parallel to how
+     `characterize_trip` already branches on `archetype.initial_soak`.
+     `characterize_all_trips` produces both variants per ambient bucket
+     when the profile/scenario combination calls for it (bounded
+     characterization-cost increase — doubles ONLY the fast-charge
+     slice's own bucket count, not the whole characterization set).
+     (Approved — see resolution.)
+  3. A Tier-2-only modifier (offset-based). Rejected — the second finding
+     above rules this out on physical-correctness grounds, not just
+     inelegance: it would silently fail to produce the one effect
+     (current-ceiling relief) that makes preconditioning matter at all.
+- Options considered (the gating signal, i.e. when does a given
+  FAST_CHARGE_SESSION occurrence get the preconditioned variant):
+  1. **`ThermalArchitecture.battery_preconditioning` (vehicle capability)
+     AND `ChargingProfile.preconditioning_enabled` (scenario/usage
+     assumption)** — both fields already exist, already documented with
+     exactly this complementary capability×behavior split (see Q-0027 for
+     a real semantic problem with the CAPABILITY field's current data,
+     found while checking this). No new field needed for the gate itself.
+     (Approved — see resolution.)
+  2. A new field. Rejected: would duplicate two fields that already
+     express exactly this distinction and have sat unwired since before
+     Q-0004.
+- Options considered (how the real heating phase is computed — the actual
+  "mechanism," not just the gate):
+  1. **A real, physically-stepped pre-session phase**: for a real,
+     sourced duration, apply a real, sourced heater power as a direct
+     heat-source term on the battery's own thermal node (NOT routed
+     through `AuxLoads.hvac_power_w`, which is a cabin-comfort concept —
+     real preconditioning heats the pack directly via the coolant/
+     refrigerant loop or a dedicated heater, not the cabin), drawing real
+     battery current for that duration via the sim's own existing
+     electrical-step machinery. Produces a real SOC cost AND a real
+     thermal rise from genuine physics, not a hand-set offset — this is
+     what actually satisfies Q-0004's rejected-shortcut test. Needs
+     `run_scenario`'s existing stationary-drive capability
+     (`target_speed_mps` constant at 0) or an equivalent short stepping
+     loop; the heat source itself needs a schema home (see below).
+  2. A hand-set offset (Q-0004's already-rejected option 2, reconsidered
+     and re-rejected for the same reason).
+- **Open sub-question, not resolved here — needs its own answer before
+  implementation**: where does the heater's own rating live in the
+  schema? `ThermalArchitecture.battery_preconditioning` is currently a
+  bare `bool`. Candidates: (a) richen it into a small structured field
+  (e.g. `BatteryPreconditioningSpec | None`, carrying `heater_power_w:
+  Sourced[float]`, `None` meaning "not capable" — replaces the bool
+  entirely); (b) keep the bool and add a sibling `Sourced[float] | None`
+  power field alongside it; (c) reuse/extend the existing chiller/heat-
+  pump machinery (`CoolingLoop.chiller_power_w` or `heat_pump_present`)
+  run in reverse for heat-pump-equipped vehicles specifically, with a
+  separate dedicated field only for non-heat-pump PTC-heater vehicles.
+  Option (c) is the most physically faithful for vehicles that actually
+  share hardware this way (real for some heat-pump EVs) but adds real
+  branching complexity for a first version. Flagging rather than
+  resolving — this determines a schema shape, not just a value.
+- Real-world figures found (not invented; per this project's "research or
+  ask" rule), for whichever option above the resolution picks:
+  - **Heater power**: 1.5-3 kW is a real, sourced range for passenger-EV
+    battery preheating/preconditioning systems (multiple industry/patent
+    sources); electric buses run higher (3-6 kW). A specific point value
+    within this range is still a placeholder choice, not a researched
+    exact figure for any of the six reference vehicles specifically.
+  - **Target pack temp**: already real and cited in this project —
+    Kia Niro EV's own profile: "Preconditioning to 20-25C before fast
+    charging when navigating to charger" (`docs/research/profiles_v1.md`).
+  - **Duration**: ~20-30 minutes before arrival is Tesla's own real,
+    widely-documented Supercharger-preconditioning behavior (multiple
+    corroborating sources, including Tesla's own owner's-manual guidance
+    of 30-45 minutes for manual preconditioning). A reasonable, sourced
+    placeholder for this simulator's own duration, not invented from
+    nothing, though not vehicle-specific for the five profiles other than
+    Niro (and now needing i3's `battery_preconditioning: true` itself
+    re-examined — see Q-0027).
+- Blocking: yes
+
+## Q-0027 — `ThermalArchitecture.battery_preconditioning`: the BMW i3's real citation doesn't actually support what this field claims to mean
+
+- Date: 2026-09-27
+- Context: found while surveying the preconditioning milestone (Q-0026),
+  not assumed or guessed at. `ThermalArchitecture.battery_preconditioning`
+  is documented, in the field's own `Field(description=...)`, as "Whether
+  the vehicle can pre-heat/pre-cool the battery before a **planned fast
+  charge**" — a fast-charge-specific capability. But
+  `configs/profiles/bmw_i3.yaml` sets it `true` citing: "research:
+  'Preconditioning via wallbox **before departure** in cold'" — that's
+  COLD-WEATHER PRE-DEPARTURE warming (for driving range/performance
+  leaving home, via a wallbox — i.e., while already plugged in, not while
+  en route to a charger), a real but DIFFERENT capability from
+  fast-charge arrival preconditioning. Kia Niro EV's own citation, by
+  contrast, genuinely IS fast-charge-specific: "Preconditioning to
+  20-25C before fast charging when navigating to charger." The two
+  profiles' `true` values are backed by two different real phenomena,
+  but the schema only has one field claiming to mean the fast-charge one
+  specifically — i3's `true` doesn't actually support the field's own
+  documented meaning.
+  This matters concretely for Q-0026's mechanism: if `battery_
+  preconditioning` gates whether `characterize_fast_charge_session` gets
+  the preconditioned variant, the i3 would incorrectly receive fast-charge
+  preconditioning benefits it has no real citation for, while genuinely
+  possibly having (or lacking — research doesn't say either way) the
+  cold-departure capability the schema currently has no field for at all.
+- Options considered:
+  1. **Split into two fields**: `battery_preconditioning` (keep, fast-
+     charge-specific, matching its existing documented meaning exactly)
+     and a new `battery_pre_departure_warming` (or similar) for the
+     cold-weather/wallbox case i3's real citation actually supports. Set
+     i3 to `battery_preconditioning: false` (or research a real
+     fast-charge-specific citation if one exists) and `battery_pre_
+     departure_warming: true` with its real citation. Most accurate, but
+     a schema change + a five-profile YAML pass (every profile's current
+     `battery_preconditioning: false` needs re-checking against which
+     meaning it was actually judged against, not just the new field
+     added blank).
+  2. **Keep one field, re-scope its meaning to "any form of active
+     pre-heating/pre-cooling the vehicle does outside normal driving"**
+     (broader than "before a planned fast charge" alone) — cheaper (a
+     doc-comment and one Field description edit only), but weakens the
+     field's usefulness as Q-0026's own gating signal, since "capable of
+     SOME preconditioning" no longer implies "capable of fast-charge
+     preconditioning specifically" — the i3 could still incorrectly gate
+     into Q-0026's mechanism under this option unless the gate also
+     requires re-confirming fast-charge-specificity per profile.
+  3. **Keep one field, fast-charge-scoped as documented today; fix the
+     i3's own value/citation** — set `battery_preconditioning: false` for
+     the i3 (research doesn't currently support the fast-charge-specific
+     claim), and separately flag "i3 real-world cold-departure
+     preconditioning capability" as an unmodeled, uncited gap for a
+     future pass, not invented now. Minimal schema disruption, keeps the
+     field's existing meaning intact for Q-0026 to gate on directly and
+     correctly.
+- Blocking: yes (affects which profiles receive Q-0026's mechanism, and
+  is a real, evidence-based inaccuracy independent of whether Q-0026
+  itself proceeds).
+
