@@ -308,6 +308,15 @@ seam" milestone.
   `VehicleClass` reference for a genuinely multi-class fleet; resolving
   the `climate_zone` collision once a route needs to match on it; and a
   seam-table row for Tank Wash's truck class, which still has none.
+- **Done: a real UI surface for the tracked data** —
+  `Transition/src/ui/batteryHealthTab.ts`, a new "Battery Health" tab (the
+  first-class `TabModule`/`TABS` mechanism the wiring milestone already
+  had available, not a new one): fleet-wide summary, per-route current
+  SOH + a 5/10/20-year projection, and — new — the seam-table row's own
+  `caveats` displayed directly in the UI, not just carried in code/docs.
+  Still track-only; none of the four open follow-ups just above were
+  addressed by this pass. See `docs/MILESTONES.md`'s "Battery Health tab"
+  milestone for the full record.
 - **Done: `Climate`'s `altitude_m`/`solar_irradiance_w_per_m2` are now on
   Transition's `ClimateZone`** (as `altitudeFt`/`solarIrradianceWPerM2`,
   Fahrenheit/imperial convention matching that file's existing temperature

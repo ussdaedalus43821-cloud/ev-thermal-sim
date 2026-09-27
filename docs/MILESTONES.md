@@ -3202,3 +3202,35 @@ whole history to find.
   asserting a real non-negligible delta, matching the e-tron entry's own
   precedent, not the Leaf entry's near-zero-tolerant one). `mypy --strict`,
   `ruff` pass on all new files.
+- **Milestone "Battery Health tab" (done, 2026-09-27, `Transition` repo
+  only — no ev-thermal-sim code changed):** the seam's tracked SOH data
+  (`Route.batterySohPercent`, wired in the earlier "Generate a first
+  Transition-seam table row"/"Transition-side wiring" milestones) finally
+  gets a real UI surface. Previously the only place it appeared was one
+  line — "Battery SOH: X%" — buried in the Overview tab's route-conversion
+  row, matching the "track only, no new consequence yet" v1 scope the user
+  approved when the wiring first landed. Still track-only (a visibility
+  upgrade, not a new gameplay consequence) — that scope decision itself
+  wasn't revisited here.
+  **New `Battery Health` tab** (`Transition/src/ui/batteryHealthTab.ts`,
+  registered in `app.ts`'s existing `TabModule`/`TABS` pattern — a
+  first-class, already-supported mechanism, not a new one): a fleet-wide
+  summary (how many converted routes have tracked data, a fleet-average
+  SOH gauge) plus a per-route card for every route — not yet converted,
+  converted-but-untracked (Tank Wash's truck class, honestly disclosed
+  rather than silently blank), or converted-and-tracked (current SOH
+  gauge, months since conversion, and a projected trajectory at 5/10/20
+  years from now, computed from the seam table's own monthly deltas).
+  **The seam-table row's own `caveats` are now shown in the UI itself**,
+  not just carried in code comments or this repo's own docs — every
+  caveat travels with the number all the way to the screen a player
+  actually looks at, extending the "the caveat must travel with the
+  number" discipline (Q-0022/Q-0024) to its first real UI surface.
+  Small refactor, not new logic: `engine.ts`'s `updateRouteBatterySohPercent`
+  had its seam-row lookup and cumulative-loss math extracted into two
+  reusable, exported pure functions (`seamRowForFleet`,
+  `cumulativeSohLossPct`) so the new tab's projections reuse the exact
+  same logic the tick loop uses, not a parallel reimplementation —
+  confirmed behavior-identical by manual review (same limitation flagged
+  for every prior Transition-side change this session: no test framework,
+  no Node/tsc available in this environment).
