@@ -126,13 +126,16 @@ related code:
   see `docs/MILESTONES.md`'s BMW i3 compressor-failure entry for the
   full record) — this meaningfully moved that mistake-library entry's own
   headline numbers (20yr delta +17.66pp → +21.91pp; don't cite the old
-  figure). **Not yet re-verified: whether the multi-climate validation
-  numbers cited above (i3-vs-Leaf "publication-safe" claim) still hold
-  exactly as stated under the new coefficient** — this fix was scoped to
-  the mistake-library entry specifically; the qualitative conclusion
-  (i3 better in hot climates, no cold advantage) should if anything
-  strengthen given the tighter real coupling, but the exact cited numbers
-  haven't been re-run.
+  figure). **Re-verified**: the multi-climate validation was re-run under
+  the new coefficient (`docs/MILESTONES.md`'s corresponding re-run note).
+  All four ratios moved (Guam 0.568×→0.416×, Phoenix 0.648×→0.522×,
+  Seattle 1.130×→1.061×, Minneapolis 1.005×→0.908×) — i3 wins more
+  decisively in both hot climates as expected, and the refrigerant
+  mechanism itself is confirmed still exactly inactive in Minneapolis
+  (0.0000K). The small Minneapolis ratio shift is NOT this coefficient
+  (the mechanism doesn't engage there) — it reflects other session-wide
+  changes (most plausibly Q-0028's `mean_current_a` fix), not root-caused
+  here; flagged as a low-priority open item in `docs/ROADMAP.md`.
 - **Preconditioning IS implemented (Q-0026/Q-0027), with a real, honest,
   counter-to-expectation finding, not the Q-0004-deferred placeholder
   anymore.** The route/navigation blocker Q-0004 named turned out to be

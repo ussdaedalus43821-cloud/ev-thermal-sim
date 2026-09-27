@@ -95,15 +95,21 @@ file holds the items that are genuinely discrete standalone work items.
   methodology doesn't apply to this structurally different field. Moved
   the mistake-library entry's headline 20yr delta from +17.66pp to
   +21.91pp.
-  **Open follow-up, NOT performed as part of this fix (out of its
-  scope)**: `examples/i3_multiclimate_validation.py`'s own cited numbers
-  (the "i3-vs-Leaf battery comparisons are now publication-safe" claim)
-  were run under the OLD 0.3 K/W value and haven't been re-verified under
-  the new one. The qualitative conclusion should if anything strengthen
-  (tighter real coupling helps the i3 look better in hot climates, and
-  the refrigerant loop's own cold-climate inactivity is unaffected by
-  this coefficient), but the exact cited numbers are unconfirmed — revisit
-  before citing them further.
+  **Re-verified**: `examples/i3_multiclimate_validation.py` re-run under
+  the new coefficient (`docs/MILESTONES.md`'s re-run note) — all four
+  ratios moved, the qualitative story strengthened in both hot climates
+  as expected, and the refrigerant mechanism itself is confirmed still
+  exactly inactive in Minneapolis (0.0000K, unchanged).
+  **New, small open item surfaced by the re-run, not root-caused here**:
+  Minneapolis's own i3-vs-Leaf ratio moved (1.005× → 0.908×) despite the
+  refrigerant mechanism staying exactly inactive there — since this
+  coefficient can't be the cause, the shift reflects some other
+  session-wide change (most plausibly Q-0028's `mean_current_a` fix
+  altering how driving-phase current feeds cycle-aging for both
+  vehicles). Low priority (a ~9% shift, not enough to threaten the "no
+  artificial cold-climate advantage" conclusion for the mechanism itself)
+  but unattributed — revisit if a future change needs Minneapolis's exact
+  number to be precise.
 - **`controller.py`'s cooling-command policy (`_duty_ramp`, pump/fan duty
   vs. temperature above thermostat) is an explicit `TODO(tuning)`
   placeholder, not a calibrated policy.**

@@ -3154,6 +3154,28 @@ whole history to find.
   `resistance_to_coolant_k_per_w` magnitude (flagged in the original
   Milestone D entry, not re-derived here — out of this validation's
   scope).
+  **Re-run (2026-09-27), after `resistance_to_coolant_k_per_w`'s
+  re-derivation above (0.3 → 0.02 K/W)**: Step 1's engagement sanity
+  check reconfirms the mechanism's shape is unchanged — Phoenix still
+  engages smoothly and grows across phases, Minneapolis is still exactly
+  0.0000K in every phase (the refrigerant loop staying inactive in cold
+  is a property of the loop's own activation logic, not this
+  coefficient). Step 3's i3-vs-Leaf ratios all moved: Guam 0.568× →
+  0.416×, Phoenix 0.648× → 0.522×, Seattle 1.130× → 1.061×, Minneapolis
+  1.005× → 0.908×. **The qualitative story holds and strengthens where
+  expected** (i3 wins more decisively in both hot climates, the tighter
+  active coupling directly helping there) — **but the Minneapolis shift
+  needs an honest caveat, not silently absorbed**: since the refrigerant
+  mechanism is confirmed still exactly inactive there, that 1.005→0.908
+  movement can't be this coefficient's doing: it reflects the CUMULATIVE
+  effect of everything else that changed session-wide since the original
+  run (most plausibly the Q-0028 `mean_current_a` fix changing how
+  driving-phase current feeds cycle-aging for both vehicles), not
+  isolated or root-caused here — this re-run was scoped to confirming
+  the coolant-resistance fix specifically, not a full re-investigation.
+  "No artificial advantage in the cold one" still holds for the
+  mechanism itself (0.0000K, unchanged); the small residual Minneapolis
+  gap is a separate, unattributed, low-priority open item.
 - **Milestone "Mistake library's third entry" (done, 2026-09-27,
   `docs/DESIGN_QUESTIONS.md` Q-0025):** "DX refrigerant compressor internal
   failure ('Black Death') leaves the battery with no active cooling (BMW
