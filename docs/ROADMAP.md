@@ -195,11 +195,27 @@ file holds the items that are genuinely discrete standalone work items.
 ## Mistake library
 
 - **Whether the mistake library's own content format should move to YAML
-  (matching `configs/profiles/*.yaml`'s convention) is undecided.** Not
-  yet justified with only one Python-constructed entry.
+  (matching `configs/profiles/*.yaml`'s convention) is undecided.** Now
+  has two Python-constructed entries (Nissan Leaf, Audi e-tron) — still
+  not a strong enough signal either way; revisit once a third entry exists
+  or the format question actually blocks something.
 - Real chiller physics (see "Thermal / cooling physics" above) is the
   single biggest lever for making a future hot-climate `MistakeCase`'s
   delta match real-world magnitudes.
+- **Done: second entry** — "Combining battery and powertrain cooling loops
+  without upsizing for the added heat load (Audi e-tron)"
+  (`examples/mistake_library_etron_shared_powertrain_loop.py`,
+  `docs/DESIGN_QUESTIONS.md` Q-0023) — unblocks Milestone D per the user's
+  own stated sequencing. Uses a real, already-implemented mechanism
+  (`CoolingLoop.serves` sharing one coolant node across components) to
+  show a real, non-negligible SOH delta (+2.82pp at 5yr, +11.37pp at a
+  20yr point estimate) from merging a battery loop into an un-upsized
+  powertrain loop, under a MILD climate — deliberately distinguishing this
+  duty-cycle-driven mistake from the Leaf entry's climate-driven one. See
+  `docs/MILESTONES.md`'s corresponding milestone for the full record,
+  including why every one of the six real vehicles' own documented
+  failures (Bolt's cell defect, i3's DX refrigerant, Niro's preconditioning/
+  cabin-priority story) turned out NOT usable as-is for a second entry.
 
 ## Transition seam
 

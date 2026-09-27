@@ -1297,3 +1297,112 @@ code it calls is.
   Full record, including the re-validated 90-day/20-year Blue Bird numbers
   under this canonical data, in `docs/MILESTONES.md`'s corresponding
   milestone.
+
+## Q-0023 — Mistake library's second entry: which failure mode, and how are failure_profile/counterfactual_profile constructed?
+
+- Date: 2026-09-26
+- Context: the mistake library's first entry (Q-0019, Nissan Leaf) is the
+  only real `MistakeCase` so far — `docs/ROADMAP.md` flags a second entry
+  as the item that unblocks Milestone D's own sequencing precondition
+  ("Milestone D when the mistake library gets its second real entry," the
+  user's own stated ordering). Picking the second entry's failure mode and
+  how it's constructed meets the same escalation bar Q-0019 did: it
+  determines a published, citable comparison result.
+  **A real constraint found while scoping, not assumed**: `MistakeCase`
+  holds `climate`/`usage_profile`/`charging_profile` fixed via one shared
+  `scenario` across both runs — only `ManufacturerProfile` fields can
+  differ. This rules out any candidate lesson from `docs/research/
+  profiles_v1.md`'s six real vehicle "stories" that isn't actually a
+  vehicle-design difference: Chevrolet Bolt's real failure ("LG Chem
+  manufacturing defects... thermal design fine, cell quality wasn't") is a
+  manufacturing-defect story, not modelable; BMW i3's "Cold Loop of Death"
+  is a DX-refrigerant mechanical-reliability failure with no `CoolingLoop`
+  representation, and i3 is separately off-limits for battery comparisons
+  until Milestone D itself lands; Kia Niro EV's real "integration, not
+  hardware" story (missing preconditioning, a shared loop that "sometimes
+  prioritized cabin comfort over pack conditioning") depends on
+  preconditioning (explicitly deferred, Q-0004) and a cabin-vs-battery
+  coolant-priority mechanism that doesn't exist in `cooling.py` today —
+  building either would be a physics-module change, not a data-only
+  second entry. None of the six vehicles' own real documented failures
+  are usable as-is.
+  **What IS already real, working physics** (checked directly in
+  `sim.py`/`cooling.py`, not assumed): `CoolingLoop.serves` puts every
+  component it lists on ONE shared coolant `ThermalNode` — if a loop
+  serves `["battery_pack", "motor", "inverter"]`, all three components'
+  heat feeds the same lumped coolant temperature, and that temperature
+  couples back to each served component via its own
+  `resistance_to_coolant_k_per_w` edge. A shared loop genuinely exposes
+  the battery to the powertrain's waste heat today, with no new physics
+  needed — this is the real mechanism Kia Niro's "shared loop" story
+  gestures at, just without the unbuilt cabin-priority piece.
+- Options considered (failure mode):
+  1. **Shared battery/powertrain loop with un-upsized capacity**: a
+     hypothetical vehicle combines its battery and powertrain coolant
+     circuits (real cost/parts-count motivation — Kia Niro's real profile
+     already does this, `shared_loop: true`) but reuses the ORIGINAL
+     powertrain-only loop's radiator/pump/fan sizing unchanged, rather
+     than sizing the combined loop for all three heat sources together.
+     Under sustained heavy driving, the loop runs hot from motor+inverter
+     waste heat and conducts that heat into the battery, which no longer
+     has its own dedicated, tightly-controlled coolant path. Uses only
+     already-implemented physics. (Approved — see resolution.)
+  2. **Reuse the Leaf's chiller-adjacent finding** (an un-chillered vehicle
+     in a hot climate) as the second entry. Rejected: this session's own
+     chiller investigation (`docs/MILESTONES.md`) already found this
+     specific mechanism structurally negligible at any single
+     characterized trip's timescale — publishing it as a "mistake" would
+     require a delta the sim itself doesn't produce, contradicting this
+     project's "surface findings, don't tune toward a bigger number"
+     discipline.
+  3. **Frame Kia Niro EV itself as the failure profile**, since its real
+     research text literally says "shared coolant loop sometimes
+     prioritized cabin comfort over pack conditioning." Rejected: Niro's
+     own REAL documented degradation is best-in-class (97.25% SoH at
+     100,000km) — using it as a "failure" example would contradict the
+     real evidence this project requires every claim to be checked
+     against, and the specific mechanism research describes (cabin-vs-
+     battery coolant priority) isn't modeled, so the sim couldn't produce
+     the story research actually tells about this vehicle anyway.
+- Options considered (which real profile to build the hypothetical from,
+  and which side — failure or counterfactual — is the real one):
+  1. **Audi e-tron, hypothetical is the failure side**: `counterfactual_
+     profile` is the REAL, unmodified e-tron (its actual `battery_loop` +
+     `powertrain_loop`, genuinely separate per research: "four independent
+     circuits... simplified to two, still separate"). `failure_profile`
+     replaces both loops with ONE loop that reuses `powertrain_loop`'s
+     exact hydraulic/radiator numbers verbatim (not invented fresh, not
+     upsized) and its higher thermostat setpoint (308.15K/313.15K, tuned
+     for the powertrain, not the battery's own tighter real 298.15K/
+     308.15K target) — modeling a combined loop whose CONTROL, not just
+     its hardware, is inherited from the powertrain-only design. e-tron
+     was picked specifically because both its real loops already use the
+     same coolant (`"50/50 water-glycol"`) — a Bolt-based version was
+     considered and rejected because the Bolt's real two loops use
+     genuinely different coolant fluids (`"DEX-COOL"` for battery vs.
+     `"50/50 water-glycol"` for drive-unit), which would make "the
+     manufacturer combined them" physically incoherent to model. Every
+     component's own `resistance_to_coolant_k_per_w`/
+     `resistance_to_ambient_k_per_w` stays byte-identical between
+     `failure_profile` and `counterfactual_profile` — only which coolant
+     node(s) each component connects to differs, an even purer single-
+     variable isolation than Q-0019's Leaf entry (which changed a
+     resistance value AND added a loop). This is also why this entry
+     inverts Q-0019's role assignment (there, `failure_profile` was the
+     real vehicle and `counterfactual_profile` the hypothetical fix; here
+     the real e-tron IS the good design, so it's `counterfactual_profile`,
+     and the hypothetical bad design is `failure_profile`) — flagged
+     explicitly, not a silent inconsistency with Q-0019's precedent.
+     (Approved — see resolution.)
+  2. **Build a wholly synthetic profile** (not derived from any of the six)
+     for the failure side. Rejected: reintroduces exactly the "invented
+     vehicle instead of a real-derived counterfactual" pattern Q-0019
+     already rejected, for no benefit over reusing e-tron's own real,
+     already-reviewed numbers.
+- Blocking: yes
+- **Resolution (2026-09-26): failure mode option 1, profile-construction
+  option 1, both approved.** Implemented in `examples/
+  mistake_library_etron_shared_powertrain_loop.py`; see
+  `docs/MILESTONES.md`'s corresponding milestone for the run's actual
+  numbers, checked directly rather than assumed from this design
+  reasoning alone.

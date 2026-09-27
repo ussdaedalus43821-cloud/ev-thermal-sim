@@ -2944,3 +2944,92 @@ whole history to find.
   `batterySohPercent`, a real per-route climate/duty-cycle match instead
   of a single fixed row) named explicitly rather than quietly assumed
   away.
+- **Milestone "Mistake library's second entry" (done, 2026-09-26,
+  `docs/DESIGN_QUESTIONS.md` Q-0023):** "Combining battery and powertrain
+  cooling loops without upsizing for the added heat load (Audi e-tron)" —
+  the mistake library's second real `MistakeCase`, unblocking Milestone D
+  per the user's own stated sequencing ("Milestone D when the mistake
+  library gets its second real entry").
+  **A real constraint found while scoping, not assumed**: `MistakeCase`
+  fixes climate/usage/charging via one shared `scenario` — only
+  `ManufacturerProfile` fields can differ between `failure_profile` and
+  `counterfactual_profile`. This ruled out every candidate lesson drawn
+  directly from the six real vehicles' own documented failure stories in
+  `docs/research/profiles_v1.md`: Chevrolet Bolt's real failure was a cell-
+  manufacturing defect, not a thermal-architecture decision; BMW i3's "Cold
+  Loop of Death" needs a DX-refrigerant schema this project doesn't have
+  (Milestone D itself), and i3 is separately off-limits for battery
+  comparisons until Milestone D lands; Kia Niro EV's real "integration, not
+  hardware" story depends on preconditioning (deferred, Q-0004) and a
+  cabin-vs-battery coolant-priority mechanism `cooling.py` doesn't model.
+  See Q-0023 for the full elimination.
+  **What made this entry possible**: confirmed directly in `sim.py`/
+  `cooling.py` (not assumed) that `CoolingLoop.serves` already puts every
+  component it lists on ONE shared coolant `ThermalNode` — a loop serving
+  `["battery_pack", "motor", "inverter"]` genuinely lets motor/inverter
+  heat raise the shared coolant temperature that then couples back into
+  the battery via its own `resistance_to_coolant_k_per_w` edge. No new
+  physics needed — this is the real mechanism Kia Niro's own "shared loop"
+  research story gestures at, just without the unbuilt cabin-priority
+  piece.
+  **Construction** (Q-0023): `counterfactual_profile` is the real,
+  unmodified Audi e-tron (`configs/profiles/audi_etron.yaml`) — its actual
+  `battery_loop` and `powertrain_loop` stay genuinely separate, matching
+  research ("four independent circuits... simplified here to two, still
+  separate"). `failure_profile` merges both into ONE loop that reuses
+  `powertrain_loop`'s own real hydraulic/radiator numbers AND its higher
+  thermostat setpoint (308.15K/313.15K, tuned for the powertrain, not the
+  battery's own tighter real 298.15K/308.15K target) verbatim — modeling a
+  manufacturer that combined the two circuits to save cost/parts count but
+  never resized or re-tuned the result for the battery's added heat load.
+  e-tron was picked over Chevrolet Bolt specifically because e-tron's two
+  real loops already share one coolant type (`"50/50 water-glycol"`) —
+  Bolt's real loops use genuinely different coolant (`DEX-COOL` vs.
+  `50/50 water-glycol`), which would make "the manufacturer combined them"
+  physically incoherent. This inverts Q-0019's Leaf-entry role assignment
+  (there, the real vehicle was `failure_profile`; here the real e-tron IS
+  the good design, so it's `counterfactual_profile`) — flagged explicitly
+  in both Q-0023 and the script's own docstring, not a silent
+  inconsistency. Every component's own `resistance_to_coolant_k_per_w`/
+  `resistance_to_ambient_k_per_w` stays byte-identical between both
+  profiles — only which coolant node(s) each connects to differs, an even
+  purer single-variable isolation than the Leaf entry achieved.
+  **Run under a MILD climate on purpose** (Seattle-like, reused from
+  `flagship_comparison.py`, not the Leaf entry's hot Guam climate) — this
+  failure mode is duty-cycle-driven (sustained driving heats the shared
+  loop via the motor/inverter), not climate-driven, and showing a real
+  effect without needing extreme heat makes that distinction directly
+  rather than asserting it.
+  **Result, run end-to-end and checked, not assumed to be plausible**:
+  at the default 5-year horizon, failure=93.5149% vs.
+  counterfactual=96.3333% (soh_delta=+2.8184pp); a 20-year point estimate
+  (own caveat: past `aging.py`'s 5-10yr calibration window, same Q-0017
+  limit every multi-year number here carries) shows failure=73.9438% vs.
+  counterfactual=85.3106% (soh_delta=+11.3668pp) — both directions correct
+  (the real separate-loop design ages better) and both a real, non-trivial
+  magnitude, unlike the Leaf entry's own near-negligible delta (Q-0020).
+  Checked why, not just accepted: mean pack-cell temperature over a 1-year
+  run is ~293.4K (failure) vs. ~287.0K (counterfactual) — a sustained
+  ~6.4K gap from continuous exposure to powertrain waste heat, well below
+  either profile's `derate_temp_k`/`max_temp_k` (no derating triggered in
+  either run) — a persistent, compounding perturbation, not a bounded
+  per-trip effect the way the chiller investigation's finding was,
+  explaining the larger delta honestly rather than treating it as
+  suspicious.
+  `severity="warning"`, not `"critical"` like the Leaf entry — a
+  deliberate distinction: this failure mode requires a design/integration
+  oversight (an otherwise real, working architecture choice — shared loops
+  are a legitimate real-world pattern, per Kia Niro's own best-in-class
+  real degradation — done without accounting for the added heat load),
+  not the Leaf case's outright absence of any active thermal management,
+  even though this entry's SIMULATED delta happens to be larger.
+  New tests: `test_etron_shared_loop_case_produces_both_results_and_a_
+  consistent_delta`, `test_etron_shared_loop_case_counterfactual_never_
+  ages_worse_than_failure` (`tests/test_mistake.py`) — the latter asserts
+  a real non-negligible delta (`> 0.001`), not just non-negative, since
+  this entry's whole point (unlike the Leaf entry's near-zero one) is that
+  the effect is real and worth teaching. Full suite (295 tests, up from
+  293; 292 fast + 3 slow), `mypy --strict`, `ruff` all pass.
+  **What's still open**: Milestone D (BMW i3's DX-refrigerant schema
+  abstraction) is now unblocked per the user's own sequencing — its own
+  future milestone, not started here.

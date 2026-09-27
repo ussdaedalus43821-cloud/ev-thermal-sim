@@ -109,7 +109,10 @@ related code:
   open (threshold re-derivation, hotter test climates).
   Milestone D (BMW i3's standalone DX-refrigerant abstraction) is
   unaffected and separate — still don't use i3-vs-Leaf battery comparisons
-  for publication.
+  for publication. **Milestone D is now unblocked**: the mistake library
+  has its second real entry (Audi e-tron shared-loop case, `docs/
+  DESIGN_QUESTIONS.md` Q-0023), the user's own stated precondition for
+  starting it — not started here.
 - **Preconditioning is deferred entirely, not approximated** (`docs/
   DESIGN_QUESTIONS.md` Q-0004) — every fast-charge characterization is
   equally pessimistic across all profiles; this is the single biggest
