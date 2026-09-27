@@ -221,9 +221,9 @@ file holds the items that are genuinely discrete standalone work items.
 
 - **Whether the mistake library's own content format should move to YAML
   (matching `configs/profiles/*.yaml`'s convention) is undecided.** Now
-  has two Python-constructed entries (Nissan Leaf, Audi e-tron) — still
-  not a strong enough signal either way; revisit once a third entry exists
-  or the format question actually blocks something.
+  has three Python-constructed entries (Nissan Leaf, Audi e-tron, BMW i3)
+  — still not a strong enough signal either way; revisit once the format
+  question actually blocks something.
 - Real chiller physics (see "Thermal / cooling physics" above) is the
   single biggest lever for making a future hot-climate `MistakeCase`'s
   delta match real-world magnitudes.
@@ -241,6 +241,20 @@ file holds the items that are genuinely discrete standalone work items.
   including why every one of the six real vehicles' own documented
   failures (Bolt's cell defect, i3's DX refrigerant, Niro's preconditioning/
   cabin-priority story) turned out NOT usable as-is for a second entry.
+- **Done: third entry** — "DX refrigerant compressor internal failure
+  ('Black Death') leaves the battery with no active cooling (BMW i3)"
+  (`examples/mistake_library_bmw_i3_compressor_failure.py`,
+  `docs/DESIGN_QUESTIONS.md` Q-0025) — unblocked by the Milestone D
+  multi-climate follow-up lifting the i3-vs-Leaf publication caveat above.
+  The first entry where both `failure_profile` and `counterfactual_profile`
+  are the SAME real vehicle, differing only in whether the DX compressor
+  has internally failed (a real, documented i3/i3s reliability risk) — a
+  genuinely different lesson category from the existing two (a
+  manufacturer design decision, and a hypothetical integration mistake):
+  this is a real single-point-of-failure risk in an otherwise validated,
+  working system. Real, substantial, correctly-directed delta at every
+  horizon checked (+0.90pp/1yr, +4.40pp/5yr, +17.66pp/20yr point estimate).
+  See `docs/MILESTONES.md`'s corresponding milestone for the full record.
 
 ## Transition seam
 

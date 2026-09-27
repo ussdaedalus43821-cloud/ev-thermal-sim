@@ -1541,3 +1541,68 @@ code it calls is.
   comparisons are now publication-safe. Still open, not closed by this:
   the i3 battery's own `resistance_to_coolant_k_per_w` magnitude (flagged
   earlier in this entry) — not this validation's scope.
+
+## Q-0025 — Mistake library's third entry: BMW i3 DX-compressor failure ("Black Death") — which failure mode, and how are failure_profile/counterfactual_profile constructed?
+
+- Date: 2026-09-27
+- Context: Milestone D's multi-climate follow-up (Q-0024's own follow-up
+  resolution) lifted the i3-vs-Leaf publication caveat, unblocking the i3
+  as usable in a mistake-library entry for the first time — any i3 number
+  built before that would have carried the same "not yet validated" caveat
+  as every other i3 result. Picking the third entry's failure mode and
+  construction meets the same escalation bar Q-0019/Q-0023 did: it
+  determines a published, citable comparison result.
+- Options considered (failure mode):
+  1. **A direct i3-vs-Leaf `MistakeCase`** (two different real vehicles as
+     failure/counterfactual). Rejected: `MistakeCase`'s own docstring
+     ("the only variable is the design decision being taught") already
+     rules this out — Q-0019 rejected the identical option for the Leaf's
+     own entry for the identical reason (reintroduces the multi-variable
+     confound this project has repeatedly eliminated elsewhere). Lifting
+     the publication caveat doesn't change this architectural constraint;
+     it was never actually the blocker for this option.
+  2. **DX refrigerant compressor internal failure ("Black Death")**: a
+     real, specifically-documented BMW i3/i3s failure mode
+     (`docs/research/profiles_v1.md`'s own i3 "Story": "DX cooling
+     elegant... but fragile -- if A/C compressor fails internally,
+     entire battery cooling system can't be flushed, requiring full pack
+     + cooling system replacement"; corroborated by a real Autopian
+     article on the same failure). Both `failure_profile` and
+     `counterfactual_profile` are the SAME real i3 profile, differing only
+     in whether `thermal_architecture.refrigerant_loops` is present —
+     total loss (empty list), not a reduced `capacity_w`, matching the
+     real documented consequence ("entire... system can't be flushed") of
+     an unrecoverable internal failure rather than a gradual degradation.
+     A genuinely different lesson category from the existing two entries:
+     Leaf's is a manufacturer DESIGN decision (never built active
+     cooling); e-tron's is an INTEGRATION mistake in a hypothetical
+     combined-loop design; this is a RELIABILITY risk in an otherwise
+     validated, working real system — what happens when its one real
+     single point of failure fails. (Approved — see resolution.)
+- Options considered (climate):
+  1. **Phoenix, AZ** — real NOAA normals, already sourced and i3-validated
+     (Milestone D's multi-climate follow-up). The real consequence of
+     losing active cooling is climate-dependent, and Phoenix's real,
+     documented heat makes it vivid, same reasoning the Leaf entry's Guam
+     choice used — and reuses infrastructure this session already built
+     and validated for this exact vehicle, rather than introducing a new
+     unvalidated climate/vehicle combination. (Approved — see resolution.)
+  2. Guam (matching the Leaf entry's own climate, for direct
+     cross-entry comparability). Considered but not chosen: Phoenix is
+     specifically i3-validated (Guam and Seattle were the two climates
+     used during Milestone D's own implementation and initial validation;
+     Phoenix and Minneapolis were the multi-climate follow-up's ADDITIONS)
+     — no meaningful reason to prefer Guam over the equally-real,
+     equally-validated, hotter Phoenix climate for this specific vehicle.
+- Blocking: yes
+- **Resolution (2026-09-27): failure mode option 2, climate option 1, both
+  approved.** Implemented in `examples/mistake_library_bmw_i3_compressor_
+  failure.py`. Run end-to-end, not assumed: 1-year delta +0.90pp (failure
+  97.81% vs. counterfactual 98.71%), 5-year +4.40pp (89.13% vs. 93.52%),
+  20-year point estimate +17.66pp (56.47% vs. 74.14%, carrying the same
+  Q-0017 extrapolation caveat every multi-year number here does) — a real,
+  substantial, correctly-directed effect at every horizon checked, not
+  assumed proportional from the 1-year number. `severity="critical"`,
+  matching the real documented consequence's severity (total,
+  unrecoverable loss of the vehicle's only active battery-cooling path).
+  See `docs/MILESTONES.md`'s corresponding milestone for the full record.

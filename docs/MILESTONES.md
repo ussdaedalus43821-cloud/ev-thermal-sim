@@ -3154,3 +3154,51 @@ whole history to find.
   `resistance_to_coolant_k_per_w` magnitude (flagged in the original
   Milestone D entry, not re-derived here — out of this validation's
   scope).
+- **Milestone "Mistake library's third entry" (done, 2026-09-27,
+  `docs/DESIGN_QUESTIONS.md` Q-0025):** "DX refrigerant compressor internal
+  failure ('Black Death') leaves the battery with no active cooling (BMW
+  i3)" — unblocked directly by the multi-climate validation above (any i3
+  number built before that caveat lifted would itself have carried the
+  same "not yet validated" flag).
+  **A genuinely new lesson category, not a repeat of the existing two
+  entries**: Leaf's entry is a manufacturer DESIGN decision (never built
+  active cooling); e-tron's is an INTEGRATION mistake in a hypothetical
+  combined-loop design; this one is a RELIABILITY risk in an otherwise
+  validated, working real system — a real, specifically-documented BMW
+  i3/i3s failure mode (`docs/research/profiles_v1.md`'s own i3 "Story":
+  "DX cooling elegant... but fragile -- if A/C compressor fails
+  internally, entire battery cooling system can't be flushed, requiring
+  full pack + cooling system replacement"; corroborated by a real Autopian
+  article on the same failure, cited directly in the script).
+  **A real architectural question resolved, not silently assumed**: a
+  direct i3-vs-Leaf `MistakeCase` (two different real vehicles) was
+  considered and rejected — `MistakeCase`'s own "only variable is the
+  design decision" docstring already ruled this out, the identical
+  reasoning Q-0019 used to reject the same option for the Leaf's own
+  entry. Lifting the publication caveat unblocked using the i3 AT ALL, but
+  never changed this separate architectural constraint — the two are
+  distinct gates, not one.
+  **Construction**: both `failure_profile` and `counterfactual_profile`
+  are the SAME real i3 profile (`configs/profiles/bmw_i3.yaml`) — the
+  first mistake-library entry where both sides share one real vehicle,
+  differing only in whether `thermal_architecture.refrigerant_loops` is
+  present. `failure_profile` removes it entirely (total loss, not a
+  reduced `capacity_w`), matching the real documented consequence ("entire
+  system can't be flushed") of an unrecoverable internal failure rather
+  than a gradual degradation. Run under Phoenix, AZ's real climate —
+  already sourced and i3-validated by the multi-climate follow-up above,
+  reusing that infrastructure directly rather than introducing a new
+  unvalidated climate/vehicle pairing.
+  **Result, run end-to-end at three horizons, not assumed proportional**:
+  1-year +0.90pp (failure 97.81% vs. counterfactual 98.71%), 5-year
+  +4.40pp (89.13% vs. 93.52%), 20-year point estimate +17.66pp (56.47% vs.
+  74.14%, carrying the same Q-0017 extrapolation caveat every multi-year
+  number here does) — real, substantial, correctly-directed at every
+  horizon checked. `severity="critical"`, matching the real documented
+  consequence's severity.
+  New tests: `test_i3_compressor_failure_case_produces_both_results_and_a_
+  consistent_delta`, `test_i3_compressor_failure_case_counterfactual_
+  never_ages_worse_than_failure` (`tests/test_mistake.py`, the latter
+  asserting a real non-negligible delta, matching the e-tron entry's own
+  precedent, not the Leaf entry's near-zero-tolerant one). `mypy --strict`,
+  `ruff` pass on all new files.
