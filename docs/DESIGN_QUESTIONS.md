@@ -1661,7 +1661,15 @@ code it calls is.
   20-year point estimate +17.66pp (56.47% vs. 74.14%, carrying the same
   Q-0017 extrapolation caveat every multi-year number here does) — a real,
   substantial, correctly-directed effect at every horizon checked, not
-  assumed proportional from the 1-year number. `severity="critical"`,
+  assumed proportional from the 1-year number. **Updated (2026-09-27,
+  same day): these figures moved after `BatterySpec.thermal_node.
+  resistance_to_coolant_k_per_w` was re-derived from 0.3 K/W to 0.02 K/W
+  (see `docs/MILESTONES.md`'s dedicated entry) — the counterfactual side
+  (the only side this coefficient affects; the failure side has no
+  refrigerant loop at all) now cools more effectively, widening the
+  delta: 1-year +1.12pp (97.87% vs. 98.99%), 5-year +5.45pp (89.43% vs.
+  94.89%), 20-year point estimate +21.91pp (57.72% vs. 79.63%). Don't
+  cite the original 0.3-K/W-era figures above.** `severity="critical"`,
   matching the real documented consequence's severity (total,
   unrecoverable loss of the vehicle's only active battery-cooling path).
   See `docs/MILESTONES.md`'s corresponding milestone for the full record.

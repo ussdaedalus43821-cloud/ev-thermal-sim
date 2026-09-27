@@ -3189,19 +3189,54 @@ whole history to find.
   already sourced and i3-validated by the multi-climate follow-up above,
   reusing that infrastructure directly rather than introducing a new
   unvalidated climate/vehicle pairing.
-  **Result, run end-to-end at three horizons, not assumed proportional**:
-  1-year +0.90pp (failure 97.81% vs. counterfactual 98.71%), 5-year
-  +4.40pp (89.13% vs. 93.52%), 20-year point estimate +17.66pp (56.47% vs.
-  74.14%, carrying the same Q-0017 extrapolation caveat every multi-year
-  number here does) — real, substantial, correctly-directed at every
-  horizon checked. `severity="critical"`, matching the real documented
-  consequence's severity.
+  **Result, run end-to-end at three horizons, not assumed proportional**
+  (original, under the pre-re-derivation 0.3 K/W `resistance_to_coolant_
+  k_per_w` placeholder — superseded below, don't cite): 1-year +0.90pp
+  (failure 97.81% vs. counterfactual 98.71%), 5-year +4.40pp (89.13% vs.
+  93.52%), 20-year point estimate +17.66pp (56.47% vs. 74.14%, carrying
+  the same Q-0017 extrapolation caveat every multi-year number here does)
+  — real, substantial, correctly-directed at every horizon checked.
+  `severity="critical"`, matching the real documented consequence's
+  severity.
   New tests: `test_i3_compressor_failure_case_produces_both_results_and_a_
   consistent_delta`, `test_i3_compressor_failure_case_counterfactual_
   never_ages_worse_than_failure` (`tests/test_mistake.py`, the latter
   asserting a real non-negligible delta, matching the e-tron entry's own
   precedent, not the Leaf entry's near-zero-tolerant one). `mypy --strict`,
   `ruff` pass on all new files.
+  **Updated (2026-09-27, same day, folded in rather than given its own
+  milestone entry): re-derived after the Q-0029 flagship-comparison work
+  surfaced the same class of issue for a sibling coefficient.** The i3
+  battery's `resistance_to_coolant_k_per_w` (0.3 K/W) was already flagged,
+  at this entry's own original writing, as "noticeably weaker than other
+  profiles' battery resistance_to_coolant_k_per_w placeholders
+  (~0.015-0.05) — not re-derived when the field became load-bearing." The
+  user asked directly whether it should be fixed the same way Model3's
+  coefficient was. **A methodology correction was needed first, not a
+  mechanical copy**: unlike Model3's `resistance_to_ambient_k_per_w`
+  (a passive, pump-off fallback path, fit via `tau=R*C` on a relaxation-
+  time shape), `resistance_to_coolant_k_per_w` is the rate limit for
+  ACTIVE battery-to-refrigerant-loop heat transfer while the DX system is
+  engaged — a structurally different role, for which the `tau=R*C`
+  methodology doesn't apply. The right anchor was already sitting in this
+  project's own records: four other real profiles' battery nodes already
+  populate this exact field, tightly clustered (Model3 0.02, Bolt 0.02,
+  e-tron 0.015, Niro 0.02) — including a direct precedent for exactly
+  this move, the Leaf mistake-library entry's own counterfactual profile,
+  which already tightens the Leaf's battery `resistance_to_coolant_k_
+  per_w` from 0.5 to 0.02, explicitly citing "Tesla Model 3's own real
+  placeholder value for the same field." Re-derived i3's value the same
+  way: **0.3 K/W -> 0.02 K/W.**
+  **This meaningfully moved the entry's headline numbers, as expected for
+  a real ~15x tightening of the counterfactual side's cooling coupling
+  (the failure side has no refrigerant loop at all, so it's unaffected —
+  confirmed: failure-side SOH unchanged at every horizon)**: 1-year
+  +1.12pp (failure 97.87% vs. counterfactual 98.99%, was +0.90pp), 5-year
+  +5.45pp (89.43% vs. 94.89%, was +4.40pp), 20-year point estimate
+  +21.91pp (57.72% vs. 79.63%, was +17.66pp) — roughly a 24% relative
+  increase in the entry's own headline 20-year number. This is the new
+  citable figure; the original +17.66pp above is superseded, not a
+  parallel valid alternative.
 - **Milestone "Battery Health tab" (done, 2026-09-27, `Transition` repo
   only — no ev-thermal-sim code changed):** the seam's tracked SOH data
   (`Route.batterySohPercent`, wired in the earlier "Generate a first

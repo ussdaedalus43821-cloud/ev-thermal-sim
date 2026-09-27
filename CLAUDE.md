@@ -120,9 +120,19 @@ related code:
   real cold, and produces a coherent i3-vs-Leaf picture (i3 clearly better
   in both hot climates, no artificial advantage in the cold one). See
   `docs/ROADMAP.md`'s "Thermal / cooling physics" section for the full
-  numbers and the i3 battery's own `resistance_to_coolant_k_per_w`
-  magnitude (0.3 K/W, weaker than other profiles' convention, now
-  load-bearing and still flagged for re-examination — unaffected by this).
+  numbers. **The i3 battery's `resistance_to_coolant_k_per_w` has since
+  been re-derived** (0.3 K/W → 0.02 K/W, matching the tight real
+  convention four other profiles already established for this field —
+  see `docs/MILESTONES.md`'s BMW i3 compressor-failure entry for the
+  full record) — this meaningfully moved that mistake-library entry's own
+  headline numbers (20yr delta +17.66pp → +21.91pp; don't cite the old
+  figure). **Not yet re-verified: whether the multi-climate validation
+  numbers cited above (i3-vs-Leaf "publication-safe" claim) still hold
+  exactly as stated under the new coefficient** — this fix was scoped to
+  the mistake-library entry specifically; the qualitative conclusion
+  (i3 better in hot climates, no cold advantage) should if anything
+  strengthen given the tighter real coupling, but the exact cited numbers
+  haven't been re-run.
 - **Preconditioning IS implemented (Q-0026/Q-0027), with a real, honest,
   counter-to-expectation finding, not the Q-0004-deferred placeholder
   anymore.** The route/navigation blocker Q-0004 named turned out to be

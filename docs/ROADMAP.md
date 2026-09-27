@@ -86,13 +86,24 @@ file holds the items that are genuinely discrete standalone work items.
   multi-variable real-vehicle comparison). **i3-vs-Leaf battery
   comparisons are now publication-safe** — see `docs/MILESTONES.md`'s
   corresponding milestone for the full record.
-- **Open follow-up: the BMW i3 battery's `resistance_to_coolant_k_per_w`
-  (0.3 K/W) is noticeably weaker than the same field's placeholder value
-  on other actively-cooled profiles (e-tron 0.015, Leaf's counterfactual
-  0.02, ~0.02-0.05 elsewhere).** It predates Milestone D (set when the
-  field was genuinely unused) and now that it's load-bearing for the
-  refrigerant loop's rate limit, its magnitude deserves real scrutiny —
-  not performed yet. Revisit alongside any future i3 spec-sourcing pass.
+- **Done: the BMW i3 battery's `resistance_to_coolant_k_per_w` re-derived
+  from 0.3 K/W to 0.02 K/W**, matching the tight real convention already
+  established by four other profiles' own battery values for this exact
+  field (Model3 0.02, Bolt 0.02, e-tron 0.015, Niro 0.02) — see
+  `docs/MILESTONES.md`'s BMW i3 compressor-failure entry for the full
+  record, including why the `resistance_to_ambient_k_per_w` (tau=R*C)
+  methodology doesn't apply to this structurally different field. Moved
+  the mistake-library entry's headline 20yr delta from +17.66pp to
+  +21.91pp.
+  **Open follow-up, NOT performed as part of this fix (out of its
+  scope)**: `examples/i3_multiclimate_validation.py`'s own cited numbers
+  (the "i3-vs-Leaf battery comparisons are now publication-safe" claim)
+  were run under the OLD 0.3 K/W value and haven't been re-verified under
+  the new one. The qualitative conclusion should if anything strengthen
+  (tighter real coupling helps the i3 look better in hot climates, and
+  the refrigerant loop's own cold-climate inactivity is unaffected by
+  this coefficient), but the exact cited numbers are unconfirmed — revisit
+  before citing them further.
 - **`controller.py`'s cooling-command policy (`_duty_ramp`, pump/fan duty
   vs. temperature above thermostat) is an explicit `TODO(tuning)`
   placeholder, not a calibrated policy.**
@@ -346,7 +357,10 @@ file holds the items that are genuinely discrete standalone work items.
   manufacturer design decision, and a hypothetical integration mistake):
   this is a real single-point-of-failure risk in an otherwise validated,
   working system. Real, substantial, correctly-directed delta at every
-  horizon checked (+0.90pp/1yr, +4.40pp/5yr, +17.66pp/20yr point estimate).
+  horizon checked (+1.12pp/1yr, +5.45pp/5yr, +21.91pp/20yr point estimate
+  — updated after the battery `resistance_to_coolant_k_per_w` re-
+  derivation below; the original figures were +0.90pp/+4.40pp/+17.66pp
+  under the pre-re-derivation 0.3 K/W placeholder, don't cite those).
   See `docs/MILESTONES.md`'s corresponding milestone for the full record.
 
 ## Transition seam
