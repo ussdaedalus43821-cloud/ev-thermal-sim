@@ -3764,3 +3764,58 @@ whole history to find.
   scoped follow-up work and the user's own listed candidate fixes (side-
   by-side mode, a multi-year SOH preset, a plain-language "what to
   notice" panel).
+- **Milestone "Make the dashboard usable at all" (done, 2026-09-28) —
+  deliberately smaller than, and a prerequisite to, Q-0030's own
+  "teaching layer" scope.** The user's own framing: "if I can't use the
+  tools myself, a stranger can't either" — a second playtest was called
+  off as premature, and this milestone's explicit scope was "no new
+  mechanics, just explain what's on screen."
+  **The real bug found in the Q-0030 investigation is now fixed**: added
+  `dashboard.app.soaked_to_ambient`, which patches the loaded profile's
+  battery/motor/inverter `ThermalNode.initial_temp_k` to the dashboard's
+  own ambient-temperature slider before `run_scenario` runs — a "vehicle
+  has fully soaked to ambient" initial-condition choice, not the
+  archetype system's own asymmetric cold/hot-soak offset logic
+  (`characterize_trip`), which this single-run explorer doesn't
+  otherwise use. Coolant nodes were never affected (already correctly
+  seeded from `scenario.climate.mean_annual_temp_k` by
+  `initialize_sim_state`) — confirmed by reading that function directly,
+  not assumed. Still an initial-CONDITION input, the same class the
+  dashboard already supplies via `Climate`/`UsageProfile`/
+  `ChargingProfile`, not a new simulation equation or physics constant —
+  consistent with this file's own "presentation only" scope rule.
+  **The three requested additions**: a one-line mission caption under
+  the title; a `summarize_run` "what to look at" note rendered above the
+  charts after every run (flags any derate crossing by name/margin,
+  falls back to "no events fired — try hotter ambient/higher aggression/
+  longer duration" when nothing interesting happened, rather than
+  leaving the viewer to guess); and plain-language chart titles/captions
+  ("Speed & Torque", "Battery Charge Level (SOC)", "Cooling System
+  Activity" with a 0/1 explained axis label, "What Happened & Why" for
+  the events feed, and a new caption explaining what the derate dashed
+  lines on the temperature chart actually mean — previously unexplained
+  anywhere in the UI).
+  **Verified, not just implemented**: re-ran the user's own original
+  45°C/1800s/aggression-1.0 case — the battery now correctly starts at
+  45.0°C instead of the old bug's fixed 25°C. **Honest finding, not
+  oversold**: at exactly 45°C, several profiles' derate thresholds sit
+  right at that same value, so "crosses derate" becomes trivially true
+  for every vehicle from ambient alone, not from real thermal
+  divergence — not a new bug, but a reminder that 45°C specifically is a
+  poor demo point now that starting temperature is accurate. At 50°C/
+  aggression 1.3, peak battery temperature still converges to ~ambient
+  across vehicles for a single 1800s trip (confirms the original Q-0030
+  finding that a single moderate drive may be structurally the wrong
+  lens), but causal-event COUNT diverges sharply (Leaf 8, BMW i3 9,
+  Tesla Model 3 5292 before dedup) — a real, visible signal the current
+  `summarize_run` note doesn't call out, left for the teaching-layer
+  pass rather than added here (scope discipline, not an oversight).
+  New tests: `test_soaked_to_ambient_patches_battery_motor_inverter_
+  initial_temp`, `test_soaked_to_ambient_does_not_mutate_the_original_
+  profile`, `test_summarize_run_flags_a_derate_crossing` (the last one
+  also regression-guards a real formatting bug found and fixed during
+  this pass — double-bolded markdown in the crossed-component list).
+  337 passed (was 334, +3 exactly); `mypy --strict`, `ruff check` clean.
+  Q-0030 stays open — this milestone doesn't touch comparison mode or a
+  multi-year SOH preset, both still needed for the actual teaching-layer
+  goal.

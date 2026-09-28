@@ -123,6 +123,40 @@ def _sourced(value: float, source: str = "placeholder") -> Sourced[float]:
     return Sourced[float](value=value, confidence=Confidence.LOW, source=source)
 
 
+def soaked_to_ambient(profile: ManufacturerProfile, ambient_temp_k: float) -> ManufacturerProfile:
+    """Milestone: dashboard usability fix (Q-0030). `run_scenario` (via
+    `initialize_sim_state`) starts the motor/inverter/battery thermal nodes
+    at each one's own `ThermalNode.initial_temp_k` -- a fixed reference-
+    condition value baked into each profile's YAML (typically 298.15K),
+    completely independent of this dashboard's own ambient-temperature
+    slider. Coolant nodes are unaffected: `initialize_sim_state` already
+    seeds those from `scenario.climate.mean_annual_temp_k`, i.e. this
+    dashboard's ambient slider correctly.
+
+    This patches the three component nodes to start at the SAME ambient the
+    user selected -- a "the vehicle has fully soaked to ambient before this
+    trip" assumption, not the archetype system's own asymmetric cold/hot-
+    soak offset logic (`characterize_trip`'s `initial_soak`), which this
+    single-run explorer doesn't otherwise use. Still an initial-CONDITION
+    choice, not a simulation equation or physics constant -- the same class
+    of input this file already supplies via `build_scenario`'s `Climate`/
+    `UsageProfile`/`ChargingProfile`, not new physics computed here.
+    """
+    battery = profile.battery.model_copy(
+        update={"thermal_node": profile.battery.thermal_node.model_copy(update={"initial_temp_k": ambient_temp_k})}
+    )
+    motors = [
+        motor.model_copy(
+            update={"thermal_node": motor.thermal_node.model_copy(update={"initial_temp_k": ambient_temp_k})}
+        )
+        for motor in profile.motors
+    ]
+    inverter = profile.inverter.model_copy(
+        update={"thermal_node": profile.inverter.thermal_node.model_copy(update={"initial_temp_k": ambient_temp_k})}
+    )
+    return profile.model_copy(update={"battery": battery, "motors": motors, "inverter": inverter})
+
+
 def build_scenario(profile: ManufacturerProfile, ambient_temp_k: float) -> Scenario:
     climate = Climate(
         location_name="Dashboard Run",
@@ -198,10 +232,66 @@ def percent_grade_to_rad(percent: float) -> float:
     return math.atan(percent / 100.0)
 
 
+SEVERITY_RANK = {"info": 0, "warning": 1, "critical": 2}
+
+
+def summarize_run(
+    result: RunResult, profile: ManufacturerProfile, motor_name: str, inverter_name: str, battery_name: str
+) -> str:
+    """Milestone: dashboard usability pass (Q-0030) -- a plain-language "what
+    to look at" note after every run, since the raw charts alone assume the
+    viewer already knows what to look for. Presentation only: every number
+    here already exists in `result`/`profile`, this just picks out and
+    narrates the ones that matter for a first look.
+    """
+    derate_temps_k = {
+        motor_name: ("motor", profile.motors[0].thermal_node.derate_temp_k.value),
+        inverter_name: ("inverter", profile.inverter.thermal_node.derate_temp_k.value),
+        battery_name: ("battery", profile.battery.thermal_node.derate_temp_k.value),
+    }
+    crossed: list[str] = []
+    hottest_label = ""
+    hottest_peak_c = float("-inf")
+    for node_name, (label, derate_k) in derate_temps_k.items():
+        peak_k = max(result.time_series.node_temps_k[node_name])
+        peak_c = k_to_c(peak_k)
+        if peak_c > hottest_peak_c:
+            hottest_peak_c, hottest_label = peak_c, label
+        if peak_k >= derate_k:
+            crossed.append(f"**{label}** ({peak_c:.1f}°C, above its {k_to_c(derate_k):.0f}°C limit)")
+
+    n_events = len(result.causal_events)
+    worst_severity = max((e.severity for e in result.causal_events), default=None, key=lambda s: SEVERITY_RANK[s])
+
+    if crossed:
+        crossing_text = " and ".join(crossed)
+        headline = (
+            f"⚠️ {crossing_text} crossed its overheating limit this run — "
+            "see the events feed on the right for exactly when and why."
+        )
+    elif n_events > 0:
+        headline = (
+            f"No component crossed its overheating limit, but {n_events} event(s) fired "
+            f"(highest severity: **{worst_severity}**) — check the feed on the right."
+        )
+    else:
+        headline = (
+            f"Nothing crossed a limit and no events fired — the hottest component ({hottest_label}) only reached "
+            f"{hottest_peak_c:.1f}°C. **Try hotter ambient, higher driver aggression, or a longer trip duration** "
+            "to see a real divergence between vehicles."
+        )
+    return f"> {headline}"
+
+
 # --- page layout ---
 
 st.set_page_config(page_title="EV Thermal Simulator", layout="wide")
 st.title("EV Thermal Simulator")
+st.caption(
+    "See how a vehicle's cooling design changes how hot its battery gets under stress. "
+    "Pick a vehicle, push the conditions toward hot/aggressive, and run it — then try the "
+    "same conditions on a different vehicle and compare."
+)
 
 left_col, center_col, right_col = st.columns([1, 2, 1])
 
@@ -229,6 +319,7 @@ run_output: tuple[RunResult, ManufacturerProfile] | None = None
 if run_clicked:
     with st.spinner("Running simulation..."):
         run_profile = load_profile(PROFILES_DIR / f"{VEHICLE_PROFILES[vehicle_name]}.yaml")
+        run_profile = soaked_to_ambient(run_profile, ambient_temp_k=c_to_k(ambient_temp_c))
         scenario = build_scenario(run_profile, ambient_temp_k=c_to_k(ambient_temp_c))
         run_result = run_scenario(
             run_profile,
@@ -251,6 +342,8 @@ with center_col:
         inverter_name = profile.inverter.thermal_node.name
         battery_name = profile.battery.thermal_node.name
 
+        st.markdown(summarize_run(result, profile, motor_name, inverter_name, battery_name))
+
         speed_torque_fig = make_subplots(specs=[[{"secondary_y": True}]])
         speed_torque_fig.add_trace(
             go.Scatter(x=ts.time_s, y=[mps_to_kmh(v) for v in ts.speed_mps], name="speed (km/h)"),
@@ -266,14 +359,14 @@ with center_col:
             go.Scatter(x=ts.time_s, y=ts.commanded_torque_nm, name="commanded torque (Nm)"),
             secondary_y=True,
         )
-        speed_torque_fig.update_layout(title="Speed & Torque (request vs. commanded)", height=280, margin=dict(t=40))
+        speed_torque_fig.update_layout(title="Speed & Torque", height=280, margin=dict(t=40))
         speed_torque_fig.update_yaxes(title_text="speed (km/h)", secondary_y=False)
         speed_torque_fig.update_yaxes(title_text="torque (Nm)", secondary_y=True)
         st.plotly_chart(speed_torque_fig, use_container_width=True)
 
         soc_fig = go.Figure()
         soc_fig.add_trace(go.Scatter(x=ts.time_s, y=[soc * 100.0 for soc in ts.soc], name="SOC (%)"))
-        soc_fig.update_layout(title="State of Charge", height=220, margin=dict(t=40), yaxis_title="SOC (%)")
+        soc_fig.update_layout(title="Battery Charge Level (SOC)", height=220, margin=dict(t=40), yaxis_title="SOC (%)")
         st.plotly_chart(soc_fig, use_container_width=True)
 
         temp_fig = go.Figure()
@@ -317,6 +410,10 @@ with center_col:
             )
         temp_fig.update_layout(title="Component Temperatures", height=320, margin=dict(t=40), yaxis_title="°C")
         st.plotly_chart(temp_fig, use_container_width=True)
+        st.caption(
+            "Dashed lines are each component's overheating (derate) limit — "
+            "crossing one means the controller starts throttling to protect it."
+        )
 
         duty_fig = go.Figure()
         for loop in cooling_loops:
@@ -326,11 +423,13 @@ with center_col:
                 go.Scatter(x=ts.time_s, y=[step[loop.name] for step in ts.pump_duty], name=pump_label)
             )
             duty_fig.add_trace(go.Scatter(x=ts.time_s, y=[step[loop.name] for step in ts.fan_duty], name=fan_label))
-        duty_fig.update_layout(title="Pump / Fan Duty", height=220, margin=dict(t=40), yaxis_title="duty (0-1)")
+        duty_fig.update_layout(
+            title="Cooling System Activity", height=220, margin=dict(t=40), yaxis_title="duty (0=off, 1=full power)"
+        )
         st.plotly_chart(duty_fig, use_container_width=True)
 
 with right_col:
-    st.subheader("Causal Events")
+    st.subheader("What Happened & Why")
     if run_output is None:
         st.caption("Run a scenario to see events.")
     else:
