@@ -1,7 +1,6 @@
 # EV Thermal Simulator
 
-An educational, comparative electric-drivetrain thermal simulator. It models
-six real manufacturer drivetrains (Nissan Leaf, Tesla Model 3, Chevrolet
+It models six real manufacturer drivetrains (Nissan Leaf, Tesla Model 3, Chevrolet
 Bolt, Audi e-tron, BMW i3, Kia Niro EV) plus user-editable counterfactuals,
 over 20–30 year vehicle lifetimes, to teach why thermal management
 decisions compound over a vehicle's life. A separate commercial-vehicle
